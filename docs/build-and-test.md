@@ -45,6 +45,67 @@ dotnet restore DelayStart.slnx
   ```
 - **不要陷入重试循环**。连续失败 2 次就停下来查原因（网络 / 源 / 包版本），不要靠反复重试解决
 
+### 1.2 工具链前置依赖（Phase 0 前必须齐）
+
+**实测状态（2026-09-19）**：
+
+| 依赖 | 状态 | 说明 |
+|---|---|---|
+| .NET SDK 10.0.401 | ✅ 已装 | — |
+| VS 18.10.1 Community | ✅ 已装 | — |
+| Windows SDK 10.0.26100.0 | ✅ 已装 | — |
+| **VS 组件「.NET WinUI 应用开发工具」** | ✅ **已装**（2026-09-19 复核实测） | 装不上的话不阻塞编译（见注），但 VS 里 XAML 会退化成纯文本编辑 |
+| **Inno Setup 6** | ✅ **已装 6.7.3** | `winget list -q innosetup` 实测。已是最新，**无需重跑安装** |
+| **WinUI 命令行模板包** | ❌ **未装**（2026-09-19 复核：`dotnet new list winui` 无匹配、`dotnet new details winui-navview` 找不到） | Phase 0 第 ① 步必须先装回：`dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`（NuGet 上最新仍是 `0.0.6-alpha`，无正式版） |
+
+#### VS 组件的正确 ID（别再用错的）
+
+```
+Microsoft.VisualStudio.ComponentGroup.WindowsAppDevelopment.Prerequisites   ← 「.NET WinUI 应用开发先决条件」，装这个
+Microsoft.VisualStudio.Component.WindowsAppSdkSupport.CSharp                ← 「.NET WinUI 应用开发工具」，上者的唯一依赖
+```
+
+> 🔴 **`Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cs` 这个 ID 不存在。** 用它会失败。
+> 上述两个 ID 来自本机 VS 18 实例的 `C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\<实例ID>\catalog.json`（20575 个包全量检索，实测确认）。找不到时用同样方式核对，**不要凭记忆写 ID**。
+
+#### 【必须】`--passive` / `--quiet` 必须从提权终端启动
+
+非提权终端下实测输出：
+
+```
+[7c50:0001][...] Commands with --quiet or --passive should be run elevated from the beginning.
+[7c50:0001][...] Exit Code: 5007
+```
+
+注意日志里 `vs.willow.isadmin : True` 但 `vs.willow.iselevated : False` —— **在 Administrators 组里不等于令牌已提升**，必须开「管理员 PowerShell」。
+
+```powershell
+# 在「管理员」PowerShell 中执行
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify `
+  --installPath "C:\Program Files\Microsoft Visual Studio\18\Community" `
+  --add Microsoft.VisualStudio.ComponentGroup.WindowsAppDevelopment.Prerequisites `
+  --passive --norestart
+```
+
+`--passive` = 显示进度但不需要人工点击。判定成功看**退出码不是 5007**（0 / 3010 都算成功，3010 表示需要重启）。
+
+> **这个组件是体验项还是硬依赖？** 它提供 VS 内的 WinUI XAML 智能感知与设计器支持。理论上命令行构建不依赖它（XAML 编译目标随 `Microsoft.WindowsAppSDK` NuGet 分发），但**这一条属于 Phase 0 要实测的项**（见 9.0），不要当成既成事实。
+> 附带说明：它是个**依赖树不小的组件**（会拉入 `Microsoft.WindowsAppSDK.Cs.Dev17`、MSIX 单项目打包工具、UWP 公共包组等），安装体积和耗时都比名字看起来大。
+>
+> **VS 侧的 WinUI 模板同样没有 unpackaged**。实测本机 `...\Common7\IDE\Extensions\<随机名>.vpr\ProjectTemplates\CSharp\1033\` 下只有 `WinUI.Desktop.Cs.PackagedApp` / `SingleProjectPackagedApp` / `ClassLibrary` / `UnitTestApp` 四个 —— **没有 UnpackagedApp**。所以"生成后手工转 unpackaged"这一步，走 CLI 还是走 VS 都省不掉。
+
+#### 复核"到底装上没有"（不要靠记忆）
+
+VS 的已安装集合是权威记录，直接读它：
+
+```
+C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\<实例ID>\state.json           # 已安装
+C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\<实例ID>\state.packages.json  # 已选集合
+C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\<实例ID>\catalog.json         # 全部可用包（约 20 MB，含 BOM）
+```
+
+在任一个里检索 `WindowsApp` 字符串即可。**判定标准**：`state.json` 里出现 `Component.WindowsAppSdkSupport.CSharp` 才算真装上；只出现在 `state.packages.json` 里说明只是"被选"，不一定落地。
+
 ---
 
 ## 二、解决方案结构
@@ -55,7 +116,8 @@ DelayStart.slnx                      # XML 格式解决方案
 ├─ src/DelayStart.Management         # 扫描 / 接管 / COM 互操作
 ├─ src/DelayStart.App                # WinUI 3 管理端
 ├─ src/DelayStart.Scheduler          # WinForms + NativeAOT 调度端
-└─ tests/DelayStart.Core.Tests       # xUnit v3 单元测试
+├─ tests/DelayStart.Core.Tests       # xUnit v3 单元测试
+└─ installer/DelayStart.iss          # Inno Setup 安装器脚本（D22，Phase 6 产出）
 ```
 
 **解决方件格式说明**：`.slnx` 需要 .NET 9+ SDK 与 VS 17.14+。本机 SDK 10.0.401 / VS 18 满足。**若 VS 打开报错，回退为 `.sln`**（见 `architecture.md` R8）。
@@ -108,11 +170,11 @@ dotnet sln DelayStart.slnx add ^
 
 **为什么选 `winui-navview` 而不是 `winui`**：管理端就是左侧 NavigationView + 6 个顶层模块（见 `design-spec.md` 第三节），navview 模板直接给出可运行的导航骨架。`winui-mvvm` 会带入 CommunityToolkit.Mvvm 与示例代码，与 `architecture.md` 5.2 的 MVVM 约定不完全一致，不采用。
 
-**⚠️ 关键限制：所有 WinUI 3 模板生成的都是 MSIX 打包工程，没有 unpackaged 开关。** 本项目要 unpackaged（D8 免安装 zip），因此生成后必须手工改造：
+**⚠️ 关键限制：所有 WinUI 3 模板生成的都是 MSIX 打包工程，没有 unpackaged 开关。** 本项目要 unpackaged（D22 的安装器分发），因此生成后必须手工改造：
 
 | 改造项 | 内容 |
 |---|---|
-| csproj 改 | 加 `<WindowsPackageType>None</WindowsPackageType>`、`<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>`、`<ApplicationManifest>app.manifest</ApplicationManifest>` |
+| csproj 改 | 加 `<WindowsPackageType>None</WindowsPackageType>`、`<ApplicationManifest>app.manifest</ApplicationManifest>`、`<WindowsAppSDKSelfContained>`（true / false **由 R9 结果定**，见 7.1） |
 | csproj 删 | `<EnableMsixTooling>`、`<PublishProfile>`、`AppxPackage*` 系列属性 |
 | csproj 删 | `Microsoft.Windows.SDK.BuildTools.WinApp` 包引用（它是为"打包应用的 `dotnet run`"服务的，unpackaged 用不上） |
 | 文件删 | `Package.appxmanifest`；`Assets/` 只保留实际用作图标的文件 |
@@ -259,19 +321,31 @@ src/DelayStart.App/bin/Debug/net10.0-windows10.0.19041.0/win-x64/DelayStart.App.
 dotnet run --project src/DelayStart.App
 ```
 
-命令行参数（用于验证通知跳转链路）：
+命令行参数：
+
+| 参数 | 用途 | 谁调用 |
+|---|---|---|
+| `--goto-log --run=<runId>` | 打开管理端并定位到指定运行记录 | 调度端通知（D18） |
+| `--reinstall-task` | 按 `config.json` 重新注册 `DelayStartScheduler`（**幂等**） | 开发期手动；**安装器 `[Run]` 段** |
+| `--restore-all` | 🔴 **还原全部被接管条目与软禁用标记，然后退出**。返回 0 = 全部还原成功；非 0 = 有项失败并打印原因 | **安装器 `[Code] InitializeUninstall()`**（D22 / D23 / NFR-6.4，见 7.2） |
 
 ```bash
-src/DelayStart.App/bin/Debug/net10.0-windows10.0.19041.0/win-x64/DelayStart.App.exe --goto-log --run=20260919-084112
+# 示例：验证通知跳转链路
+DelayStart.App.exe --goto-log --run=20260919-084112
+
+# 示例：卸载前的还原（安装器自动调用，手动跑仅用于验证）
+DelayStart.App.exe --restore-all
 ```
+
+> 🔴 **`--restore-all` 必须能独立运行、不依赖主窗口**，且**逐项返回结果**（不能"整体成功/失败"）。它是卸载流程的最后一道防线，见 `build-and-test.md` 7.2 与 `requirements.md` NFR-6.4。
 
 **【必须】** 开发期调试管理端的正确做法：**以管理员身份运行 Visual Studio**，然后 F5 启动。否则每次 F5 都会弹一次 UAC。
 
 > **提权状态下 VS 的"附加到进程"仍可用**，但**热重载（Hot Reload）不可用**——这是提权调试的固有代价，接受它。
 
-> WinUI 3 unpackaged 运行需要 Windows App Runtime。本项目设为 `WindowsAppSDKSelfContained=true`，因此**不依赖系统预装的运行时而直接可跑**。代价是发布体积增大（见第七节）。
+> WinUI 3 unpackaged 运行需要 Windows App Runtime。本项目**倾向于**设 `WindowsAppSDKSelfContained=true`，因而不依赖系统预装的运行时；代价是发布体积增大（见 7.1）。
 >
-> **但自包含 + 提权有冲突风险（R9）**，Phase 0 必须先验证。若不通过，按 `architecture.md` R9 的三条降级路径调整（首选去掉自包含改为框架依赖）。
+> **但自包含 + 提权有冲突风险（R9）**，Phase 0 必须先验证。若不通过，按 `architecture.md` R9 的降级路径①改为框架依赖 —— **有 D22 的安装器兜底，这条路的用户代价已经消失**。
 
 ### 5.2 调度端
 
@@ -283,7 +357,7 @@ dotnet run --project src/DelayStart.Scheduler
 src/DelayStart.Scheduler/bin/Release/net10.0-windows/win-x64/publish/DelayStart.Scheduler.exe
 ```
 
-**【必须】** 调度端调试时注意：它会**真的按延时启动程序**。调试前先把 `config.json` 里的条目延时调小（如 3 / 6 / 9 秒）或用测试专用配置目录，避免等待。用环境变量 `DELAYSTART_DATA_DIR` 覆盖数据目录（该开关需要在实现时加上，仅调试用）。
+**【必须】** 调度端调试时注意：它会**真的按延时启动程序**。调试前先把 `config.json` 里的条目延时调小（如 3 / 6 / 9 秒）或用测试专用数据目录，避免等待。用环境变量 `DELAYSTART_LOCAL_DIR`（覆盖 `%LOCALAPPDATA%\DelayStart`）与 `DELAYSTART_CONFIG_DIR`（覆盖 `%APPDATA%\DelayStart`）隔离测试环境 —— 这两个开关**仅用于开发调试**，实现时必须加上，正式代码不得依赖（D23 · `architecture.md` 1.5）。
 
 ---
 
@@ -341,33 +415,72 @@ warning IL2026 / IL3050 / IL3053
 
 ---
 
-## 七、打包
+## 七、打包与分发（D22）
 
-### 7.1 免安装 zip（第一版，对应 D8 选项 A）
+### 7.1 交付形态：Inno Setup 安装器
+
+**"免安装 zip"不再是交付形态**（D8 原方案，已被 D22 取代）。MSIX 被否决的三条理由见 `design-spec.md` 6.4。
+
+**固定安装路径是硬要求**，因为它决定计划任务是否长期有效：
+
+| 项 | 值 | 为什么 |
+|---|---|---|
+| 安装目录 | `{localappdata}\Programs\DelayStart` → `%LOCALAPPDATA%\Programs\DelayStart` | per-user 安装（**D23**），**不放 Program Files**、**不含版本号**。计划任务的 action 指向这个路径，升级只换文件不换路径 → 调度链路永不断 |
+| 调度端 exe | 同目录 `DelayStart.Scheduler.exe` | 同上 |
+| 安装目录**只读** | 程序运行时不向安装目录写任何东西 | 保证覆盖升级与卸载不留残留（NFR-6.7） |
+| 计划任务注册 | **管理端首次启动时自动注册**（`--reinstall-task`，幂等），**不由安装器负责** | 注册必须提权，而 per-user 安装刻意不弹 UAC。把提权点收敛到"用户第一次打开程序"这唯一一次（NFR-6.5） |
+
+**发布与目录组装**：
 
 ```bash
-# 1. 发布两个目标
 dotnet publish src/DelayStart.App       -c Release -r win-x64 -o dist/app
 dotnet publish src/DelayStart.Scheduler -c Release -r win-x64 -o dist/scheduler
 
-# 2. 组装目录
 dist/DelayStart/
-├─ DelayStart.exe              # 管理端
-├─ DelayStart.Scheduler.exe    # 调度端
+├─ DelayStart.exe              # 管理端（unpackaged，manifest 已嵌进 exe）
+├─ DelayStart.Scheduler.exe    # 调度端（NativeAOT）
 ├─ LICENSE
 └─ README.md
-
-# 3. 压缩
-Compress-Archive -Path dist/DelayStart -DestinationPath dist/DelayStart-<版本>.zip -Force
 ```
 
-**体积预期**：管理端自包含约 100–150 MB（WinUI 3 的固有代价），调度端约 6 MB。zip 压缩后管理端约 40–60 MB。
+**自包含 vs 框架依赖 —— 由 Phase 0 的 R9 结果决定**（`architecture.md` 第九节 R9）：
 
-> 若体积不可接受，替代方案是管理端改为**框架依赖**（需用户装 Windows App Runtime，体积降到 ~10 MB）。这属于 D8 范围内的取舍，**编码前需确认**。
+| R9 结果 | 属性 | 体积 | 运行时依赖 |
+|---|---|---|---|
+| 通过 | `WindowsAppSDKSelfContained=true` | 约 100–150 MB | 零 |
+| 不通过（走 R9 降级路径①） | `WindowsAppSDKSelfContained=false` | 约 10–15 MB | 由**安装器**部署 Windows App Runtime |
 
-### 7.2 安装器（发布阶段，D8 选项 C）
+> 有安装器之后，框架依赖这条路的唯一代价（"让用户自己装运行时"）就消失了 —— 安装器随包带 `WindowsAppRuntimeInstall.exe` 并在 `[Run]` 段静默执行。**所以 R9 不通过并不是坏结局。**
 
-用 Inno Setup：安装时注册计划任务、写开始菜单快捷方式（Toast 通知需要带 AppUserModelID 的快捷方式）。第一版不做。
+### 7.2 Inno Setup 脚本要点
+
+脚本入库 `installer/DelayStart.iss`。必含项：
+
+| 项 | 内容 |
+|---|---|
+| 提权 | 🔴 **`PrivilegesRequired=lowest`** —— per-user 安装，**安装全程零 UAC**。⚠️ **卸载会弹一次 UAC**：还原 HKLM 接管项与删除计划任务必须有管理员，这一次躲不掉（D23）。`ArchitecturesInstallIn64BitMode=x64compatible` |
+| 目录 | `DefaultDirName={localappdata}\Programs\DelayStart`、`DisableDirPage=auto`（用户可改，实际路径必须写进 `config.json`） |
+| 计划任务 | **安装器不注册**（NFR-6.5）。安装完成后提供可选勾选「立即运行 延时启动管理器」（`[Run]` `Flags: postinstall nowait skipifsilent`）—— 程序自提权并幂等注册，UAC 只弹这一次 |
+| 快捷方式 | `[Icons]` 开始菜单；桌面快捷方式做成可选任务（`Tasks: desktopicon`） |
+| 卸载入口 | per-user 模式自动写 `HKCU\...\Uninstall`，**在"应用和功能"里可卸载且不要求管理员** |
+| 🔴 卸载顺序<br>**必须用 `[Code]`，不能用 `[UninstallRun]`** | `[UninstallRun]` 段**读不到子进程退出码**，无法实现"还原失败即中止"。正确做法是在 `[Code]` 的 `InitializeUninstall()` 里执行：<br>`ShellExec('runas', ExpandConstant('{app}\DelayStart.exe'), '--restore-all', '', SW_SHOW, ewWaitUntilTerminated, R)`<br>要点：① `runas` 动词 → 触发 UAC；② 🔴 必须 `ewWaitUntilTerminated`，否则文件先被删、还原还没跑完；③ `R <> 0` 时 `Result := False` —— **返回 False 会中止卸载** |
+| 🔴 卸载失败处理 | `InitializeUninstall` 返回 `False` → 卸载中止、安装目录文件保留、弹窗列出失败项（`--restore-all` 的标准输出需落盘供展示） |
+| 卸载清理 | 删除 `DelayStartScheduler` 计划任务由 `--restore-all` 内部完成；删除失败必须提示用户手动删，不能静默忽略 |
+| 数据保留 | 默认**只删程序目录**。`%APPDATA%\DelayStart` 与 `%LOCALAPPDATA%\DelayStart` 在 `InitializeUninstall` 里**询问后**才删（重装可保留配置） |
+| 覆盖升级 | 识别已装版本 → 升级模式；**保留 `%APPDATA%\DelayStart\config.json`** |
+| 实际安装路径 | 用户可能改目录，**必须把实际路径写进 `config.json`**，供计划任务重新注册使用 |
+
+🔴 **卸载可逆性是本节最高优先级要求，高于任何视觉与体积优化。** 用户卸载后所有程序必须恢复自启动 —— 做不到就是本项目最严重的缺陷（`requirements.md` NFR-6.4 / 9.4 验收清单）。
+
+### 7.3 本地自测用的 zip（**不是**交付形态）
+
+开发时不想每轮跑安装器，可以用目录组装直接验证运行：
+
+```bash
+Compress-Archive -Path dist/DelayStart -DestinationPath dist/DelayStart-dev-<版本>.zip -Force
+```
+
+⚠️ **不要用它验收计划任务链路**：zip 解压路径随用户选择而变，计划任务会指向一个可能被随手删掉的路径 —— 这正是 D22 要解决的问题。计划任务相关验收一律走安装器装出来的固定路径。
 
 ---
 
@@ -398,6 +511,24 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 
 > **执行方式**：以下操作会**真实改变系统状态**（注册表、计划任务、实际启动程序、需要重启）。
 > 按项目约定，**由用户手动执行或明确许可后再执行**，AI 不代为运行。
+
+### 9.0 Phase 0 出口验证（R9：自包含 + 提权 manifest）
+
+> 这是**编码前的第一件事**。详细分析与三条降级路径见 `architecture.md` 第九节 R9。**R9 不通过就不进入 Phase 1。**
+
+- [ ] 按 2.1 用 `dotnet new` 生成 5 个项目骨架
+- [ ] 管理端按 2.1 的改造清单转成 unpackaged：`WindowsPackageType=None` + `ApplicationManifest=app.manifest` + `WindowsAppSDKSelfContained=true`
+- [ ] `app.manifest` 写入 `requestedExecutionLevel level="requireAdministrator" uiAccess="false"` + `PerMonitorV2` DPI 声明
+- [ ] **Release 构建**，**在 VS 之外直接双击 exe**（在 VS 里调试会继承 VS 的权限，测不准）
+- [ ] 判定 R9：**出现 UAC 盾牌 / 双击弹 UAC / `WindowsPrincipal.IsInRole(Administrator)` 为 true** → **通过**
+- [ ] 记录 R9 结论 → 决定 7.1 的自包含取值；不通过则按 R9 降级路径①改框架依赖
+- [ ] 顺带确认 **R3**：unpackaged 下 `app.manifest` 与 `PerMonitorV2` 生效
+- [ ] 顺带确认 **R8**：`.slnx` 能被 VS 18 正常打开（报错则回退 `.sln`）
+- [ ] 顺带确认：**未装 VS 的「.NET WinUI 应用开发工具」组件时，`dotnet build` 能否编译 XAML**（决定 1.2 那个组件是硬依赖还是纯体验项）
+
+> Phase 0 的出口条件是：`dotnet build` 全绿 + R2 / R3 / R8 已确认 + **R9 有明确结论**。
+
+---
 
 ### 9.1 软禁用正确性（Phase 2 出口）
 
@@ -464,6 +595,29 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 
 - [ ] 配置 3 个条目（3 / 6 / 9 秒） → 点「立即模拟调度」→ 加速播放 → 程序按时间轴真实启动
 - [ ] 中途点停止 → 不残留状态、不继续启动剩余项
+
+### 9.8 安装 / 升级 / 卸载（Phase 6 出口，D22）
+
+**验收标准见 `requirements.md` 9.4**，这里是具体做法。
+
+```bash
+# 安装（提权，Inno 会自己弹 UAC）
+installer/output/DelayStart-<版本>-setup.exe
+
+# 确认固定路径 + 计划任务 action 指向它
+schtasks /query /tn DelayStartScheduler /v /fo LIST
+
+# 记录安装后的注册表基线，供卸载后对比
+reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" after-install.reg
+```
+
+- [ ] 安装过程**无 UAC 提示**（`PrivilegesRequired=lowest`），装到 `%LOCALAPPDATA%\Programs\DelayStart`
+- [ ] 装完**不手动运行任何东西**时**不存在** `DelayStartScheduler` 任务（符合 D23 设计）；启动一次管理端后任务存在，`RunLevel=Highest`、身份为**当前交互用户**（🔴 不是 SYSTEM）
+- [ ] `action` 路径为 `%LOCALAPPDATA%\Programs\DelayStart\DelayStart.Scheduler.exe`，**不含版本号**
+- [ ] 用安装器装一个更高版本覆盖升级 → 计划任务仍有效、`config.json` 未被清空
+- [ ] 🔴 **接管 3 个条目 → 卸载 → 重启 → 三个程序全部恢复自启动**，`Run` 键与 `before-*.reg` 完全一致
+- [ ] 🔴 人为制造还原失败（如把某条目目标文件设为不可访问）→ **卸载中止并给出原因**，安装目录文件仍在
+- [ ] 卸载后 `DelayStartScheduler` 已删除；若删除被策略阻止，界面有明确提示
 
 ---
 
@@ -548,6 +702,12 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 | 接管后某程序仍是开机自启 | `StartupApproved` 键名不匹配 | 检查三级回退逻辑（坑 1） |
 | WOW6432Node 项禁用无效且无报错 | 标记写到了 `Run` 而不是 `Run32` | 见 `api-analysis.md` 坑 2 |
 | 恢复后程序还是不自启 | 恢复时 hive 判断错误（静默失效） | 检查是否用了显式 `scope` 枚举（坑 5） |
+| VS Installer 报 `Exit Code: 5007` | `--passive` / `--quiet` 未从提权终端启动 | 用**管理员** PowerShell 重跑（1.2）。日志里 `isadmin=True` 但 `iselevated=False` 一样被拒 |
+| VS Installer 报「找不到组件」/ 参数无效 | 组件 ID 写错 | 用 1.2 节的两个实测 ID；`...ComponentGroup.WindowsAppSDK.Cs` **不存在** |
+| 装完/升级后计划任务立刻失效 | 安装路径带版本号 | 见 7.1：路径必须固定为 `{localappdata}\Programs\DelayStart`，**不含版本号** |
+| 调度端启动了但"什么都没干"（无日志、无动作） | 计划任务身份被设成了 SYSTEM，`%APPDATA%` / `%LOCALAPPDATA%` 指向 `systemprofile`，配置读不到且**不报错** | 见 NFR-6.8：`LogonType=Interactive` + `RunLevel=Highest`，身份必须是交互用户 |
+| 🔴 卸载后所有程序不再自启 | 卸载未先还原接管项 | 见 7.2：必须在 `InitializeUninstall()` 里先跑 `--restore-all` 并 `ewWaitUntilTerminated` |
+| MSIX 装上后 HKCU 软禁用"成功"但任务管理器不认 | 打包应用的注册表虚拟化 | 本项目不用 MSIX（`design-spec.md` 6.4） |
 | 单项失败导致整批中止 | 缺少逐条 try/catch | 见 FR-1.4 / FR-5.5 |
 
 ---

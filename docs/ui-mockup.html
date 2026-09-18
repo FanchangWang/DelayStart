@@ -678,7 +678,7 @@ textarea{resize:none;font-family:"Cascadia Mono",Consolas,monospace;font-size:12
           <select onchange="toast('已切换日期范围','','')"><option>今天</option><option>最近 7 天</option><option>最近 30 天</option></select>
           <select onchange="toast('已切换日志级别','','')"><option>全部级别</option><option>仅错误</option><option>仅警告</option></select>
           <span class="grow"></span>
-          <button onclick="toast('已在资源管理器中打开','%LOCALAPPDATA%\\DelayStart','ok')"><span class="ico">&#xE8B7;</span>打开日志文件</button>
+          <button onclick="toast('已在资源管理器中打开','%LOCALAPPDATA%\\DelayStart\\logs','ok')"><span class="ico">&#xE8B7;</span>打开日志文件</button>
           <button class="danger" onclick="toast('日志已清空','','ok')"><span class="ico">&#xE74D;</span>清空日志</button>
         </div>
         <div class="card" style="padding:6px 8px">
@@ -1445,7 +1445,7 @@ function renderEditor(){
   }else{
     h += '<div class="mblock">'+mstep(4,'系统影响','')+'<div class="ro">'+
       '<div class="r"><span class="rk">条目类型</span><span class="rv"><b>手动添加</b> · 不属于系统自启动项</span></div>'+
-      '<div class="r"><span class="rk">写入位置</span><span class="rv mono">%LOCALAPPDATA%\\DelayStart\\config.json</span></div>'+
+      '<div class="r"><span class="rk">写入位置</span><span class="rv mono">%APPDATA%\\DelayStart\\config.json</span></div>'+
       '<div class="r"><span class="rk">系统影响</span><span class="rv">不改动注册表、启动文件夹、计划任务；移除时直接删除本条配置，无残留</span></div>'+
       '</div></div>';
   }

@@ -155,6 +155,7 @@ HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\
 - `/sc onlogon`：登录时触发
 - `/delay 0000:03`：登录后 3 秒，留给桌面/资源管理器加载
 - `/rl HIGHEST`：以最高权限运行，**避免调度端启动管理员程序时弹 UAC**
+- 🔴 **运行身份**：默认即"创建者本人 + `Interactive` 登录类型"，**这是正确的**（NFR-6.8）。**绝不要加 `/ru SYSTEM`** —— SYSTEM 会话下 `%APPDATA%` 解析到 `C:\Windows\System32\config\systemprofile`，配置读不到、日志写错位置，且**不报任何错**
 - 建议用 `TaskService` API 创建（而不是 `schtasks.exe`），可以读取返回、设置更细的参数、并支持中文任务名
 
 ### 3.2 时序语义（重要）
@@ -194,13 +195,13 @@ remaining = item.DelaySeconds - (now - 登录后的整体开始时刻)
 - 单实例：`new Mutex(true, "DelayStartScheduler")` + `WaitOne(TimeSpan.Zero, true)`。
 - 逐条 try/catch，单条失败不影响后续条目。
 - 失败发 Windows Toast 通知（需 `Microsoft.Windows.SDK.NET.Ref`；且 **Toast 生效要求 exe 在开始菜单有带 AppUserModelID 的快捷方式**，否则静默失败）。这条是 demo 记录的最大隐患，新方案要评估是否值得。
-- 日志：`%LOCALAPPDATA%\DelayStart\scheduler.log`。
+- 日志：`%LOCALAPPDATA%\DelayStart\logs\scheduler.log`（Local）；配置读 `%APPDATA%\DelayStart\config.json`（Roaming）。路径规范见 `architecture.md` 1.5（D23）。
 
 ---
 
 ## 四、配置模型
 
-`%LOCALAPPDATA%\DelayStart\config.json`
+`%APPDATA%\DelayStart\config.json`
 
 ```jsonc
 {

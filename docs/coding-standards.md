@@ -539,7 +539,9 @@ dotnet test
 - [ ] 所有 `FileOpenPicker` / `FolderPicker` 都调用了 `InitializeWithWindow.Initialize(picker, hwnd)`
 - [ ] 没有把拖放作为选择文件的**唯一**入口（`R10`）
 - [ ] 没有设计"从本程序拖出到其他应用"的交互
-- [ ] 没有依赖"以其他用户身份运行"场景（`%LOCALAPPDATA%` 会错）
+- [ ] 没有依赖"以其他用户身份运行"或 OTS 提权场景（`%APPDATA%` / `%LOCALAPPDATA%` 会指向另一账户）
+- [ ] **没有硬编码路径**：`%LOCALAPPDATA%` / `%APPDATA%` / 安装目录一律经 `PathService` 解析（`architecture.md` 1.5 · D23）
+- [ ] 程序运行时**不向安装目录写任何文件**（NFR-6.7）
 
 ### 可维护性
 

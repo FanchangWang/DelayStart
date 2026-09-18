@@ -64,7 +64,7 @@
 | D5 | 「系统启动项」页范围 | B — 只做服务 `delayed-auto` 切换 |
 | D6 | 程序名 | A — 延时启动管理器 / DelayStart |
 | D7 | 「立即模拟调度」 | A — 做 |
-| D8 | 分发方式 | A → C — 第一版免安装 zip，发布阶段补 Inno Setup |
+| D8 | 分发方式 | ~~A → C — 第一版免安装 zip，发布阶段补 Inno Setup~~ → **被 D22 取代** |
 | D9 | `.lnk` 解析 | A — 做 |
 | D10 | 批量操作 | B — 第一版不做 |
 | D11 | 预设延时值可配置 | B — 设置页可编辑 |
@@ -78,8 +78,10 @@
 | D19 | 管理端显示调度进行中 | A — 读 `current-run.json` |
 | D20 | 管理端权限模型 | **A — 全程提权**（原「按需提权」建议被否，见 `design-spec.md` 6.2） |
 | D21 | 单元测试框架 | **A — xUnit v3**（主选 v3 模板 / 降级 SDK 内置模板；NUnit 明确排除，见 `design-spec.md` 6.3） |
+| D22 | 分发形态（MSIX 是否可行） | **A — Inno Setup 安装器 + unpackaged**。MSIX 三条否决理由见 `design-spec.md` 6.4；**取代 D8** |
+| D23 | 安装与数据布局 | **per-user、不提权**：程序 `%LOCALAPPDATA%\Programs\DelayStart`（只读）；配置 `%APPDATA%\DelayStart\config.json`（Roaming）；日志/状态/归档 `%LOCALAPPDATA%\DelayStart\`（Local）。见 `architecture.md` 1.5 |
 
-> 详细选项与论证：`design-spec.md` 第六节。D20 / D21 的工程落地：`architecture.md` 1.3 / 1.4 / R9 / R10、`build-and-test.md` 第四节。
+> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / **6.5 D23**）。D20 / D21 / D22 / D23 的工程落地：`architecture.md` 1.3 / 1.4 / **1.5** / R9 / R10、`build-and-test.md` 第一、二、七节。
 >
 > **编码前的第一件事是 Phase 0 验证 R9**（WinUI 3 自包含 + 提权 manifest 是否生效）。不通过则需按降级路径调整 D20 的实现方式，见 `build-and-test.md` 9.0。
 
@@ -102,6 +104,10 @@
 11. **测试项目绝不引用 `DelayStart.App`**。一旦引用，就得背上 `WindowsAppSDKSelfContained` + Windows App Runtime 预装 + 多 RID，测试从秒级变分钟级（见 `architecture.md` 1.3）。
 12. **单元测试以普通权限运行**，禁止要求管理员权限，禁止触碰真实注册表/文件/进程。
 13. **AI 只生成 commit message，不自动执行 `git commit`**（用户明确要求时除外）。
+14. **交付形态是 Inno Setup 安装器，不是 zip**（D22）。**安装路径必须固定且不含版本号** —— 计划任务 action 指向它。
+15. 🔴 **卸载必须先还原全部接管项再删文件**（NFR-6.4）。还原失败则中止卸载。违反这条会让用户卸载后所有程序永久不自启。
+16. **安装目录只读，运行时数据与安装目录分离**（D23 / NFR-6.7）。程序放 `%LOCALAPPDATA%\Programs\DelayStart`，配置放 `%APPDATA%\DelayStart`（Roaming），日志与状态放 `%LOCALAPPDATA%\DelayStart`（Local）。**全部路径经 `PathService` 解析，禁止硬编码**。
+17. 🔴 **计划任务身份必须是交互用户**（`LogonType=Interactive` + `RunLevel=Highest`），**禁止 SYSTEM / 服务账户**（NFR-6.8）。SYSTEM 下 `%APPDATA%` 会解析到 `systemprofile`，配置读不到、日志写错位置，**且不报错**。
 
 ---
 

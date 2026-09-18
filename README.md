@@ -36,6 +36,20 @@
 
 ---
 
+## 安装位置与数据（D23）
+
+**per-user 安装，安装过程不弹 UAC**（`PrivilegesRequired=lowest`）。程序与数据严格分离：
+
+| 类别 | 路径 |
+|---|---|
+| 程序（只读） | `%LOCALAPPDATA%\Programs\DelayStart\` |
+| 配置（Roaming） | `%APPDATA%\DelayStart\config.json` |
+| 日志 / 实时状态 / 运行归档（Local） | `%LOCALAPPDATA%\DelayStart\logs\` · `state\` · `runs\` |
+
+程序运行时**不向安装目录写任何东西**，所以覆盖升级与卸载不会留残留。计划任务在**管理端首次启动时**幂等注册（注册必须提权，全流程只弹这一次 UAC）。
+
+---
+
 ## 快速开始
 
 ```bash

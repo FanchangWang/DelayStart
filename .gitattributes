@@ -1,2 +1,14 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# 行尾统一为 LF（仓库与工作区一致，避免 diff 噪音与"整文件改动"假象）
+* text=auto eol=lf
+
+# 例外：Visual Studio 传统解决方案文件保留 CRLF（VS 与旧工具链对它更挑剔）
+*.sln text eol=crlf
+
+# 二进制资源不参与行尾转换
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary

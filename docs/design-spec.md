@@ -235,7 +235,7 @@
 │  ④ 系统影响                                          │
 │  ┌────────────────────────────────────────────────┐  │
 │  │ 条目类型   手动添加 · 不属于系统自启动项          │  │
-│  │ 写入位置   %LOCALAPPDATA%\DelayStart\config.json│  │
+│  │ 写入位置   %APPDATA%\DelayStart\config.json      │  │
 │  │ 系统影响   不改动注册表、启动文件夹、计划任务；    │  │
 │  │            移除时直接删除本条配置，无残留          │  │
 │  └────────────────────────────────────────────────┘  │
@@ -468,12 +468,14 @@
 ## 六、决策点与批复结果
 
 > **状态图例**：`✅` 已批复并锁定 · `⏳` 尚未批复（列出建议值，**未批复前不进入编码**）
-> **D1–D21 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。**
+> **D1–D23 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。**
 >
 > - D1–D3、D14–D19：首轮批复
 > - D4–D13：2026-09-19 按建议值批量批复
 > - D20：**改判为全程提权**（原「按需提权」建议被否，理由见 `requirements.md` NFR-3 注）
 > - D21：xUnit v3
+> - D22：**分发形态改为 Inno Setup 安装器 + unpackaged**，D8 的「第一版 zip」被取代（理由见 6.4）
+> - D23：**安装与数据布局**改为 per-user 不提权安装 + 配置走 Roaming、日志走 Local（理由见 6.5）
 
 | 编号 | 决策 | 选项 | 批复 | 优先级 |
 |---|---|---|---|---|
@@ -484,7 +486,7 @@
 | **D5** | 「系统启动项」只读页 | A. 做（含服务 delayed-auto 一键切换）<br>B. 只做服务 delayed-auto 切换，其余不做<br>C. 整页砍掉，后置 | **✅ B** —— 服务用系统原生 `delayed-auto`；驱动/Winlogon 不做 | 🟡 |
 | **D6** | 程序名 | A. 延时启动管理器 / DelayStart<br>B. 你给一个 | **✅ A** | 🟢 |
 | **D7** | 「立即模拟调度」 | A. 做（真的按时间轴启动程序，0.5 倍速预览）<br>B. 只做时间轴动画，不真启动<br>C. 不做 | **✅ A** | 🟢 |
-| **D8** | 分发方式 | A. 免安装 zip（unpackaged，自包含）<br>B. MSIX 安装包<br>C. Inno Setup 安装器 | **✅ A → C** —— 第一版免安装 zip，发布阶段补 Inno Setup | 🟢 |
+| **D8** | 分发方式 | A. 免安装 zip（unpackaged，自包含）<br>B. MSIX 安装包<br>C. Inno Setup 安装器 | ~~**✅ A → C**~~ → **被 D22 取代：直接走 C** —— 第一版即出安装器 | 🟢 |
 | **D9** | `.lnk` 图标与目标解析 | A. 做（列表更易读）<br>B. 不做，直接显示 .lnk 路径 | **✅ A** | 🟡 |
 | **D10** | 批量操作 | A. 做（多选 + 批量禁用/批量延时）<br>B. 不做，第一版先单项 | **✅ B** —— 先跑通单项链路 | 🟢 |
 | **D11** | 预设延时选项是否可配置 | A. 只在代码里写死 5 个值<br>B. 设置页可编辑预设值 | **✅ B** —— 逗号分隔文本框驱动弹窗按钮 | 🟡 |
@@ -498,9 +500,11 @@
 | **D19** | 管理端显示"调度进行中"的实时状态 | A. 做（读 `state\current-run.json`）<br>B. 不做，管理端只显示配置 | **✅ A** | 🟢 |
 | **D20** | 管理端权限模型 | A. **全程**提权（`app.manifest` → `requireAdministrator`）<br>B. 按需提权（默认普通权限，遇 HKLM 时提示重启为管理员） | **✅ A** —— 原建议 B 被否。**核心功能 100% 需要管理员**，按需提权只省掉"查看"这一步的 UAC，却引入提权重启 + 意图传递 + 半完成状态处理，不划算。详见 6.2 | 🔴 |
 | **D21** | 单元测试框架 | A. xUnit v3（`xunit.v3`）<br>B. xUnit v2（SDK 内置模板）<br>C. NUnit / MSTest | **✅ A** —— 主选 xUnit v3；v3 模板安装受阻时降级 B。**NUnit 明确排除**（.NET 10 SDK 下存在 MTP 版本冲突 CS1705）。详见 6.3 | 🟡 |
+| **D22** | 分发形态：MSIX 是否可行 | A. Inno Setup 安装器 + **unpackaged**<br>B. MSIX 打包 + 自写提权 bootstrapper<br>C. 维持 D8 的第一版免安装 zip | **✅ A** —— MSIX 三条致命理由（Win10 无法提权 / 注册表虚拟化 / 安装路径含版本号），详见 6.4。同时取代 D8 | 🔴 |
+| **D23** | 安装与数据布局 | A. 装 `Program Files`（需提权安装）+ 数据全放 `%LOCALAPPDATA%`<br>B. **per-user 装 `%LOCALAPPDATA%\Programs\DelayStart`（不提权）**；配置 `%APPDATA%\DelayStart`（Roaming）；日志/状态 `%LOCALAPPDATA%\DelayStart`（Local） | **✅ B** —— 用户定：程序不放 Program Files、配置走 Roaming、日志走 Local。派生三条：安装器 `PrivilegesRequired=lowest`、计划任务改由管理端首次启动注册、卸载默认保留配置与日志。详见 6.5 | 🔴 |
 
 > **D14–D19 归属调度端**，完整论证、技术硬约束（AOT / elevated 通知限制）、通知文案矩阵、跨进程状态文件设计见独立文档 **`docs/scheduler-design.md`**。
-> **D20 / D21 的完整论证见下方 6.2 / 6.3**，工程落地见 `architecture.md` 1.4 与 `build-and-test.md` 第四节。
+> **D20 / D21 / D22 / D23 的完整论证见下方 6.2 / 6.3 / 6.4 / 6.5**，工程落地见 `architecture.md` 1.4 / 1.5 与 `build-and-test.md` 第一、七节。
 
 ### 6.1 D17 批复说明：失败由用户处理，软件不代劳
 
@@ -541,7 +545,7 @@
 | 扫描 + 软禁用用户启动文件夹项 | `HKCU\...\StartupApproved\StartupFolder` |
 | 只读扫描 HKLM / 计划任务 / 服务 | 默认 ACL 允许读 |
 | UWP 自启状态读写 | `HKCU\...\AppModel\SystemAppData` |
-| 配置与日志 | `%LOCALAPPDATA%\DelayStart` |
+| 配置与日志 | 配置 `%APPDATA%\DelayStart`（Roaming）· 日志 `%LOCALAPPDATA%\DelayStart\logs`（Local） |
 
 **决定性理由：**
 
@@ -560,7 +564,9 @@
 | 2 | **提权窗口接收不到资源管理器的拖放（UIPI）** | 见 `architecture.md` R10。主路径是 `[浏览…]` 按钮（100% 可用）；拖放作为增强，用 `ChangeWindowMessageFilterEx` + 旧式 `WM_DROPFILES` 尝试补上，不通则拖放区降级为纯按钮 |
 | 3 | **提权状态下"拖出"到其他应用不工作** | 无解（UIPI 强制）。**不接受"拖 exe 到任务栏固定"这类交互设计** |
 
-**明确不支持：**`以其他用户身份运行`。这会让 `%LOCALAPPDATA%` 指向另一个账户，配置读不到。需在文档与验收清单中写死。
+**明确不支持：**`以其他用户身份运行`，**以及 OTS（over-the-shoulder）提权**（在 UAC 里输入另一个管理员账户的凭据）。这两种情况都会让 `%APPDATA%` / `%LOCALAPPDATA%` 指向**另一个账户**，配置读不到、日志写错位置。
+
+判定方式（唯一正确做法，NFR-3.8 / E18）：比较**提权后的用户 SID** 与**交互会话用户 SID**（取本会话 `explorer.exe` 的令牌用户）。`IsInRole(Administrator)` 只回答"是否提权"，回答不了"是不是换了人"—— 用错了会把正常的 UAC 自提权误判为不支持。需在文档与验收清单中写死。
 
 **新增的唯一界面元素：UAC 被拒提示**（这是 D20 改判带来的全部 UI 增量）
 
@@ -609,6 +615,100 @@ dotnet new xunit3 -o tests/DelayStart.Core.Tests -f net10.0
 # 降级路径：若模板安装失败，用 SDK 内置模板
 dotnet new xunit -o tests/DelayStart.Core.Tests -f net10.0
 ```
+
+### 6.4 D22 批复说明：分发形态定为 Inno Setup 安装器 + unpackaged（MSIX 被否决）
+
+**批复：A。** 同时**取代 D8** —— 不再有"第一版免安装 zip"这个阶段，第一版就出安装器。
+
+提前说明：我上一轮给的理由（"MSIX 有致命缺陷"）方向对，但没给出**最硬的那一条**。下面是补齐后的完整否决链，按力度排序。
+
+#### 否决 MSIX 的三条理由
+
+| # | 理由 | 依据 | 后果 |
+|---|---|---|---|
+| 1 | 🔴 **打包应用提权只在 Windows 11 及以上可用** | WindowsAppSDK issue **#896** 官方 feature status 原文：<br>*"Supporting elevated packaged apps using framework package APIs (like WinAppSDK and WinUI 3) required OS-level changes. Thus, this fix is only available in Windows 11 and higher."* | 与 `NFR-5.1`（Win10 21H2 及以上）**直接冲突** → **D20 在 Win10 上无法实现**。这一条单独就足以否决，不需要看后两条 |
+| 2 | 🔴 **注册表虚拟化会吞掉 HKCU 软禁用写入** | MS Learn *Flexible virtualization*：打包应用的 HKCU **运行时写入**进入"每个应用、每个用户独立的私有结构"，**只有该应用自己看得见** | 软禁用的 HKCU 部分（HKCU `StartupApproved\Run`、`StartupFolder`、UWP `State`）**静默失效**：我们以为写成功了，任务管理器、资源管理器、**我们自己的调度端都看不到标记**。而"静默失效"正是本项目明令禁止的失败模式（`坑 1` / `坑 5` 是同一个病根） |
+| 3 | 🔴 **安装路径含版本号** | 打包应用的安装位置为 `C:\Program Files\WindowsApps\<Name>_<Version>_<Arch>__<PublisherId>` | 每次更新路径都变 → 计划任务 action 指向的路径失效 → **调度链路断**。这正是本轮要解决的问题，不能引进新版本 |
+
+#### 理由 2 的"关掉虚拟化"这条路也堵死
+
+关闭注册表/文件虚拟化需要两个**受限能力**（restricted capability）：
+
+```xml
+<rescap:Capability Name="unvirtualizedResources" />   <!-- 关虚拟化 -->
+<rescap:Capability Name="allowElevation" />           <!-- 配合 exe manifest 提权 -->
+```
+
+连带后果：
+
+| 后果 | 说明 |
+|---|---|
+| **App Installer 装不了** | 带受限能力的包双击 .msix 报 `Cannot open app package`；只能**提权 PowerShell `Add-AppxPackage`**，或自写一个提权 bootstrapper exe 代装。分发体验**反而比 Inno Setup 差** —— 用户要经历"先右击 PowerShell 以管理员运行，再敲命令" |
+| **商店上架基本不可能** | 官方关于 `allowElevation` 的原文：*"In most cases, the use of this capability won't be approved."* |
+| 旁加载无需审批 | 这是唯一的利好，但**抵消不了上面两条**，而且抵消不了理由 1 |
+
+**结论：MSIX 不是"稍微麻烦一点"，而是"在 Win10 上根本做不到 D20"。** 选项 B（MSIX + 自写提权 bootstrapper）本质上是"用打包格式 + 一个安装器"，那我们为什么不直接用原生安装器？
+
+#### D22 选项 A 的具体内容
+
+| 项 | 内容 |
+|---|---|
+| 应用形态 | `WindowsPackageType=None`（unpackaged）+ `app.manifest` 的 `requireAdministrator`。**真实注册表、真实文件系统，无任何虚拟化** |
+| 安装目录 | **固定路径** `{localappdata}\Programs\DelayStart`（**per-user，不放 Program Files**），**不含版本号** → 计划任务 action 路径永不失效。路径与数据布局的完整规范见 **D23** / `architecture.md` 1.5 |
+| 安装器 | Inno Setup（**本机已装 6.7.3**，`winget list -q innosetup` 实测），脚本入库 `installer/DelayStart.iss` |
+| 安装器职责 | 拷贝文件 → 开始菜单快捷方式 → 注册卸载信息。🔴 **不注册计划任务**（D23：注册必须提权，改由**管理端首次启动时幂等注册**，全流程 UAC 只弹那一次） |
+| 卸载器职责 | 🔴 **先还原全部被接管的条目与软禁用标记，再删文件**。🔴 **实现位置必须是 `[Code]` 的 `InitializeUninstall()`，不能用 `[UninstallRun]`** —— 后者读不到退出码，做不到"失败即中止"。见下方硬约束与 `build-and-test.md` 7.2 |
+| 体积 / 运行时依赖 | **由 Phase 0 的 R9 结果决定**：R9 通过 → `WindowsAppSDKSelfContained=true`（约 100–150 MB，零依赖）；R9 不通过 → 走 R9 降级路径①框架依赖（约 10–15 MB，**安装器负责部署 Windows App Runtime**）。<br>**这是 D22 与 R9 降级路径的天然结合点** —— 有了安装器，"让用户自己装运行时"这个代价就消失了，R9 不通过也不再是问题 |
+
+#### 新增硬约束（🔴 优先级高于任何视觉与体积优化）
+
+| 约束 | 内容 | 违反的后果 |
+|---|---|---|
+| **卸载必须可逆** | 用户卸载时，所有被接管的条目**必须还原到接管前的自启动状态**（延时配置可以丢弃，**自启动状态必须还原**） | 用户卸载后所有程序永久不再自启，而他根本不知道原因。**这会是本项目最严重的缺陷** |
+| **禁止"先删文件后还原"** | 还原逻辑写在 `[Code]` 的 `InitializeUninstall()` 里，通过 `ShellExec('runas', '{app}\DelayStart.exe', '--restore-all', '', SW_SHOW, ewWaitUntilTerminated, R)` 调起，**必须 `ewWaitUntilTerminated`**（`shellexec` / `nowait` 都不等待 → 会出现"文件已删、还原未跑完"）；不得依赖已被删除的文件 | 半还原状态 + 无法修复 |
+| **还原失败则中止卸载** | `R <> 0` → `InitializeUninstall()` 返回 `False`，**Inno 会中止整个卸载**，安装目录文件保留，弹窗列出失败项 | 同上 |
+| **计划任务清理** | 卸载时删除 `DelayStartScheduler`；删除失败（组策略保护）必须提示用户手动删除，不得静默忽略 | 残留指向空路径的任务，每次登录都报错 |
+| **安装路径落盘** | 用户允许改安装目录，但实际路径必须写进 `config.json`，供计划任务重新注册时使用 | 计划任务指向错误路径 |
+
+#### 代价（诚实列出）
+
+- 需要维护一个 `.iss` 脚本（约 100–150 行）+ 一个"卸载前置还原"流程。这是 D8 选 zip 时完全不存在的工作量。
+- 换来的是：**计划任务路径稳定 + 安装体验正常 + Win10 可用 + 卸载不会毁掉用户的自启动配置**。这笔账没有争议。
+
+> **已作废的内容**：`build-and-test.md` 第七节原「7.1 免安装 zip」**不再是交付形态**，降级为"本地开发自测用的目录组装步骤"保留；`NFR-6.3` 已改写。凡文档中出现「第一版免安装 zip」的地方，一律以本节为准。
+
+---
+
+## 6.5 D23 安装与数据布局
+
+**用户定的三条（不可改）：** 程序不放 `Program Files`；配置走 Roaming；日志走 Local。它们背后是一个共同判断：**这是一个 per-user 的个人工具，不是机器级的系统组件**。
+
+### 落地方案
+
+| 项 | 值 | 理由 |
+|---|---|---|
+| 程序 | `%LOCALAPPDATA%\Programs\DelayStart` | per-user 安装的标准位置（VS Code / Chrome 同款）。**不含版本号** → 计划任务 action 永久有效 |
+| 配置 | `%APPDATA%\DelayStart\config.json` | Roaming = 用户资产，重装系统/换机应当跟人走 |
+| 日志 / 实时状态 / 运行归档 | `%LOCALAPPDATA%\DelayStart\` | Local = 机器相关产物，没有漫游价值，漫游只会造成无谓同步 |
+| 安装器权限 | `PrivilegesRequired=lowest` | per-user 安装**不需要管理员**。放 `Program Files` 就必须提权安装，而提权安装与 per-user 数据目录是**互相矛盾**的组合。⚠️ 注意：**安装零 UAC，但卸载会弹一次** —— 还原 HKLM 接管项、删除计划任务必须有管理员，这一次躲不掉 |
+| 计划任务注册时机 | **管理端首次启动**（`--reinstall-task` 幂等） | 注册计划任务必须提权，这是本项目唯一逃不掉的 UAC。把它放在"用户第一次打开程序"这一次，比放在"安装那一刻"更自然——**安装完还没打开过的用户，本来也不需要这个任务** |
+
+### 为什么安装目录必须只读（NFR-6.7）
+
+如果程序往自己的安装目录写配置，就会出现三个后果：覆盖升级时旧配置被覆盖或残留、卸载删不干净、`%LOCALAPPDATA%\Programs` 下的目录被用户当成"程序文件夹"整体删除时连带丢配置。**程序与数据分离不是洁癖，是升级/卸载/备份三条链路的前提。**
+
+### 🔴 派生出的隐性坑：SYSTEM 身份
+
+计划任务很容易被写成"以 SYSTEM 运行"（很多教程这么写）。**在本项目里这会静默毁掉一切**：SYSTEM 会话下 `%APPDATA%` 解析到 `C:\Windows\System32\config\systemprofile`，配置读不到、日志写到那个目录 —— 而且**不会抛任何异常**，表现为"调度器启动了但什么都没干"。
+
+所以硬性要求（NFR-6.8）：`LogonType=Interactive` + `RunLevel=Highest`，身份 = 发起安装的交互用户。**危险等级与 MSIX 注册表虚拟化同级：都是静默失效。**
+
+### 代价（诚实列出）
+
+- Roaming 在域环境下会把机器相关的条目列表带到另一台机器 → 加载时必须按 `ItemKey` 校验存在性，失效条目标记「已失效」且不参与调度（复用 E3 逻辑）。这一条是**必须实现**的，不是可选优化。
+- 卸载比"删一个目录"复杂：要先提权还原接管项、删计划任务，再删程序文件，最后询问是否删配置。
+
+> **完整实现规则（6 条）见 `architecture.md` 1.5**；数据契约表见 `requirements.md` 第七节；安装器要点见 `build-and-test.md` 7.1 / 7.2。
 
 ---
 

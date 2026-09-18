@@ -75,7 +75,7 @@ DelayStart/
 |---|---|---|
 | `DelayStart.Core` | `net10.0-windows` | `IsAotCompatible=true`、`Nullable=enable` |
 | `DelayStart.Management` | `net10.0-windows` | 普通库 |
-| `DelayStart.App` | `net10.0-windows10.0.19041.0` | `UseWinUI=true`、`WindowsPackageType=None`（unpackaged）、`WindowsAppSDKSelfContained=true`、`ApplicationManifest=app.manifest` |
+| `DelayStart.App` | `net10.0-windows10.0.19041.0` | `UseWinUI=true`、`WindowsPackageType=None`（unpackaged）、`ApplicationManifest=app.manifest`、`WindowsAppSDKSelfContained`（取值由 R9 结果定，见 `build-and-test.md` 7.1） |
 | `DelayStart.Scheduler` | `net10.0-windows` | `OutputType=WinExe`、`PublishAot=true`、`UseWindowsForms=true` |
 | `DelayStart.Core.Tests` | `net10.0-windows` | `IsPackable=false`、`OutputType=Exe`（xUnit v3 要求） |
 
@@ -89,7 +89,7 @@ DelayStart/
 | `Microsoft.Windows.SDK.BuildTools` | **`10.0.26100.7705`** | 同上 |
 | `xunit.v3` | 创建测试项目时取最新稳定版 | 见 `build-and-test.md` 4.1 |
 
-**项目创建一律走 `dotnet new`**，命令清单与模板实测事实见 **`build-and-test.md` 2.1**。其中一条硬限制必须记住：**WinUI 3 模板只生成 MSIX 打包工程，没有 unpackaged 开关**，生成后需按 2.1 的改造清单转成 unpackaged（本项目 D8 要求免安装 zip）。
+**项目创建一律走 `dotnet new`**，命令清单、模板实测事实与**工具链前置依赖**（VS 组件正确 ID、Inno Setup 现状）见 **`build-and-test.md` 1.2 / 2.1**。其中一条硬限制必须记住：**WinUI 3 模板只生成 MSIX 打包工程，没有 unpackaged 开关**，生成后需按 2.1 的改造清单转成 unpackaged（本项目 D22 要求 unpackaged + 安装器分发）。
 
 **关于测试项目的 TFM**：微软官方文档 *Test apps built with the Windows App SDK and WinUI 3* 要求"测试项目的 TFM 必须与 WinUI 3 项目匹配、加 `WindowsAppSDKSelfContained`、机器上要装 Windows App Runtime"——**本项目不适用这套配置**。
 
@@ -119,11 +119,42 @@ DelayStart/
 
 1. **UAC 被拒 → 退出，不降级。** 启动时检测 `IsInRole(WindowsBuiltInRole.Administrator)`；若为 false，显示说明后退出（对应 `requirements.md` E17）。降级运行会造成"用户以为禁用成功、实际静默失败"的最坏状态。
 2. **提权窗口的拖放**（详见 R10）。主路径是 `[浏览…]` 按钮，**不依赖拖放**；拖放作为增强能力尝试补上。
-3. **拒绝「以其他用户身份运行」**（NFR-3.8 / E18）。该模式下 `%LOCALAPPDATA%` 指向另一账户，配置读不到。
+3. **拒绝「以其他用户身份运行」与 OTS 提权**（NFR-3.8 / E18）。这两类模式下 `%APPDATA%` / `%LOCALAPPDATA%` 指向另一账户，配置读不到。判定用 **SID 比对**，不用 `IsInRole` —— 细则见 1.5 第 6 条。
 
 > **实现注意**：`Environment.GetFolderPath(SpecialFolder.LocalApplicationData)` 在 **UAC 提权**（同一用户 + 管理员令牌）场景下是正确的；只有"以其他用户身份运行"才会错。这两者必须区分开，不要因为担心前者而误封后者。
 
 **App 提权的已知风险（R9）**：社区报告在 `WindowsAppSDKSelfContained=true` 时，`app.manifest` 里的 `requestedExecutionLevel` 可能被忽略（不弹 UAC、也不提权）。**Phase 0 必须实测**，见 R9 的三条降级路径。
+
+### 1.5 路径与数据目录（D23）
+
+**安装目录（per-user，只读）**
+
+```
+%LOCALAPPDATA%\Programs\DelayStart\
+├─ DelayStart.exe                # 管理端（unpackaged）
+├─ DelayStart.Scheduler.exe      # 调度端（NativeAOT）
+├─ LICENSE
+├─ README.md
+└─ third-party-notices.txt
+```
+
+**运行时数据（与安装目录完全分离）**
+
+| 类别 | 路径 | 说明 |
+|---|---|---|
+| 配置 | `%APPDATA%\DelayStart\config.json` | **Roaming**。跨机器可漫游的个人配置 |
+| 日志 | `%LOCALAPPDATA%\DelayStart\logs\scheduler.log`<br>`%LOCALAPPDATA%\DelayStart\logs\manager.log` | **Local**。机器相关，不漫游 |
+| 实时状态 | `%LOCALAPPDATA%\DelayStart\state\current-run.json` | 调度端每次状态变化原子重写；管理端只读（D19） |
+| 运行归档 | `%LOCALAPPDATA%\DelayStart\runs\<runId>.json` | 保留最近 30 次 |
+
+**实现规则（编码时必须照做）：**
+
+1. 🔴 **禁止硬编码路径**。全部路径必须经由 `PathService`（`Core` 层）解析：`InstalledRoot` / `ConfigRoot` / `LocalRoot` / `LogsRoot` / `StateRoot` / `RunsRoot`。任何类库里出现 `@"C:\..."` 或手工拼 `Environment.GetFolderPath` 都算违规。
+2. **安装目录只读**。`PathService.InstalledRoot` 仅用于"取自身 exe 路径"（注册计划任务时用），**不得作为任何写入目标**（NFR-6.7）。
+3. **调试覆盖开关**：`DELAYSTART_LOCAL_DIR` / `DELAYSTART_CONFIG_DIR` 分别覆盖 Local 根与 Roaming 根；未设置时走 `%LOCALAPPDATA%` / `%APPDATA%`。这两个变量**只用于开发与测试**，正式代码不得依赖。
+4. **Roaming 的代价必须兜住**：域环境下漫游配置可能把机器相关的条目列表带到另一台机器。配置加载后必须按 `ItemKey` 校验实际存在性，不存在的条目标记「已失效」且**不参与调度**（复用 E3 逻辑），不得直接报错或静默启动失败。
+5. **计划任务身份 = 交互用户**，`LogonType=Interactive` + `RunLevel=Highest`，🔴 禁止 SYSTEM（NFR-6.8）。系统级任务会让 `%LOCALAPPDATA%` 指向 `C:\Windows\System32\config\systemprofile`，配置读不到、日志写错位置。
+6. **禁止「以其他用户身份运行」与 OTS 提权**（NFR-3.8 / E18）。判定方式：**提权后的用户 SID 是否等于交互会话用户 SID**（取本会话 `explorer.exe` 的令牌用户）。`IsInRole(Administrator)` 只能判断"是否提权"，判断不出"是不是换了人"。
 
 ---
 
@@ -663,7 +694,7 @@ DelayStart.Scheduler/
 
 | 路径 | 做法 | 代价 |
 |---|---|---|
-| **① 去掉自包含**（社区验证最有效） | `WindowsAppSDKSelfContained=false`，改为框架依赖 | 用户机器需预装 Windows App Runtime。**本机已装**（`C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime*` 已确认存在）；分发时需处理（D8 的 Inno Setup 阶段可带上运行时安装） |
+| **① 去掉自包含**（社区验证最有效） | `WindowsAppSDKSelfContained=false`，改为框架依赖 | 用户机器需预装 Windows App Runtime。**本机已装**（`C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime*` 已确认存在）；分发时由 **D22 的 Inno Setup 安装器**代为部署运行时，用户无感 |
 | **② 运行时自提权** | manifest 保持 `asInvoker`，在 `App.OnLaunched` 最早期检测权限，不足则 `Process.Start(new ProcessStartInfo { FileName = exePath, Verb = "runas", UseShellExecute = true })` 重启自己，然后退出当前实例 | 多一次进程启动；**必须传参防止无限重启循环**（如加 `--elevated-retry` 标记位，失败则直接退出） |
 | **③ 外部启动器** | 新增极小 AOT 控制台/窗口 exe 作为 `DelayStart.Launcher.exe`，manifest 标 `requireAdministrator`，只负责以提升权限拉起 `DelayStart.App.exe` | 多一个 exe 要维护；快捷方式指向 launcher |
 
@@ -675,12 +706,12 @@ DelayStart.Scheduler/
 
 | Phase | 内容 | 出口条件 |
 |---|---|---|
-| **0** | 环境与骨架：`dotnet new` 生成 4 个项目 + 测试项目（`build-and-test.md` 2.1）、`Directory.Build.props`、CPM、`.editorconfig`；**并验证 R9**（自包含 + manifest 提权） | `dotnet build` 全绿；R2 / R3 / R8 已确认；**R9 有明确结论** |
+| **0** | 环境与骨架：先按 `build-and-test.md` 1.2 装齐工具链前置（VS 组件 + WinUI 模板包）；`dotnet new` 生成 4 个项目 + 测试项目（2.1）、`Directory.Build.props`、CPM、`.editorconfig`；**并验证 R9**（自包含 + manifest 提权） | `dotnet build` 全绿；R2 / R3 / R8 已确认；**R9 有明确结论**（决定 7.1 的自包含取值） |
 | **1** | `Core` 层：模型、`ConfigService`、`DelayCalculator`、`ItemKeyBuilder`、`CommandLineService`、`LaunchResultEvaluator` + 单元测试 | 单元测试全绿 |
 | **2** | `Management` 层：4 个 Source 的扫描 + 软禁用 + 恢复、`TakeoverService`、`TaskRegistrationService` | 注册表导出对比验证"零数据损坏" |
 | **3** | 管理端骨架：导航 + 自启动项页 + 延时启动页，跑通"扫描 → 接管 → 移除"单链路；验证 R10（提权下的文件选择/拖放） | 端到端手工验证通过；「手动添加」的 `[浏览…]` 路径可用 |
 | **4** | 调度端：先验 R1，再做引擎 + 托盘 + 通知 + 状态文件 | 重启实测延时准确 |
 | **5** | 总览 / 日志 / 设置 / 系统启动项页 | 全部页面文案对齐 `design-spec.md` |
-| **6** | 模拟调度、打包、真机全面验收 | `requirements.md` 第九节全部勾选 |
+| **6** | 模拟调度、**Inno Setup 安装器与卸载还原链路**（D22）、真机全面验收 | `requirements.md` 第九节全部勾选（含 9.4 分发验收） |
 
 **Phase 2 与 Phase 4 之间不允许跳过**——调度端依赖 Core 的时序与启动逻辑，而那部分的正确性只能靠 Phase 1 的单元测试保证。

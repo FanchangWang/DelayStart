@@ -161,7 +161,7 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | FR-4.5 | 可选自定义命令行参数 | 留空则不附加 |
 | FR-4.6 | 条目级启用开关 | 关闭后本次登录不启动该项，配置与原始自启动项状态均不变 |
 | FR-4.7 | 相同延时内可调整先后顺序 | 提供上移/下移；仅在延时值相同时可用 |
-| FR-4.8 | 配置持久化到 `%LOCALAPPDATA%\DelayStart\config.json` | 采用**原子写**（写 `.tmp` → `File.Replace`） |
+| FR-4.8 | 配置持久化到 `%APPDATA%\DelayStart\config.json`（Roaming，D23） | 采用**原子写**（写 `.tmp` → `File.Replace`）；路径一律经 `PathService` 解析 |
 
 ### FR-5 调度执行
 
@@ -178,7 +178,7 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | FR-5.9 | 启动"成功"的判定：创建成功 + 延时 1.5 秒后复查 `HasExited` | 仍存活 → 成功；已退出且退出码 ≠ 0 → 失败；已退出且退出码 = 0 → 成功（拉起已有实例的正常行为） |
 | FR-5.10 | 无任何有效条目时静默退出 | 不弹窗、不显示托盘图标、不发通知 |
 | FR-5.11 | 全部条目处理完后自动退出 | 不在后台常驻 |
-| FR-5.12 | 写入实时状态供管理端读取 | `state\current-run.json` 每次状态变化即重写（原子写） |
+| FR-5.12 | 写入实时状态供管理端读取 | `%LOCALAPPDATA%\DelayStart\state\current-run.json` 每次状态变化即重写（原子写） |
 | FR-5.13 | 结束时归档本次结果 | `runs\<runId>.json`，保留最近 30 次 |
 | FR-5.14 | 用源生成 JSON 序列化 | `JsonSerializerContext`，不用反射序列化 |
 
@@ -298,7 +298,7 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | NFR-3.5 | 不联网、不采集任何用户数据 |
 | NFR-3.6 | **UAC 被拒绝时不得降级运行**：给出说明后退出，不进入"部分功能可用"的半残状态 |
 | NFR-3.7 | 提权窗口仍需支持从资源管理器拖入文件：主路径为 `[浏览…]` 按钮，拖放为增强项（`ChangeWindowMessageFilterEx` + 旧式 `WM_DROPFILES`） |
-| NFR-3.8 | **不支持「以其他用户身份运行」**：该模式下 `%LOCALAPPDATA%` 指向另一账户，配置无法读取。需在文档与验收清单中显式声明 |
+| NFR-3.8 | 🔴 **不支持「以其他用户身份运行」与 OTS（over-the-shoulder）提权**：这两种模式下 `%APPDATA%` / `%LOCALAPPDATA%` 指向**另一账户**，配置读不到、日志写错位置。判定方式必须是**比较提权后的用户 SID 与交互会话用户 SID**（取本会话 `explorer.exe` 令牌），**不能用 `IsInRole(Administrator)`** —— 它只回答"是否提权"，回答不了"是不是换了人" |
 
 > **NFR-3.1 注（D20 批复）**：demo 用 `app.manifest requireAdministrator` 全程提权，**新方案沿用这一做法**。
 > 我原先提的"按需提权"建议**已被否，理由成立**：核心管理链路（注册调度器计划任务、HKLM 三项软禁用、系统启动文件夹、计划任务、服务 `delayed-auto`）**100% 需要管理员权限**，按需提权省不掉那次 UAC，却要额外承担提权重启、意图传递、UI 状态恢复与拒绝 UAC 时的回滚——成本高、用户零收益，还会制造"部分项处理成功、部分项失败"的半完成状态。
@@ -327,23 +327,31 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 
 | 编号 | 指标 |
 |---|---|
-| NFR-6.1 | 管理端：WinUI 3 unpackaged 自包含 |
+| NFR-6.1 | 管理端：WinUI 3 **unpackaged**（`WindowsPackageType=None`）。自包含或框架依赖由 Phase 0 的 R9 实测结果决定 |
 | NFR-6.2 | 调度端：WinForms + NativeAOT 单文件 |
-| NFR-6.3 | 第一版免安装 zip；发布阶段补 Inno Setup 安装器 |
+| NFR-6.3 | **交付形态：Inno Setup 安装器**。安装到固定路径 `%LOCALAPPDATA%\Programs\DelayStart`（**per-user，不放 Program Files**，D23），**路径不含版本号** → 计划任务 action 长期有效 |
+| NFR-6.4 | 🔴 **卸载必须可逆**：卸载时先还原全部被接管条目与软禁用标记，再删文件；还原失败则**中止卸载并说明原因** |
+| NFR-6.5 | **安装全程不提权**（`PrivilegesRequired=lowest`，per-user 安装，**零 UAC**）。**卸载会弹一次 UAC** —— 还原 HKLM 接管项与删除计划任务必须有管理员，这一次躲不掉。计划任务**不由安装器注册**，改由**管理端首次启动时幂等注册**（`--reinstall-task`），把提权点收敛到"用户第一次打开程序" |
+| NFR-6.6 | 支持 Windows 10 21H2 及以上（与 NFR-5.1 一致）—— 这一条单独就排除了 MSIX 打包方案 |
+| NFR-6.7 | 安装目录**只读**：程序不得在安装目录下写任何配置、日志、缓存（保证覆盖升级与卸载干净）。全部运行时数据路径见第七节 |
+| NFR-6.8 | 计划任务身份必须是**发起安装的那个交互用户**（`LogonType=Interactive` + `RunLevel=Highest`），🔴 **禁止 SYSTEM / 服务账户** —— 否则 `%LOCALAPPDATA%` 与 `%APPDATA%` 会解析到 SYSTEM 的 profile，配置读不到、日志写到错地方 |
 
-> 该项对应决策点 **D8**（✅ 已批复：先 A（免安装 zip），发布阶段补 C（Inno Setup））。
+> 该项对应决策点 **D22**（✅ 已批复 A：Inno Setup 安装器 + unpackaged）。原 **D8**（第一版 zip，发布阶段补 Inno Setup）**被 D22 取代**：第一版即出安装器，**不再有 zip 交付形态**。MSIX 被否决的三条理由与完整论证见 `design-spec.md` 6.4。
 
 ---
 
 ## 七、数据契约
 
+> 路径规范由 **D23** 定义，完整规则与 6 条实现约束见 `architecture.md` 1.5。核心原则：**安装目录与运行时数据完全分离，且配置文件与日志分属 Roaming / Local。**
+
 | 文件 | 路径 | 写入方 | 读取方 | 说明 |
 |---|---|---|---|---|
-| 配置 | `%LOCALAPPDATA%\DelayStart\config.json` | 管理端 | 管理端 + 调度端 | 原子写 |
+| 程序文件 | `%LOCALAPPDATA%\Programs\DelayStart\` | 安装器 | — | **per-user 安装、只读**；运行时数据一律不落在此（NFR-6.7） |
+| 配置 | `%APPDATA%\DelayStart\config.json` | 管理端 | 管理端 + 调度端 | **Roaming**，原子写 |
 | 实时状态 | `%LOCALAPPDATA%\DelayStart\state\current-run.json` | 调度端 | 管理端 | 每次状态变化重写 |
 | 运行归档 | `%LOCALAPPDATA%\DelayStart\runs\<runId>.json` | 调度端 | 管理端 | 保留最近 30 次 |
-| 调度日志 | `%LOCALAPPDATA%\DelayStart\scheduler.log` | 调度端 | 人 | 滚动截断 |
-| 管理端日志 | `%LOCALAPPDATA%\DelayStart\manager.log` | 管理端 | 人 | 滚动截断 |
+| 调度日志 | `%LOCALAPPDATA%\DelayStart\logs\scheduler.log` | 调度端 | 人 | 滚动截断 |
+| 管理端日志 | `%LOCALAPPDATA%\DelayStart\logs\manager.log` | 管理端 | 人 | 滚动截断 |
 | 备份（弃用） | `%LOCALAPPDATA%\DelayStart\backup\` | — | — | demo 的物理备份目录，新方案主路径走软禁用，**不启用** |
 
 字段定义见 `architecture.md` 第四节。
@@ -373,7 +381,8 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | E15 | 系统时区/时间被修改 | 时序基于单调计时（`Stopwatch`），不受墙上时钟影响 |
 | E16 | GPO 下发的计划任务 | 标记为只读，操作入口禁用 |
 | E17 | 用户在 UAC 对话框选择"否" | 说明「本程序需要管理员权限才能管理自启动项」后**退出**，绝不降级运行（NFR-3.6） |
-| E18 | 用户以「以其他用户身份运行」启动 | 检测到 `%LOCALAPPDATA%` 与登录用户不一致时提示不支持（NFR-3.8） |
+| E18 | 用户以「以其他用户身份运行」或 OTS 提权启动 | **比较提权后的用户 SID 与交互会话用户 SID**，不一致则提示不支持（NFR-3.8）。**不得用 `IsInRole(Administrator)` 代替** —— 它区分不了"正常的 UAC 自提权"与"换了个人" |
+| E19 | 程序目录被移动 / 用户 profile 变更（计划任务 action 指向的路径失效） | 启动时对比 `config.json` 记录的安装路径与 `AppContext.BaseDirectory`，不一致则提示并一键 `--reinstall-task`（幂等） |
 
 ---
 
@@ -406,6 +415,18 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 - [ ] 启动文件夹中文件数量与内容**零变化**
 - [ ] 未接管的计划任务 `Enabled` 状态零变化
 - [ ] 卸载/重置后系统回到接管前状态
+
+### 9.4 分发验收（D22 / D23）
+
+- [ ] 安装到**固定路径** `%LOCALAPPDATA%\Programs\DelayStart`，路径中**不含版本号**
+- [ ] **安装过程无 UAC 提示**（per-user 安装，`PrivilegesRequired=lowest`）；**卸载弹一次 UAC**（还原接管项 + 删计划任务必需，属预期行为）
+- [ ] 首次启动管理端时弹**一次** UAC（程序 manifest 提权）并幂等注册 `DelayStartScheduler`，action 指向安装目录、身份为**当前交互用户**（🔴 不是 SYSTEM）
+- [ ] 程序运行时安装目录内**零新增文件**（只读约束）
+- [ ] 安装后**不依赖用户手动预装任何运行时**（自包含，或安装器已代为部署 Windows App Runtime）
+- [ ] 🔴 **卸载可逆性**：接管若干条目后执行卸载 → 重启 → **被接管的程序全部恢复自启动**，注册表 `Run` 与操作前导出**完全一致**
+- [ ] 🔴 卸载时故意让还原失败（如占用/权限）→ **卸载中止并给出原因**，文件未被删除，系统状态未被半还原
+- [ ] 卸载后 `%APPDATA%\DelayStart` 与 `%LOCALAPPDATA%\DelayStart` **仍存在**（默认保留配置与日志）；勾选"同时删除个人数据"后才消失
+- [ ] 覆盖升级（装新版本到同一目录）后，计划任务仍有效、`%APPDATA%\DelayStart\config.json` 未被清空
 
 ---
 
@@ -440,7 +461,7 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | **D5** | 「系统启动项」页做到什么程度 | B：只做服务 `delayed-auto` 切换 | ✅ |
 | **D6** | 程序名 | A：延时启动管理器 / DelayStart | ✅ |
 | **D7** | 「立即模拟调度」是否做 | A：做 | ✅ |
-| **D8** | 分发方式 | A → C：第一版 zip，发布阶段补 Inno Setup | ✅ |
+| **D8** | 分发方式 | ~~A → C：第一版 zip，发布阶段补 Inno Setup~~ → **被 D22 取代：直接走 C** | ✅ |
 | **D9** | `.lnk` 目标与图标解析 | A：做 | ✅ |
 | **D10** | 批量操作 | B：第一版不做 | ✅ |
 | **D11** | 预设延时值可配置 | B：设置页可编辑 | ✅ |
@@ -448,5 +469,7 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | **D13** | 长延时条目的调度方式 | A：统一由本程序调度器驻留 | ✅ |
 | **D20** | 管理端权限模型 | **A：全程提权**（原「按需提权」建议被否） | ✅ |
 | **D21** | 单元测试框架 | **A：xUnit v3**，主选 v3 模板 / 降级 SDK 内置模板；**NUnit 明确排除** | ✅ |
+| **D22** | 分发形态（MSIX 是否可行） | **A：Inno Setup 安装器 + unpackaged**。MSIX 被否决（Win10 无法提权 / 注册表虚拟化 / 路径含版本号） | ✅ |
+| **D23** | 安装与数据布局 | **per-user 不提权安装**：程序 `%LOCALAPPDATA%\Programs\DelayStart`（只读）；配置 `%APPDATA%\DelayStart\config.json`（Roaming）；日志/状态/归档 `%LOCALAPPDATA%\DelayStart\`（Local） | ✅ |
 
-> **D1–D21 已全部批复完毕，决策冻结，可进入编码。** 完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21）。
+> **D1–D23 已全部批复完毕，决策冻结，可进入编码。** 完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23）。D23 的 6 条实现规则见 `architecture.md` 1.5。

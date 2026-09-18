@@ -70,6 +70,36 @@ demo/
 # DelayStart 运行时数据目录（正常情况下在 %LOCALAPPDATA%\DelayStart\，
 # 此处兜底防止测试时误落在仓库内）
 scheduler.log
+manager.log
 current-run.json
 runs/
 state/
+logs/
+
+# IDE / 编辑器本机状态。
+# 上面那份 Dotnet.gitignore 只管 bin/obj，不管 IDE 目录，
+# 而本项目用 VS 2026 开发，至少这些必须挡住：
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.csproj.user
+
+# 本地探测 / 临时校验产物（AI 与环境排查用，不入库）
+*.tmp.txt
+
+# 打包产物兜底。当前分发走 unpackaged + Inno Setup（D22），不产 MSIX，
+# 这几条是为防将来误用 dotnet publish / MSIX 工具链时把产物提交进来。
+# 原先这些规则写在 src/DelayStart.App/.gitignore（模板生成），已合并到此处。
+AppPackages/
+BundleArtifacts/
+*.msix
+*.msixupload
+*.appx
+*.appxbundle
+*.appxupload
+
+# 本地 NuGet 源覆盖（若某台机器需要走代理或镜像，用 NuGet.config 的本地覆盖，
+# 不要把机器相关配置提交上去）
+NuGet.config.local

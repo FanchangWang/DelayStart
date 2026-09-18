@@ -1,0 +1,25 @@
+<Project>
+
+  <!--
+    中央包版本管理（CPM）。规范见 docs/coding-standards.md 2.2：
+      · .csproj 里只写 <PackageReference Include="X" />，**不写 Version**
+      · 版本取当前最新稳定版作为声明下限，不照搬 demo 或参考工程的版本号
+      · 某个项目需要不同版本时，用 VersionOverride 并写注释说明原因
+
+    版本来源（2026-09-19 实测）：WindowsAppSDK / SDK.BuildTools 取自
+    `dotnet new winui-navview` 生成物；xunit 取自 `dotnet new xunit3` 生成物。
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="Windows App SDK（管理端 WinUI 3）">
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="1.8.260317003" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7705" />
+  </ItemGroup>
+
+  <ItemGroup Label="单元测试（D21：xUnit v3 / Microsoft.Testing.Platform v2）">
+    <PackageVersion Include="xunit.v3.mtp-v2" Version="4.0.1" />
+  </ItemGroup>
+
+</Project>

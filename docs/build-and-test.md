@@ -56,7 +56,8 @@ dotnet restore DelayStart.slnx
 | Windows SDK 10.0.26100.0 | ✅ 已装 | — |
 | **VS 组件「.NET WinUI 应用开发工具」** | ✅ **已装**（2026-09-19 复核实测） | 装不上的话不阻塞编译（见注），但 VS 里 XAML 会退化成纯文本编辑 |
 | **Inno Setup 6** | ✅ **已装 6.7.3** | `winget list -q innosetup` 实测。已是最新，**无需重跑安装** |
-| **WinUI 命令行模板包** | ❌ **未装**（2026-09-19 复核：`dotnet new list winui` 无匹配、`dotnet new details winui-navview` 找不到） | Phase 0 第 ① 步必须先装回：`dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`（NuGet 上最新仍是 `0.0.6-alpha`，无正式版） |
+| **WinUI 命令行模板包** | ✅ **已装**（2026-09-19 Phase 0 装回，`0.0.6-alpha`） | `dotnet new list winui` 实测可见 `winui` / `winui-navview` / `winui-mvvm` / `winui-lib` / `winui-unittest` 等。**NuGet 上最新仍是 `0.0.6-alpha`，无正式版**——但生成物已验证可用（Phase 0 构建 0 警告 0 错误），模板只在"生成一次"这一步起作用 |
+| **xUnit v3 模板包** | ✅ **已装**（`xunit.v3.templates` **4.0.1**） | 短名 `xunit3`。⚠️ 其 `-f` 默认值是 `net8.0`，创建时必须显式写 `-f net10.0` |
 
 #### VS 组件的正确 ID（别再用错的）
 
@@ -145,14 +146,14 @@ dotnet new winui-navview -o src/DelayStart.App   -n DelayStart.App -tfm net10.0
 dotnet new winforms -o src/DelayStart.Scheduler  -n DelayStart.Scheduler
 dotnet new xunit3 -o tests/DelayStart.Core.Tests -f net10.0
 
-# ④ 加入解决方案
-dotnet sln DelayStart.slnx add ^
-  src/DelayStart.Core/DelayStart.Core.csproj ^
-  src/DelayStart.Management/DelayStart.Management.csproj ^
-  src/DelayStart.App/DelayStart.App.csproj ^
-  src/DelayStart.Scheduler/DelayStart.Scheduler.csproj ^
-  tests/DelayStart.Core.Tests/DelayStart.Core.Tests.csproj
+# ④ 加入解决方案（bash 用 "\" 续行；cmd 用 "^"。这里给成一行的形式，两种 shell 都能跑）
+dotnet sln DelayStart.slnx add src/DelayStart.Core/DelayStart.Core.csproj src/DelayStart.Management/DelayStart.Management.csproj src/DelayStart.App/DelayStart.App.csproj src/DelayStart.Scheduler/DelayStart.Scheduler.csproj tests/DelayStart.Core.Tests/DelayStart.Core.Tests.csproj
 ```
+
+> **`winui-navview` 的 `-tpmv`（target-platform-min-version）实测不生效**：Phase 0 传了 `-tpmv 10.0.19041.0`，
+> 产出的仍是模板默认 `<TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>`，
+> TFM 也是 `<TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>`。
+> **这两个值一律手动改，别指望模板参数**（改法见下方改造清单）。
 
 > `.gitignore` 已存在且已定制，**不要再跑 `dotnet new gitignore`**（会覆盖，需 `--force` 才生效）。
 > 生成后各项目的 TFM / 属性按 `architecture.md` 1.3 覆盖，公共属性集中到 `Directory.Build.props`。
@@ -170,19 +171,36 @@ dotnet sln DelayStart.slnx add ^
 
 **为什么选 `winui-navview` 而不是 `winui`**：管理端就是左侧 NavigationView + 6 个顶层模块（见 `design-spec.md` 第三节），navview 模板直接给出可运行的导航骨架。`winui-mvvm` 会带入 CommunityToolkit.Mvvm 与示例代码，与 `architecture.md` 5.2 的 MVVM 约定不完全一致，不采用。
 
-**⚠️ 关键限制：所有 WinUI 3 模板生成的都是 MSIX 打包工程，没有 unpackaged 开关。** 本项目要 unpackaged（D22 的安装器分发），因此生成后必须手工改造：
+**⚠️ 关键限制：所有 WinUI 3 模板生成的都是 MSIX 打包工程，没有 unpackaged 开关。** 本项目要 unpackaged（D22 的安装器分发），因此生成后必须手工改造。
+
+**改造清单（Phase 0 已按实际生成物固化，2026-09-19）**：
 
 | 改造项 | 内容 |
 |---|---|
-| csproj 改 | 加 `<WindowsPackageType>None</WindowsPackageType>`、`<ApplicationManifest>app.manifest</ApplicationManifest>`、`<WindowsAppSDKSelfContained>`（true / false **由 R9 结果定**，见 7.1） |
-| csproj 删 | `<EnableMsixTooling>`、`<PublishProfile>`、`AppxPackage*` 系列属性 |
-| csproj 删 | `Microsoft.Windows.SDK.BuildTools.WinApp` 包引用（它是为"打包应用的 `dotnet run`"服务的，unpackaged 用不上） |
-| 文件删 | `Package.appxmanifest`；`Assets/` 只保留实际用作图标的文件 |
-| 文件增 | `app.manifest`：`requestedExecutionLevel level="requireAdministrator"` + DPI 感知声明（见 `architecture.md` 1.4） |
+| csproj 加 | `<WindowsPackageType>None</WindowsPackageType>`、`<WindowsAppSDKSelfContained>`（true / false **由 R9 结果定**，见 7.1）、`<RootNamespace>DelayStart.App</RootNamespace>`、`<AssemblyName>DelayStart</AssemblyName>`、`<TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>` |
+| csproj 删 | `<EnableMsixTooling>true</EnableMsixTooling>`，以及它连带的两个 `ItemGroup` / `PropertyGroup`（`ProjectCapability=Msix`、`HasPackageAndPublishMenu`） |
+| csproj 删 | `<PublishProfile Condition="...">win-$(Platform).pubxml</PublishProfile>` 那一行 |
+| csproj 删 | `<PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" />`（它是为"**打包应用**的 `dotnet run`"服务的，unpackaged 用不上） |
+| csproj 删 | 模板自带的 `Publish Properties` 块（`PublishReadyToRun` / **`PublishTrimmed=true`**）。**WinUI 3 不支持裁剪**，留着是颗雷 |
+| csproj 保留 | `<ApplicationManifest>app.manifest</ApplicationManifest>` 与 `<Manifest Include="$(ApplicationManifest)" />` —— ⚠️ **模板已经生成了这两个，不用自己加**（Phase 0 实测） |
+| 文件保留 | `app.manifest` —— **模板已生成**，只缺 `trustInfo/requestedPrivileges`，补上即可（Phase 0 已完成，另加了 `longPathAware`） |
+| 文件删 | `Package.appxmanifest`；`Assets/` 里除 `AppIcon.ico` 之外的 8 个 MSIX 徽标 png；`Properties/PublishProfiles/*.pubxml` |
+| 命名空间 | 模板产出 `DelayStart_App`，已统一改为 `DelayStart.App`（xaml 的 `x:Class` / `using:` 与 .cs 同步改，否则 XAML 编译报找不到类型） |
 
-> **具体删除清单在 Phase 0 以实际生成物核对后固化**，此处不预先拍脑袋。
+**🔴 `dotnet new` 的执行顺序有个坑（Phase 0 踩到）**：
 
-**模板包是 alpha 版 —— 这是事实，且只影响"生成一次"这一步**：产物是普通文本文件，之后与模板无耦合。若 Phase 0 发现生成物不可用，降级为**手写 csproj**（WinUI 3 unpackaged 的 csproj 只有约 30 行属性，见 `architecture.md` 1.3）。
+`dotnet new packagesprops` 生成的 `Directory.Packages.props` 会立刻把 CPM 打开。此时再跑 WinUI 模板，模板的收尾步骤 `dotnet add package` 会失败，并在生成的 csproj 里留下**内联 `Version`**：
+
+```
+error: 使用中央包版本管理的项目不应定义 PackageReference 项上的版本…
+error NU1008: 以下 PackageReference 项无法定义版本的值…
+```
+
+**对策**：按 2.1 的顺序生成没问题（本次就是这样，冲突发生在模板**收尾**而不是生成），生成后必须做两件事——
+① 把三个包引用改写成不写 `Version` 的形式；② 把版本补进 `Directory.Packages.props`。
+**不要**为了绕开它去关 CPM，那是把简单问题换成一个长期问题。
+
+**模板包是 alpha 版 —— 这是事实，且只影响"生成一次"这一步**：产物是普通文本文件，之后与模板无耦合。Phase 0 实测生成物可用（构建 0 警告 0 错误），**无需手写 csproj**。
 
 ---
 
@@ -247,7 +265,13 @@ dotnet new xunit3 -o tests/DelayStart.Core.Tests -f net10.0
 dotnet new xunit -o tests/DelayStart.Core.Tests -f net10.0
 ```
 
-> **创建后必须手改两处**：`<TargetFramework>` 从 `net10.0` 改为 **`net10.0-windows`**（与 `Core` / `Management` 对齐）；删掉模板生成的 `UnitTest1.cs`。
+> **创建后必须手改三处**：
+> ① `<TargetFramework>` 从 `net10.0` 改为 **`net10.0-windows`**（与 `Core` / `Management` 对齐）；
+> ② 🔴 **务必保留 `<OutputType>Exe</OutputType>`** —— 这是 xUnit v3 的硬要求，漏了会直接报
+> `xUnit.net v3 test projects must be executable`（Phase 0 实测踩到）；
+> ③ 删掉模板生成的 `UnitTest1.cs`。
+>
+> ⚠️ `dotnet new xunit3` 的 `-f` 默认值是 **`net8.0`**（不是当前 SDK 版本），所以 `-f net10.0` 必须显式写。
 >
 > 走降级路径时，csproj 会多出 `xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk` 走 VSTest 老路径。**测试代码本身零改动**——`[Fact]` / `[Theory]` / `Assert` 在两个版本间完全一致。
 
@@ -270,24 +294,42 @@ dotnet new xunit -o tests/DelayStart.Core.Tests -f net10.0
 
 ### 4.2 运行
 
+> 🔴 **Phase 0 实测（2026-09-19）：`dotnet test` 在本项目不可用，规范命令是 `dotnet run`。**
+>
+> | 命令 | 结果 |
+> |---|---|
+> | `dotnet run --project tests/DelayStart.Core.Tests -c Release` | ✅ **正确执行**：`Total: 2, Errors: 0, Failed: 0`，退出码 0 |
+> | `dotnet test tests/DelayStart.Core.Tests` | ❌ **"运行了零个测试"，退出码 5**（MTP 的 `ZeroTests`）|
+>
+> **不是配置漏了属性**，已逐一排除：加了 `IsTestProject=true` 无效；`--list-tests` 传不进去；
+> 包版本也无冲突 —— 解析结果是 `Microsoft.Testing.Platform` **2.4.0** + `xunit.v3.mtp-v2` **4.0.1**（两侧都是 MTP v2）。
+> 而**发现本身是好的**：同一个产物用 xUnit 自带运行器枚举，两个用例都在（`-list tests` 有输出）。
+> 结论：**`xunit.v3.mtp-v2` 4.0.1 与 .NET SDK 10.0.401 的 `dotnet test` 集成这一段有问题，不是我们的用法有问题。**
+> 深挖它是版本轮盘，对产品零价值 —— 记为 **D26**，Phase 1 期间不阻塞（测试照写，只是用 `dotnet run` 跑）。
+
 ```bash
-# 全部测试（走 Microsoft Testing Platform）
-dotnet test DelayStart.slnx
+# ✅ 规范命令：全部测试（xUnit v3 原生 in-proc 运行器）
+dotnet run --project tests/DelayStart.Core.Tests -c Release
 
-# 带覆盖率
-dotnet test DelayStart.slnx --collect:"XPlat Code Coverage"
+# 只看发现了哪些用例（排查"测试没被发现"时用）
+dotnet run --project tests/DelayStart.Core.Tests -c Release --no-build -- -list tests
 
-# 单跑某个项目 / 某个测试
-dotnet test tests/DelayStart.Core.Tests
-dotnet test tests/DelayStart.Core.Tests --filter "FullyQualifiedName~DelayCalculator"
-
-# xUnit v3 是 OutputType=Exe，也可直接跑（输出更干净，退出码可靠）
-dotnet run --project tests/DelayStart.Core.Tests
+# 只跑匹配的用例
+dotnet run --project tests/DelayStart.Core.Tests -c Release -- -method "*DelayCalculator*"
 ```
 
-> **AI 与 CI 场景优先用 `dotnet run`**：xUnit v3 的独立可执行模式下，stdout 直接可读、退出码语义明确，不需要解析 VSTest 的输出格式。
+> **为什么 `dotnet run` 反而更好**：xUnit v3 的测试项目本身就是可执行程序（`OutputType=Exe`），
+> 独立运行模式下 stdout 直接可读、**退出码语义明确**（0 = 全过），不需要解析中间层的输出格式。
+> AI 与 CI 场景一律用它。
 
-**【必须】** 提交前 `dotnet test`（或 `dotnet run --project tests/DelayStart.Core.Tests`）必须全绿。
+**【必须】** 提交前 `dotnet run --project tests/DelayStart.Core.Tests -c Release` 必须全绿。
+
+> ⚠️ **`dotnet test` 失败 ≠ 测试失败。** 看到"运行了零个测试"+退出码 5 时，
+> 先确认是不是用错命令了 —— 这是 D26 的已知现象，不是新 bug。
+>
+> ⚠️ **对 VS 的影响**：VS 的测试资源管理器（Test Explorer）走 VSTest 适配器，
+> 本项目未引用 `xunit.runner.visualstudio`，加上 MTP 路径又不通 ——
+> 所以**在 VS 里看不到、也点不动这些测试**。目前用命令行跑（D26 待决策是否补适配器）。
 
 ### 4.3 测试范围
 
@@ -408,10 +450,19 @@ warning IL2026 / IL3050 / IL3053
   <InvariantGlobalization>true</InvariantGlobalization>
   <SelfContained>true</SelfContained>
   <StripSymbols>true</StripSymbols>
+
+  <!-- 🔴 没有这一行，构建立刻失败：NETSDK1175。见 architecture.md R11 -->
+  <_SuppressWinFormsTrimError>true</_SuppressWinFormsTrimError>
 </PropertyGroup>
 ```
 
 > `<OutputType>WinExe</OutputType>` 是**硬要求** —— 用 `Exe` 会在登录瞬间闪一个控制台黑框。
+
+> 🔴 **`_SuppressWinFormsTrimError` 是内部属性，不是官方支持路径。** 官方文档把 WinForms 与 WPF 明确列为 trimming/AOT 不支持（Windows 的 Native AOT 没有 built-in COM，而 WinForms 对 built-in COM marshalling 依赖很重），SDK 在 `Microsoft.NET.RuntimeIdentifierInference.targets` 里主动拦截。写这一行等于签字承认风险自担。
+>
+> 它**不会**修复任何 trim 问题，只是把拦截降级。因此 6.2 那条"零 AOT 警告"的规矩在这里更重要：**IL2xxx 警告必须逐个处理，不许靠它兜着**。
+>
+> 完整背景、已知高危路径清单与 **D24 决定（B：纯 Win32 + AOT）** 见 `architecture.md` R11。
 
 ---
 
@@ -515,18 +566,52 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 ### 9.0 Phase 0 出口验证（R9：自包含 + 提权 manifest）
 
 > 这是**编码前的第一件事**。详细分析与三条降级路径见 `architecture.md` 第九节 R9。**R9 不通过就不进入 Phase 1。**
+>
+> **进度（2026-09-19）**：自动化部分已全部完成（`dotnet build` 0 警告 0 错误、测试跑通、manifest 已嵌入 exe）。
+> **三项人工验证已由用户在 VS 之外实测，全部通过 —— Phase 0 出口条件达成。**
 
-- [ ] 按 2.1 用 `dotnet new` 生成 5 个项目骨架
-- [ ] 管理端按 2.1 的改造清单转成 unpackaged：`WindowsPackageType=None` + `ApplicationManifest=app.manifest` + `WindowsAppSDKSelfContained=true`
-- [ ] `app.manifest` 写入 `requestedExecutionLevel level="requireAdministrator" uiAccess="false"` + `PerMonitorV2` DPI 声明
-- [ ] **Release 构建**，**在 VS 之外直接双击 exe**（在 VS 里调试会继承 VS 的权限，测不准）
-- [ ] 判定 R9：**出现 UAC 盾牌 / 双击弹 UAC / `WindowsPrincipal.IsInRole(Administrator)` 为 true** → **通过**
-- [ ] 记录 R9 结论 → 决定 7.1 的自包含取值；不通过则按 R9 降级路径①改框架依赖
-- [ ] 顺带确认 **R3**：unpackaged 下 `app.manifest` 与 `PerMonitorV2` 生效
-- [ ] 顺带确认 **R8**：`.slnx` 能被 VS 18 正常打开（报错则回退 `.sln`）
-- [ ] 顺带确认：**未装 VS 的「.NET WinUI 应用开发工具」组件时，`dotnet build` 能否编译 XAML**（决定 1.2 那个组件是硬依赖还是纯体验项）
+- [x] 按 2.1 用 `dotnet new` 生成 5 个项目骨架 → `DelayStart.slnx` + `src/`×4 + `tests/`×1
+- [x] 管理端按 2.1 的改造清单转成 unpackaged：`WindowsPackageType=None` + `ApplicationManifest=app.manifest` + `WindowsAppSDKSelfContained=true`
+- [x] `app.manifest` 写入 `requestedExecutionLevel level="requireAdministrator" uiAccess="false"` + `PerMonitorV2` DPI 声明（另加 `longPathAware`）
+- [x] 自动校验：Release 产物 `DelayStart.exe` 的字节流中检出了 `requireAdministrator` / `PerMonitorV2` / `longPathAware` → **声明确实嵌进去了**
+- [x] ✅ **在 VS 之外直接双击 exe**（2026-09-19 用户实测）
+      ```
+      src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe
+      ```
+- [x] ✅ **判定 R9：通过** —— 双击后 **UAC 提权对话框正常弹出**。
+      （`IsInRole(Administrator)` 的代码级确认留到 Phase 1 有代码后补测）
+- [x] ✅ **R9 结论已记录：`WindowsAppSDKSelfContained=true` 保持不动** —— 即 R9 的三条降级路径**都不需要**。
+      已回写 `DelayStart.App.csproj` 的注释。⚠️ 该风险来自社区在 WinAppSDK 1.0–1.2 时期的报告，
+      本机 **WinAppSDK 1.8 + .NET 10** 未复现。升版后若回归，降级路径首选①（去自包含 + Inno 部署运行时）。
+- [x] ✅ 顺带确认 **R3：通过** —— 100% / 150% / 200% 三档 DPI 下界面不糊、不越界
+- [x] ✅ 顺带确认 **R8：通过** —— `DelayStart.slnx` 可被 VS 18 正常打开，**无需回退 `.sln`**
+- [x] ✅ 顺带确认：**VS 组件「.NET WinUI 应用开发工具」是体验项还是硬依赖** → **体验项**。
+      依据：`XamlCompiler.exe` 与全部 `Microsoft.UI.Xaml.Markup.Compiler.*.targets` 都由 NuGet 包
+      `Microsoft.WindowsAppSDK.WinUI/1.8.260224000` 的 `buildTransitive/` 提供（本机包缓存实测），
+      命令行构建不经过 VS 组件。**残留混淆因子**：该组件当前已装，无法做隔离对照，结论的置信度是"证据充分"而非"实验证明"。
 
-> Phase 0 的出口条件是：`dotnet build` 全绿 + R2 / R3 / R8 已确认 + **R9 有明确结论**。
+> **Phase 0 的出口条件是：`dotnet build` 全绿 + R2 / R3 / R8 已确认 + R9 有明确结论。**
+> **→ 已于 2026-09-19 全部达成**：构建 0 警告 0 错误、R3 / R8 确认通过、**R9 通过**。
+>
+> **⚠️ 保留这个区分，它就是 R9 的全部意义**：「manifest 嵌进了 exe」**不等于**「Windows 采纳了 manifest」。
+> 前者静态可查（已查，三个标记都命中），后者只有双击那一下能回答（已做，弹 UAC）。
+> 两个都过了，**D20 的实现方式才算确定，Phase 1 才能开工**。
+
+> **Phase 0 踩到的两个坑（已处置，记录备查）**
+>
+> **坑① 零测试是"失败"，不是"跳过"。** 删掉模板的 `UnitTest1.cs` 后测试项目一度零个用例，
+> 测试宿主把这种情况判定为**失败**（MTP 的 `ZeroTests`，退出码 5，见
+> <https://aka.ms/testingplatform/exitcodes>），**不是**静默跳过。
+> 后果：CI 一片红，或者更糟 —— 有人把非零退出码当噪音忽略，真到测试全挂那天也没人发现。
+> 处置：新增 `tests/DelayStart.Core.Tests/ScaffoldSmokeTests.cs`，断言两件**运行期**的事
+> （`DelayStart.Core` / `DelayStart.Management` 能按程序集名解析、宿主确实跑在 .NET 10 上）——
+> 编译期通过挡不住这两条，属于真实的 Phase 0 出口项，不是凑数。
+> **Phase 1 注意**：冒烟文件不是真实用例的替代品，等业务用例到位后再删它。
+>
+> **坑② `dotnet test` 在本项目跑不了（已登记 D26）。** 退出码 5 还有第二个来源：
+> `xunit.v3.mtp-v2` 4.0.1 与 .NET SDK 10.0.401 的 `dotnet test` 集成有缺陷 ——
+> **即使项目里有测试，它照样报"运行了零个测试"**。测试发现本身没问题（xUnit 自带运行器能枚举到）。
+> **规范测试命令见 4.2：`dotnet run --project tests/DelayStart.Core.Tests -c Release`。**
 
 ---
 
@@ -719,8 +804,8 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 ### 必跑命令
 
 ```bash
-dotnet build DelayStart.slnx -c Release      # 零警告
-dotnet test DelayStart.slnx                  # 全绿
+dotnet build DelayStart.slnx -c Release                                    # 零警告
+dotnet run --project tests/DelayStart.Core.Tests -c Release                # 全绿（D26：不用 dotnet test）
 ```
 
 改动涉及调度端时，额外：

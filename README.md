@@ -21,10 +21,32 @@
 | 组件 | 技术 | 理由 |
 |---|---|---|
 | 管理端 | .NET 10 + WinUI 3 | 现代 Windows 原生观感 |
-| 调度端 | WinForms + **NativeAOT**（约 6 MB，冷启动 < 0.3 秒） | 登录瞬间执行，体积和冷启动是硬指标；WinUI 3 的 AOT 仍是 preview |
+| 调度端 | WinForms + **NativeAOT**（目标约 6 MB，冷启动 < 0.3 秒） | 登录瞬间执行，体积和冷启动是硬指标 |
 | 共享层 | `DelayStart.Core`（AOT 安全）+ `DelayStart.Management` | 见下方说明 |
 
+> ⚠️ **调度端的技术选型正在复议（D24，待批复）**。Phase 0 实测发现 WinForms + NativeAOT 是**官方不支持**的组合（微软把 WinForms/WPF 列为 trimming 不兼容，根因是 Windows 的 Native AOT 没有 built-in COM），SDK 会主动拦下（`NETSDK1175`），放行只能靠内部属性。当前骨架已临时加上该属性以保证构建通过，但**三种走法（维持现状 / 改纯 Win32 / 放弃 AOT）需要拍板**。详见 `docs/design-spec.md` 6.6 与 `docs/architecture.md` R11。
+
 **为什么拆两个共享库**：调度端用 NativeAOT，它引用的一切代码都必须 AOT 兼容。而扫描所需的计划任务库、COM 互操作（`.lnk` 解析、图标提取）恰恰都不兼容。所以按 **AOT 兼容性** 切分而不是按领域切分——调度端只引用 `Core`，拿到一个零 COM、零反射的最小集合。
+
+---
+
+## 项目结构
+
+```
+DelayStart.slnx
+├─ src/DelayStart.Core           # 模型 / 配置读写 / 时序 / 启动 / 日志 —— ★ 必须 NativeAOT 兼容
+├─ src/DelayStart.Management     # 各来源扫描器 / 软禁用 / 接管 / 计划任务 / COM 互操作
+├─ src/DelayStart.App            # WinUI 3 管理端（unpackaged，产出 DelayStart.exe）
+├─ src/DelayStart.Scheduler      # WinForms + NativeAOT 调度端（产出 DelayStart.Scheduler.exe）
+├─ tests/DelayStart.Core.Tests   # xUnit v3 单元测试（走 Microsoft.Testing.Platform）
+├─ installer/DelayStart.iss      # Inno Setup 安装器脚本（D22，Phase 6 产出）
+└─ Directory.Build.props / Directory.Packages.props / global.json / .editorconfig
+```
+
+**依赖方向是单向的**：`App → Management → Core`，`Scheduler → Core`，`Tests → Core + Management`。
+🔴 **`Scheduler` 绝不引用 `Management`** —— 那会让 NativeAOT 发布直接失败。
+🔴 **`Tests` 绝不引用 `App`** —— 一旦引用就要背上 WindowsAppSDK 自包含 + 运行时预装的包袱（见 `docs/architecture.md` 1.3）。
+
 
 ---
 
@@ -58,6 +80,16 @@ dotnet build   DelayStart.slnx -c Release
 dotnet test    DelayStart.slnx
 dotnet run --project src/DelayStart.App
 ```
+
+> **构建要求零警告**（`TreatWarningsAsErrors=true`）—— 出现警告即编译失败，这是故意的。
+>
+> 管理端带 `requireAdministrator` manifest，`dotnet run` 会弹 UAC。**要在 VS 之外双击 exe 才能测出提权是否真的生效**（在 VS 里跑会继承 VS 的权限，结果不可信）。
+>
+> 模板包是一次性依赖，装一次即可：
+> ```bash
+> dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates
+> dotnet new install xunit.v3.templates
+> ```
 
 完整流程（含 NativeAOT 发布、真机验证清单、本机环境已知坑）见 **[`docs/build-and-test.md`](docs/build-and-test.md)**。
 

@@ -201,7 +201,133 @@
 
 ---
 
+## R5 — Phase 0 骨架落地（2026-09-19）
+
+**编码阶段开始，本文件记录最后一次设计侧变更（新增 D24）后即停止逐条维护，后续由 `git log` 承载。**
+
+Phase 0 的自动化部分全部完成：生成 5 个项目骨架 → 转 unpackaged → Release 构建 **0 警告 0 错误** → 测试跑通。
+
+### 实际产出
+
+| 项 | 值 |
+|---|---|
+| 解决方案 | `DelayStart.slnx`（XML 格式，`dotnet new sln -f slnx` 默认值） |
+| 项目 | `Core` / `Management` / `App` / `Scheduler` / `Core.Tests`（`net10.0-windows`，App 为 `net10.0-windows10.0.26100.0`） |
+| App 产物 | `DelayStart.exe`（`AssemblyName=DelayStart`），自包含输出 **134.8 MB / 239 文件** |
+| Scheduler 产物 | `DelayStart.Scheduler.exe`（`WinExe` + `PublishAot` + `win-x64`） |
+| 仓库级配置 | `Directory.Build.props`（LangVersion / Nullable / TreatWarningsAsErrors / EnforceCodeStyleInBuild / AnalysisLevel / InvariantGlobalization）、`Directory.Packages.props`（CPM）、`global.json`（锁定 SDK 10.0.401 + MTP runner）、`.editorconfig` |
+
+### Phase 0 踩到的四个坑（全部已写进文档）
+
+| 坑 | 现象 | 落点 |
+|---|---|---|
+| **CPM 与 WinUI 模板顺序冲突** | `dotnet new packagesprops` 先跑 → WinUI 模板收尾的 `dotnet add package` 失败（`NU1008`），生成带内联 `Version` 的 csproj 无法还原 | `build-and-test.md` 2.1 |
+| **xUnit v3 要求 `OutputType=Exe`** | 改写测试 csproj 时漏掉 → `xUnit.net v3 test projects must be executable` | `build-and-test.md` 4.1 |
+| **🔴 WinForms + NativeAOT 被 SDK 拦截** | `NETSDK1175`；`PublishAot` 隐式开 `PublishTrimmed`，SDK 检测 `UseWindowsForms+PublishTrimmed` 主动报错。**新增风险 R11 + 重开 D1 的 D24** | `architecture.md` R11、`design-spec.md` 6.6 |
+| **`winui-navview` 的 `-tpmv` 不生效** | 传 `-tpmv 10.0.19041.0` 仍产出 `TargetPlatformMinVersion=10.0.17763.0`，TFM 为 `net10.0-windows10.0.26100.0` | `build-and-test.md` 2.1 |
+
+### 文档与现实的四处对齐
+
+- **App TFM** 由文档预写的 `net10.0-windows10.0.19041.0` 改为实测的 **`net10.0-windows10.0.26100.0`**；支持下限另用 `TargetPlatformMinVersion=10.0.19041.0` 表达（`architecture.md` 1.3）
+- **模板自带 `app.manifest` 与 `Package.appxmanifest`** —— 前者只需补 `trustInfo`，不用自己新建（`build-and-test.md` 2.1）
+- **WinUI 模板的 `Assets/` 有 9 个文件**，unpackaged 只需 `AppIcon.ico`（其余 8 个是 MSIX 徽标）
+- **`Microsoft.Windows.SDK.BuildTools.WinApp`** 模板默认引入，unpackaged 用不上，已移除
+
+### 9.0 最后一项的结论：VS 组件是体验项，不是硬依赖
+
+`XamlCompiler.exe` 与全部 `Microsoft.UI.Xaml.Markup.Compiler.*.targets` 均由 NuGet 包 `Microsoft.WindowsAppSDK.WinUI/1.8.260224000` 的 `buildTransitive/` 提供（本机包缓存实测），命令行构建不经过 VS 组件。**残留混淆因子**：该组件当前已装，无法做隔离对照。
+
+### 新增决策点 D24（已批复 B）
+
+Phase 0 发现 `UseWindowsForms=true` + `PublishAot=true` 是**官方不支持**的组合（微软把 WinForms/WPF 列为 trimming 不兼容，根因是 Windows NativeAOT 没有 built-in COM），SDK 主动拦截。**D1 当初的决策前提不成立，必须重选**。
+
+| 选项 | 说明 |
+|---|---|
+| A. 维持 WinForms+AOT | 用内部属性 `_SuppressWinFormsTrimError` 放行（Phase 0 曾临时这么配，否则构建过不去） |
+| **B. 改纯 Win32**（✅ **用户批复**） | `Shell_NotifyIcon` + 自绘弹窗，彻底离开灰色地带 |
+| C. 改 WinUI 3 + AOT | 官方支持（WinAppSDK 1.6+），但冷启动 0.5–0.7s 超 NFR-1.2，**且 WinUI 3 无托盘 API**，托盘仍得自己写 |
+| D. 放弃 AOT | 体积 60MB+、冷启动 1–2s，与 D1 立论冲突 |
+
+**批复结果：B。** 已在 Phase 0 落地 —— 移除 `<UseWindowsForms>` 与 `_SuppressWinFormsTrimError`，`Program.cs` 改为纯 Win32 入口骨架，复验 0 警告 0 错误。同时纠正两条我们自己写错的旧结论：**WinUI 3 的 AOT 自 WinAppSDK 1.6 起已是官方支持**（原写"仍 preview"，已过期）；**WinUI 3 没有任何托盘 API**（微软有意省略，托盘仍须 `Shell_NotifyIcon`）。
+
+### 落点索引
+
+| 内容 | 章节 |
+|---|---|
+| D24 完整论证 | `design-spec.md` 6.6 |
+| R11 风险详解（含 SDK 源码定位与高危路径清单） | `architecture.md` R11 |
+| R9 / R3 / R8 实测进度与剩余人工步骤 | `architecture.md` 9.0 / 10.1、`build-and-test.md` 9.0 |
+| 骨架生成命令与改造清单 | `build-and-test.md` 2.1 |
+| 仓库级编译属性与 CPM | `Directory.Build.props` / `Directory.Packages.props` |
+| 硬约束 18 / 19 | `docs/README.md` |
+
+### 关联编号
+
+`D24`、`D1`（被重开）、`R11`、`R9`、`R3`、`R8`、`NFR-1.2`、`架构 1.3`、`架构 10.1`
+
+---
+
 ## 下一步
 
-**Phase 0**：先按 `build-and-test.md` 1.2 装齐工具链前置（VS 组件 + WinUI 模板包已卸载需装回）→ 用 `dotnet new` 生成骨架 → 转 unpackaged → **实测 R9**。
-出口条件：`dotnet build` 全绿、R2 / R3 / R8 已确认、**R9 有明确结论**（结论决定自包含取值）。
+~~**Phase 0 剩余三项人工验证**（AI 不代跑）~~ → ✅ **已于 2026-09-19 全部完成**：R9（双击弹 UAC）通过、R3（100/150/200% DPI）通过、R8（VS 18 打开 `.slnx`）通过。
+
+**Phase 0 出口条件全部达成。Phase 1（Core 层 + 单元测试）即可开工。**
+
+⚠️ **两项已知非阻塞**：
+
+| 项 | 状态 |
+|---|---|
+| **R2**（`TaskScheduler` 命名冲突） | 推迟到 Phase 2 —— `Management` 引入该包时验证 |
+| **D26**（`dotnet test` 跑不了） | 测试命令用 `dotnet run --project tests/DelayStart.Core.Tests -c Release`；是否补 VSTest 适配器待决策 |
+
+---
+
+## R6（2026-09-19）：Phase 0 收尾 —— 三项人工验证通过 + D25 / D26
+
+### 出口条件达成
+
+| 项 | 结果 |
+|---|---|
+| R9（自包含 + 提权 manifest） | ✅ **通过**。VS 之外双击 Release 产物 → **UAC 正常弹出** → `WindowsAppSDKSelfContained=true` 保持不动，三条降级路径均不需启用 |
+| R3（DPI） | ✅ **通过**。100% / 150% / 200% 三档下界面不糊、不越界 |
+| R8（`.slnx`） | ✅ **通过**。VS 18 正常打开，**无需回退 `.sln`** |
+| 构建 | ✅ 0 警告 0 错误 |
+| 测试 | ✅ 2/2 通过（退出码 0） |
+
+### D25（✅ A）：模板残留页全部删除
+
+`Pages/`（Home / About / Settings，6 个文件）与 `MainWindow` 的 `Home`/`About` 导航项跟 `architecture.md` 1.4 定义的页集对不上。
+已执行：删净 `Pages/`、清空导航项（**不预置死链**）、`IsSettingsVisible=False`、标题改为「延时启动管理器」、
+`MainWindow.xaml.cs` 去掉页面类型引用。**导航与页面在 Phase 3 落地。**
+
+### D26（⏳ 待决策）：发现 `dotnet test` 在本项目跑不了
+
+删掉模板的 `UnitTest1.cs` 后测试项目一度零用例，暴露了一个更底层的问题：
+
+| 命令 | 结果 |
+|---|---|
+| `dotnet run --project tests/DelayStart.Core.Tests -c Release` | ✅ `Total: 2, Errors: 0`，退出码 0 |
+| `dotnet test tests/DelayStart.Core.Tests` | ❌ `运行了零个测试`，退出码 5（MTP `ZeroTests`）|
+
+**已逐一排除**：`IsTestProject=true` 无效、参数转发无异常、包版本无冲突（`Microsoft.Testing.Platform` 2.4.0 + `xunit.v3.mtp-v2` 4.0.1，两侧同为 MTP v2）。
+**测试发现本身是好的** —— xUnit 自带运行器能枚举到全部用例。问题在 `dotnet test` 与 `xunit.v3.mtp-v2` 的集成这一段。
+**AI 建议 A（只改命令）**：规范命令定为 `dotnet run`，零改动、已验证。**不阻塞 Phase 1。**
+
+### 另外两项收尾
+
+- **新增 `ScaffoldSmokeTests.cs`**（2 个用例）：断言 `DelayStart.Core` / `DelayStart.Management` 能按程序集名解析、宿主跑在 .NET 10 上。
+  挡的是"零测试被判失败"（退出码 5）与"引用图运行期断掉"这两类编译期挡不住的问题。
+- **清理 `Scheduler.csproj` 的 `<Compile Remove>` 过渡块** —— `Form1.*` 已删，排除项一并移除。
+- **回写 `DelayStart.App.csproj` 的 R9 注释**：取值结论从"待验证"改为"已通过，保持 true"。
+
+---
+
+## 落点索引（延续 R5）
+
+| 内容 | 章节 |
+|---|---|
+| D25 / D26 完整论证 | `design-spec.md` 6.7 / 6.8 |
+| 测试规范命令与 D26 背景 | `build-and-test.md` 4.2 |
+| Phase 0 执行记录（终版） | `architecture.md` 10.1 |
+| **关联编号** | `D25`、`D26`、`R9`、`R3`、`R8`、`R2`（延后） |
+

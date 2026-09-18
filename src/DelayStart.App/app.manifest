@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="DelayStart.App.app"/>
+
+  <!--
+    ★ 提权声明（D20 全程提权）。
+    unpackaged 应用靠 app.manifest（而不是 Package.appxmanifest）声明执行级别。
+    requireAdministrator 会让 exe 带 UAC 盾牌、双击即弹 UAC，与 NFR-3 一致。
+    实现侧还必须配套：启动时检测 IsInRole(Administrator)，为 false 就提示并退出，
+    **不得降级运行**（降级会造成"用户以为禁用成功、实际静默失败"）。
+    见 docs/architecture.md 1.4、docs/requirements.md E17。
+
+    ⚠️ 本声明在 WindowsAppSDKSelfContained=true 下是否生效尚未验证（R9，Phase 0 出口条件）。
+    R9 失败时按 architecture.md 第九节的降级路径处理，不要在没验证前假定它生效。
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!--
+        The ID below informs the system that this application is compatible with OS features first introduced in Windows 10.
+        It is necessary to support features in unpackaged applications, for example the custom titlebar implementation.
+        For more info see https://docs.microsoft.com/windows/apps/windows-app-sdk/use-windows-app-sdk-run-time#declare-os-compatibility-in-your-application-manifest
+      -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- R3：unpackaged 下高 DPI 声明是否生效需在 Phase 0 顺带确认 -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!-- 自启动项的路径可以很长（尤其启动文件夹与计划任务 action），必须声明长路径支持 -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

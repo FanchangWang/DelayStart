@@ -471,5 +471,15 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | **D21** | 单元测试框架 | **A：xUnit v3**，主选 v3 模板 / 降级 SDK 内置模板；**NUnit 明确排除** | ✅ |
 | **D22** | 分发形态（MSIX 是否可行） | **A：Inno Setup 安装器 + unpackaged**。MSIX 被否决（Win10 无法提权 / 注册表虚拟化 / 路径含版本号） | ✅ |
 | **D23** | 安装与数据布局 | **per-user 不提权安装**：程序 `%LOCALAPPDATA%\Programs\DelayStart`（只读）；配置 `%APPDATA%\DelayStart\config.json`（Roaming）；日志/状态/归档 `%LOCALAPPDATA%\DelayStart\`（Local） | ✅ |
+| **D24** | 调度端 UI 技术选型（**重开 D1**） | A. 维持 WinForms+AOT + 内部属性 `_SuppressWinFormsTrimError`（改动最小但官方不支持）<br>**B. 改纯 Win32**（`Shell_NotifyIcon` + 自绘弹窗，彻底离开灰色地带）<br>C. 改 WinUI 3+AOT（官方支持但冷启动 0.5–0.7s 超 NFR-1.2，且 WinUI 3 无托盘 API）<br>D. 放弃 AOT 改框架依赖（体积/冷启动不可接受） | **✅ B（2026-09-19 批复）** —— 调度端 UI 归零重写为纯 Win32，不再引用任何 UI 框架。Phase 0 已按 B 落地 | 🔴 |
 
-> **D1–D23 已全部批复完毕，决策冻结，可进入编码。** 完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23）。D23 的 6 条实现规则见 `architecture.md` 1.5。
+| **D25** | Phase 0 模板残留页（`Pages/` 的 Home / About / Settings）怎么处理 | A. **现在就删**，导航壳留空、Phase 3 按文档从零建 6 个页面<br>B. 留到 Phase 3 整体替换 | **✅ A（2026-09-19 批复）** —— 模板页与 `architecture.md` 1.4 的页集不符（`SettingsPage` 名字撞了但内容是占位符），且**不预置死链导航项**。已执行：删 `Pages/` 全 6 文件 + 清空 `MainWindow` 导航项 | 🟢 |
+| **D26** | 测试命令：`dotnet test` 集成有缺陷，怎么走 | A. **只改命令**：规范用 `dotnet run --project tests/DelayStart.Core.Tests -c Release`，不动包<br>B. 补 `xunit.runner.visualstudio` + 从 `global.json` 去掉 MTP 声明，退回 VSTest 路径（VS 测试资源管理器也能用）<br>C. 换掉 `xunit.v3.mtp-v2`，改用不带 `-mtp-v2` 变体的 `xunit.v3` | ⏳ **待决策** —— AI 建议 **A 先落地（已生效）**，B/C 属优化。**不阻塞 Phase 1**：测试照写，只是命令不同 | 🟡 |
+
+> **D1–D25 已全部批复完毕，决策冻结，可进入编码。** 完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24**）。D23 的 6 条实现规则见 `architecture.md` 1.5。
+>
+> **D26 背景（Phase 0 实测）**：`xunit.v3.mtp-v2` 4.0.1 + `Microsoft.Testing.Platform` 2.4.0 + .NET SDK 10.0.401 组合下，
+> `dotnet test` 报"运行了零个测试"并返回退出码 5，**但测试发现本身是好的**（xUnit 自带运行器能枚举到全部用例）。
+> 逐一排除了 `IsTestProject`、参数转发、包版本冲突三种可能。详见 `build-and-test.md` 4.2。
+>
+> **D24 为什么重开 D1**：Phase 0 实测发现 `UseWindowsForms=true` + `PublishAot=true` 会被 SDK 主动拦截（`NETSDK1175`），官方明确把 WinForms 列为 trimming/AOT 不支持，放行只能靠**内部属性**。D1 当初是在不知道这件事的前提下做的决策。详见 `architecture.md` R11。

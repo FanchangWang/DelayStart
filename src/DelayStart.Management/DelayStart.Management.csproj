@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>DelayStart.Management</RootNamespace>
+    <!-- 不要求 AOT 安全：本层含 COM 互操作（IShellLink / IShellItemImageFactory）
+         与 Microsoft.Win32.TaskScheduler，二者都与 NativeAOT 不兼容。见 architecture.md 1.1。 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+  </ItemGroup>
+
+</Project>

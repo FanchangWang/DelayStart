@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DelayStart.App/DelayStart.App.csproj" />
+    <Project Path="src/DelayStart.Core/DelayStart.Core.csproj" />
+    <Project Path="src/DelayStart.Management/DelayStart.Management.csproj" />
+    <Project Path="src/DelayStart.Scheduler/DelayStart.Scheduler.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DelayStart.Core.Tests/DelayStart.Core.Tests.csproj" />
+  </Folder>
+</Solution>

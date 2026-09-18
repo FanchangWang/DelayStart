@@ -75,9 +75,12 @@ DelayStart/
 |---|---|---|
 | `DelayStart.Core` | `net10.0-windows` | `IsAotCompatible=true`、`Nullable=enable` |
 | `DelayStart.Management` | `net10.0-windows` | 普通库 |
-| `DelayStart.App` | `net10.0-windows10.0.19041.0` | `UseWinUI=true`、`WindowsPackageType=None`（unpackaged）、`ApplicationManifest=app.manifest`、`WindowsAppSDKSelfContained`（取值由 R9 结果定，见 `build-and-test.md` 7.1） |
-| `DelayStart.Scheduler` | `net10.0-windows` | `OutputType=WinExe`、`PublishAot=true`、`UseWindowsForms=true` |
-| `DelayStart.Core.Tests` | `net10.0-windows` | `IsPackable=false`、`OutputType=Exe`（xUnit v3 要求） |
+| `DelayStart.App` | `net10.0-windows10.0.26100.0`<br>`TargetPlatformMinVersion=10.0.19041.0` | `UseWinUI=true`、`AssemblyName=DelayStart`、`WindowsPackageType=None`（unpackaged）、`ApplicationManifest=app.manifest`、`WindowsAppSDKSelfContained`（取值由 R9 结果定，见 `build-and-test.md` 7.1） |
+| `DelayStart.Scheduler` | `net10.0-windows` | `OutputType=WinExe`、`PublishAot=true`、`UseWindowsForms=true`、`RuntimeIdentifier=win-x64`、🔴 `_SuppressWinFormsTrimError=true`（见 R11） |
+| `DelayStart.Core.Tests` | `net10.0-windows` | `IsPackable=false`、`OutputType=Exe`（xUnit v3 硬要求，缺了直接构建失败） |
+
+> **App 的 TFM 与初稿不同（Phase 0 实测修正）**：原写 `net10.0-windows10.0.19041.0`，实际模板产出 **`net10.0-windows10.0.26100.0`**。
+> 26100 是 `TargetPlatformVersion`（编译期用的 SDK 版本），**不支持的下限由 `TargetPlatformMinVersion` 控制** —— 已显式设为 `10.0.19041.0`，与 NFR-5.1（Windows 10 21H2+）对齐；它同时决定 `SupportedOSPlatformVersion`，因此 CA1416 会在编译期拦住"误用 Win11 专属 API"。保持模板默认值（而非回改 19041）是因为本机 Windows SDK 就是 26100，且这是微软当前模板的默认组合。
 
 > 所有版本号以创建项目时的最新稳定版为准写入 `Directory.Packages.props`，不照搬 demo 的版本下限。
 
@@ -85,9 +88,24 @@ DelayStart/
 
 | 包 | 版本 | 说明 |
 |---|---|---|
-| `Microsoft.WindowsAppSDK` | **`1.8.260317003`** | WinUI 3 模板的默认值，CPM 中固定 |
+| `Microsoft.WindowsAppSDK` | **`1.8.260317003`** | WinUI 3 模板的默认值，CPM 中固定。**1.8 是元包**，实际内容由 `Microsoft.WindowsAppSDK.WinUI`（1.8.260224000）/`.Foundation`/`.Base`/`.Runtime` 等子包提供 |
 | `Microsoft.Windows.SDK.BuildTools` | **`10.0.26100.7705`** | 同上 |
-| `xunit.v3` | 创建测试项目时取最新稳定版 | 见 `build-and-test.md` 4.1 |
+| `xunit.v3.mtp-v2` | **`4.0.1`** | `xunit.v3.templates` 4.0.1 产出值（短名 `xunit3`）。见 `build-and-test.md` 4.1 |
+| `Microsoft.Windows.SDK.BuildTools.WinApp` | ❌ **已移除** | 模板默认引入，它是为"**打包应用**的 `dotnet run`"服务的（winapp CLI + AUMID 注册），unpackaged 用不上 |
+
+**Phase 0 实测的骨架状态（2026-09-19，构建 0 警告 0 错误）**：
+
+| 项 | 实测值 |
+|---|---|
+| 项目产出 | `DelayStart.dll`→`DelayStart.exe`（App）、`DelayStart.Scheduler.exe`（Scheduler）、`DelayStart.Core.dll`、`DelayStart.Management.dll` |
+| App 自包含产物体积 | **134.8 MB / 239 个文件**（`WindowsAppSDKSelfContained=true`），与 `build-and-test.md` 7.1 的 100–150 MB 预估吻合 |
+| `app.manifest` 是否嵌进 exe | ✅ **已嵌入**（在 exe 字节流中检出 `requireAdministrator` / `PerMonitorV2` / `longPathAware`）。**这只是"声明进去了"，是否被 Windows 采纳仍待 R9 双击实测** |
+| 仓库级设置 | `Directory.Build.props`（LangVersion / Nullable / TreatWarningsAsErrors / EnforceCodeStyleInBuild / AnalysisLevel / InvariantGlobalization）、`Directory.Packages.props`（CPM）均已落地 |
+
+> ⚠️ **`dotnet new` 与 CPM 的先后顺序是个坑**（Phase 0 踩到，详见 `build-and-test.md` 2.1）：
+> 若先生成 `Directory.Packages.props`（含 `ManagePackageVersionsCentrally=true`），
+> 再跑 WinUI 模板，模板的收尾步骤 `dotnet add package` 会失败（NU1008），
+> 生成的 csproj 会带内联 `Version` 而无法还原。
 
 **项目创建一律走 `dotnet new`**，命令清单、模板实测事实与**工具链前置依赖**（VS 组件正确 ID、Inno Setup 现状）见 **`build-and-test.md` 1.2 / 2.1**。其中一条硬限制必须记住：**WinUI 3 模板只生成 MSIX 打包工程，没有 unpackaged 开关**，生成后需按 2.1 的改造清单转成 unpackaged（本项目 D22 要求 unpackaged + 安装器分发）。
 
@@ -674,23 +692,40 @@ DelayStart.Scheduler/
 | **R5** | Core 层引入 AOT 不兼容 API | 调度端发布失败 | `IsAotCompatible=true` 让编译器在构建期报错 | 持续 |
 | **R6** | 计划任务创建/修改被 ACL 或组策略拒绝 | 接管链路中断 | 管理端已全程提权（D20），正常不会因权限失败。仍需捕获 `UnauthorizedAccessException` 并指出**具体条目** | Phase 2 |
 | **R7** | 高 DPI 下时间轴与列表行错位 | 界面不可用 | 100/150/200% 三档实测 | Phase 3 / 5 |
-| **R8** | `DelayStart.slnx` 与 WinUI 3 项目兼容性 | 无法打开解决方案 | 若 VS 2026 报错则回退 `.sln` | Phase 0 |
-| **R9** | 🔴 **`WindowsAppSDKSelfContained=true` 时 `requireAdministrator` 可能被忽略** | **管理端不弹 UAC 也不提权 → D20 的整个权限模型失效** | **Phase 0 第一件事就是实测**：建最小 WinUI 3 unpackaged 项目 + 自包含 + manifest 提权，Release 下双击 exe，确认弹出 UAC 且 `WindowsPrincipal.IsInRole(Administrator)` 为 true。**三条降级路径见下方** | **Phase 0** |
+| **R8** | `DelayStart.slnx` 与 WinUI 3 项目兼容性 | 无法打开解决方案 | ✅ **已确认（2026-09-19）**：VS 18 可正常打开 `DelayStart.slnx`（含 5 个项目与 XAML 设计器），**无需回退 `.sln`** | **Phase 0 ✅** |
+| **R9** | 🔴 **`WindowsAppSDKSelfContained=true` 时 `requireAdministrator` 可能被忽略** | **管理端不弹 UAC 也不提权 → D20 的整个权限模型失效** | ✅ **已通过（2026-09-19 实测）**：unpackaged + 自包含 + manifest 提权，Release 下**在 VS 之外双击 exe，UAC 正常弹出** → manifest **未被忽略**。`WindowsAppSDKSelfContained` 保持 `true`，三条降级路径**均不需启用**（留档备用，见下方）。⚠️ 残留一项：`WindowsPrincipal.IsInRole(Administrator)` 的**代码级**确认待 Phase 1 有代码后补测 | **Phase 0 ✅** |
 | **R10** | 🟡 提权窗口接收不到资源管理器的拖放（UIPI） | 「手动添加」的拖放区失效 | 主路径 `[浏览…]` 按钮（`FileOpenPicker` + `InitializeWithWindow`）必须 100% 可用，**不依赖拖放**；拖放作为增强：`ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES/MSGFLT_ALLOW)` + `DragAcceptFiles` + 子类化窗口处理 `WM_DROPFILES`。**不通则拖放区降级为纯按钮，不接受"等待修复"** | Phase 3 |
+| **R11** | 🔴 **WinForms + NativeAOT 官方未支持**：SDK 主动拦截（`NETSDK1175`），放行只能靠**内部属性** `_SuppressWinFormsTrimError` | ~~调度端可能发布出"能编译但运行时崩溃"的 exe；D1 的整个技术路线受威胁~~ → **已由 D24 = B 从根源消解** | ✅ **已解决（2026-09-19 D24 批复 B）**：调度端弃用 WinForms，改**纯 Win32 + AOT**，灰色地带不复存在。Phase 0 复验——去掉逃逸属性后**仍 0 警告 0 错误**。**R11 的约束条款继续生效且更强**（禁 `.resx` 反射式资源加载 / `DataGridView` / `RichTextBox` / 动态 COM / `System.Reflection`，IL2xxx 逐个消掉）。剩下"AOT 产物真机能否运行"由 **R1 在 Phase 4** 覆盖托盘 / 面板 / 失焦即关三条路径 | **Phase 0（已结）→ Phase 4（R1 覆盖运行侧）** |
 
-#### R9 详解：这是本轮唯一可能推翻 D20 的技术风险
+#### R9 实测进度（Phase 0，2026-09-19）
 
-**现象**：多个社区报告（StackOverflow 75175782、WindowsAppSDK Discussion #3038）指出，WinUI 3 unpackaged 应用在 `WindowsAppSDKSelfContained=true` 时，`app.manifest` 的 `requestedExecutionLevel` 可能不生效——exe 图标上没有盾牌、双击不弹 UAC、进程仍是中等完整性。其中有分析认为：**自包含模式生成"免注册 WinRT 条目"的过程可能错误地写入了信任信息**，从而吞掉了 manifest 的提权声明。
+**已完成的部分（静态验证）**：
 
-**背景**：WinAppSDK **1.1 起已官方移除**"不能以管理员身份运行"的限制（官方博客原文：*Development, administration, and system management tools can now leverage the full power of Windows App SDK*）。所以**问题不是"不支持提权"，而是"自包含模式可能吞掉 manifest 声明"**。这些报告多来自 2022 年（WinAppSDK 1.0–1.2），当前版本是否已修复**必须实测，不能靠推断**。
+| 检查项 | 结果 |
+|---|---|
+| 骨架按上述第 1 条生成 | ✅ `src/DelayStart.App`（unpackaged + `WindowsAppSDKSelfContained=true`），TFM `net10.0-windows10.0.26100.0` |
+| `app.manifest` 写入 `requireAdministrator` | ✅ 已写（另含 `PerMonitorV2` DPI + `longPathAware`） |
+| **`requireAdministrator` 是否真的嵌进了 exe** | ✅ **已嵌入** —— 在 Release 产物 `DelayStart.exe` 字节流中检出 `requireAdministrator` / `PerMonitorV2` / `longPathAware` 三个标记 |
+| Release 构建是否通过 | ✅ 0 警告 0 错误 |
 
-**Phase 0 实测步骤**（三条路，按优先级试）：
+**运行侧验证（2026-09-19，由用户在 VS 之外实测）**：
 
-1. 建最小 WinUI 3 unpackaged + 自包含项目，`app.manifest` 写 `requireAdministrator`
-2. **Release 构建**，**在 VS 之外直接双击 exe**（在 VS 里调试会继承 VS 的权限，测不准）
-3. 判定：出现 UAC 盾牌 / 弹 UAC 对话框 / `IsInRole(Administrator) == true` → **通过**
+> ✅ **R9 通过**：双击
+> `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`
+> → **UAC 提权对话框正常弹出**。
+>
+> 结论：**"manifest 已嵌进 exe" → "Windows 采纳了 manifest" 这条链路成立**，
+> `WindowsAppSDKSelfContained=true` **保持不动**，下面三条降级路径**全部不需要**。
+> 已回写 `DelayStart.App.csproj` 的注释。
+>
+> ⚠️ 残留一项：`WindowsPrincipal.IsInRole(Administrator)` 的**代码级**确认要等 Phase 1 有代码后补测
+> （弹了 UAC 已足以判定 R9 通过，代码级确认是加固）。
+>
+> **置信度说明**：R9 的风险来自社区在 **WinAppSDK 1.0–1.2** 时期的报告，本机
+> **WinAppSDK 1.8 + .NET 10** 未复现。用 `bin` 目录里的一个**空壳** exe 无法百分百覆盖
+> "将来加了 WinAppSDK 初始化代码后的行为"，因此升版 Windows App SDK 后建议回归一次。
 
-**三条降级路径**（按推荐顺序）：
+**三条降级路径（当前不需要，留档备用，按推荐顺序）**：
 
 | 路径 | 做法 | 代价 |
 |---|---|---|
@@ -702,6 +737,63 @@ DelayStart.Scheduler/
 
 ---
 
+#### R11 详解：WinForms + NativeAOT 官方不支持，靠内部属性放行
+
+**现象（Phase 0 实测复现）**：`DelayStart.Scheduler` 加上 `PublishAot=true` 后，构建**直接失败**：
+
+```
+error NETSDK1175: 启用剪裁时，不支持或不推荐使用 Windows 窗体。
+[src\DelayStart.Scheduler\DelayStart.Scheduler.csproj]
+```
+
+**来源（读 SDK 源码确认，不是猜的）**：
+
+```
+C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NET.RuntimeIdentifierInference.targets:305
+<NetSdkError Condition="('$(UseWindowsForms)' == 'true') and ('$(PublishTrimmed)' == 'true')
+                     and ('$(_SuppressWinFormsTrimError)' != 'true')"
+             ResourceName="TrimmingWindowsFormsIsNotSupported" />
+```
+
+而 `PublishTrimmed` 是被 `PublishAot` **隐式**打开的：
+
+```
+...\Microsoft.NET.Publish.targets
+<PublishTrimmed Condition="'$(PublishTrimmed)' == '' And '$(PublishAot)' == 'true'">true</PublishTrimmed>
+```
+
+即：`UseWindowsForms=true` + `PublishAot=true` ⇒ `PublishTrimmed=true` ⇒ SDK 主动拦下。
+
+**官方立场**：微软 *Known trimming incompatibilities* 文档把 **WinForms 与 WPF 明确列为 trimming 不支持**，理由是 Windows 上的 Native AOT **没有 built-in COM**，而 WinForms 对 built-in COM marshalling 依赖很重（.NET 10 发布说明同样写着 NativeAOT 对 WinForms/WPF 不可用）。
+
+**现状判定**：`_SuppressWinFormsTrimError` 是 **SDK 自己提供的逃逸口**，但**以下划线开头 = 内部属性，不在公开 API 文档中**。社区实践（.NET 10，中等复杂度 WinForms 项目）显示：加它之后**能编译、能产出可独立运行的 exe**，但**不是官方推荐路径，不保证所有代码路径安全**。已知高危路径：
+
+| 高危路径 | 本项目是否踩 |
+|---|---|
+| `.resx` + `ComponentResourceManager` 反射式资源加载 | 🔴 **会踩**——托盘图标若用设计器 `.resx` 必然出问题。已在记忆与规范里定死：改 `Assembly.GetManifestResourceStream` |
+| `DataGridView` 反射式列类型解析 | 🟢 不用 |
+| `RichTextBox`（RichEdit COM 包装） | 🟢 不用 |
+| 动态 COM 互操作（`Marshal.GetTypedObjectForIUnknown`、动态 IID） | 🟢 调度端不碰 |
+| 系统原生 Shell 右键菜单 | 🟢 不用 |
+| 大量 `System.Reflection` | 🟢 不碰 |
+
+~~本项目的调度端是"托盘图标 + 一个小面板"的极小 WinForms 程序，恰好落在社区验证过的可行区间内~~ —— **该判断已作废**。上表前六条是**静态风险面**，而 R11 真正的问题是：即便这几条都躲开，WinForms + AOT 仍是**官方不支持的组合**，走它就得靠内部属性逃逸。
+
+**已决策 → D24 = B：纯 Win32 + AOT（2026-09-19 用户批复）**
+
+调度端 UI 归零重写：不用 WinForms、不用 WinUI 3，直接 `Shell_NotifyIcon` 托盘 + 自绘无边框弹窗，全部 P/Invoke。三条理由（完整版见 `design-spec.md` 6.6）：
+
+1. **A 走不通** —— 官方不支持，靠 `_SuppressWinFormsTrimError`（内部属性）逃逸，等于把关键路径押在微软随时能改名的开关上。**Phase 0 实测：去掉该属性后构建依然 0 警告 0 错误**，说明它本就不必要。
+2. **C 解决不了问题还引入新问题** —— **WinUI 3 没有任何托盘 API**（微软有意省略），托盘那层照样得写 `Shell_NotifyIcon`；而它带来 **0.5–0.7s 冷启动，直接违反 NFR-1.2 的 0.3s**，还要背上 WinAppSDK 自包含体积。
+3. **B 的量本来就小** —— 托盘图标 + 一行 tooltip + 一个只读列表，几百行 Win32 代码。为省这几百行去背一整个框架，是净负债。
+
+> **对 R11 的最终定论**：R11 列出的**约束继续有效，而且更强** —— 禁 `.resx` 反射式资源加载、禁 `DataGridView` / `RichTextBox` / 动态 COM 互操作 / `System.Reflection`、IL2xxx 必须逐个消掉。纯 Win32 路径下这些**本来就不会出现**，等于主动把风险面砍掉而不是绕开。
+
+> **R11 不阻止 Phase 1–3**（那三个阶段只做 Core / Management / 管理端，不碰调度端）。
+> **Phase 4 已解锁**，开工第一件事是写最小 demo 发布 AOT，在真机登录场景实测托盘 / 面板 / 失焦即关三条路径。
+
+---
+
 ## 十、实施顺序
 
 | Phase | 内容 | 出口条件 |
@@ -710,8 +802,26 @@ DelayStart.Scheduler/
 | **1** | `Core` 层：模型、`ConfigService`、`DelayCalculator`、`ItemKeyBuilder`、`CommandLineService`、`LaunchResultEvaluator` + 单元测试 | 单元测试全绿 |
 | **2** | `Management` 层：4 个 Source 的扫描 + 软禁用 + 恢复、`TakeoverService`、`TaskRegistrationService` | 注册表导出对比验证"零数据损坏" |
 | **3** | 管理端骨架：导航 + 自启动项页 + 延时启动页，跑通"扫描 → 接管 → 移除"单链路；验证 R10（提权下的文件选择/拖放） | 端到端手工验证通过；「手动添加」的 `[浏览…]` 路径可用 |
-| **4** | 调度端：先验 R1，再做引擎 + 托盘 + 通知 + 状态文件 | 重启实测延时准确 |
+| **4** | 调度端：先验 R1（+ R11 的运行侧），再做引擎 + 托盘 + 通知 + 状态文件。**D24 已批复 = B（纯 Win32），UI 归零重写** | 重启实测延时准确 |
 | **5** | 总览 / 日志 / 设置 / 系统启动项页 | 全部页面文案对齐 `design-spec.md` |
 | **6** | 模拟调度、**Inno Setup 安装器与卸载还原链路**（D22）、真机全面验收 | `requirements.md` 第九节全部勾选（含 9.4 分发验收） |
 
 **Phase 2 与 Phase 4 之间不允许跳过**——调度端依赖 Core 的时序与启动逻辑，而那部分的正确性只能靠 Phase 1 的单元测试保证。
+
+### 10.1 Phase 0 执行记录（2026-09-19）
+
+| 项 | 结论 |
+|---|---|
+| 骨架 | ✅ `DelayStart.slnx` + 5 个项目（`Core` / `Management` / `App` / `Scheduler` / `Core.Tests`）全部生成并入解决方案 |
+| 构建 | ✅ `dotnet build DelayStart.slnx -c Release` → **0 警告 0 错误** |
+| 测试 | ✅ **2 个冒烟用例全过**（`dotnet run --project tests/DelayStart.Core.Tests -c Release`，退出码 0）。⚠️ **`dotnet test` 在本项目不可用，已登记 D26**，原因与规范命令见 `build-and-test.md` 4.2 |
+| 模板残留清理 | ✅ 已删：MSIX 打包残留（`Package.appxmanifest` + 8 个徽标 PNG + 3 个 `.pubxml` + 嵌套 `.gitignore`）、调度端 WinForms 残留（`Form1.*`）、空模板类（`Class1.cs`×2 / `UnitTest1.cs`）、模板页（`Pages/` 全部 6 个文件，**D25 = A**）。`Assets/AppIcon.ico` 保留 |
+| R2（TaskScheduler 命名冲突） | ⏳ 未验证 —— `Management` 尚未引入该包，Phase 2 处理 |
+| R3（manifest + PerMonitorV2 生效） | ✅ **通过（人工实测 2026-09-19）**：100% / 150% / 200% 三档 DPI 下界面不糊、不越界 |
+| R8（`.slnx` 兼容性） | ✅ **通过（人工实测 2026-09-19）**：VS 18 可正常打开 `DelayStart.slnx`，**无需回退 `.sln`** |
+| R9（自包含 + 提权 manifest） | ✅ **通过（人工实测 2026-09-19）**：在 VS 之外双击 Release 产物，**UAC 提权弹窗正常弹出** → `WindowsAppSDKSelfContained=true` 保持不动，三条降级路径均不需启用。⚠️ 残留：`IsInRole(Administrator)` 代码级确认待 Phase 1 补 |
+| R11（WinForms + AOT） | ✅ **已由 D24 = B 从根源消解**：调度端改纯 Win32 + AOT，不再引用任何 UI 框架；**移除逃逸属性后构建仍 0 警告 0 错误**。运行侧由 R1 在 Phase 4 覆盖 |
+| 9.0 最后一项（VS 组件是否硬依赖） | ✅ **结论：体验项，不是硬依赖**。依据：`XamlCompiler.exe` 与全部 `Microsoft.UI.Xaml.Markup.Compiler.*.targets` 均由 NuGet 包 `Microsoft.WindowsAppSDK.WinUI/1.8.260224000` 的 `buildTransitive/` 提供（本机缓存实测），命令行构建不经过 VS 组件。**唯一残留的混淆因子是该组件当前已安装、无法做隔离对照** |
+| **Phase 0 出口条件** | ✅ **全部达成（2026-09-19）**：构建 0 警告 0 错误 + R3 / R8 / R9 三项人工验证通过 + D24 / D25 落地。R2 按计划延后到 Phase 2。**可以进入 Phase 1** |
+| 9.0 最后一项（VS 组件是否硬依赖） | ✅ **结论：体验项，不是硬依赖**。依据：`XamlCompiler.exe` 与全部 `Microsoft.UI.Xaml.Markup.Compiler.*.targets` 均由 NuGet 包 `Microsoft.WindowsAppSDK.WinUI/1.8.260224000` 的 `buildTransitive/` 提供（本机缓存实测），命令行构建不经过 VS 组件。**唯一残留的混淆因子是该组件当前已安装、无法做隔离对照** |
+

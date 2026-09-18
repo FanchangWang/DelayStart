@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+
+    <!--
+      TFM 的 26100 是 WinUI 模板产出值（TargetPlatformVersion），保持不动；
+      支持下限由 TargetPlatformMinVersion 控制，与 NFR-5.1（Windows 10 21H2+）对齐。
+      TargetPlatformMinVersion 同时决定 SupportedOSPlatformVersion，
+      因此 CA1416 会在编译期拦住"用了 Win11 才有的 API"这类错误。
+    -->
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+
+    <RootNamespace>DelayStart.App</RootNamespace>
+    <!-- 产出 DelayStart.exe，与安装目录布局一致（architecture.md 1.5 / build-and-test.md 7.1） -->
+    <AssemblyName>DelayStart</AssemblyName>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+
+    <!--
+      ★ unpackaged（D22）：不走 MSIX 打包，直接产出可执行的 exe。
+      模板生成的是 MSIX 打包工程，这两行是"转 unpackaged"的核心；配套还要删掉
+      EnableMsixTooling / PublishProfile / MSIX ProjectCapability / WinApp 包引用。
+      详见 docs/build-and-test.md 2.1 的改造清单。
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+
+    <!--
+      ★ R9 已实测通过（2026-09-19，Phase 0 出口条件）：
+      在 VS 之外双击 Release 产物，UAC 提权弹窗正常弹出 —— 说明在本机的
+      Windows App SDK 1.8 + .NET 10 组合下，app.manifest 的
+      requestedExecutionLevel **没有**被 WindowsAppSDKSelfContained 忽略，取值保持 true。
+      （若日后升版 Windows App SDK 出现 R9 回归，降级路径是改 false 走框架依赖，
+        由 Inno 安装器代部署 Windows App Runtime。见 docs/architecture.md 第九节 R9。）
+    -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\AppIcon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!--
+    包引用由 Directory.Packages.props（CPM）统一给版本，此处不写 Version。
+    模板原本还引用了 Microsoft.Windows.SDK.BuildTools.WinApp —— 它是为
+    "打包应用的 dotnet run" 服务的（winapp CLI），unpackaged 用不上，已移除。
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+  </ItemGroup>
+
+</Project>

@@ -53,11 +53,15 @@
 
 ## 决策点状态
 
-### 全部批复完毕 —— 决策冻结，可进入编码
+### 决策点状态
+
+**D1–D25 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。D26（测试命令走向）待决策，不阻塞 Phase 1。**
+
+**Phase 0 出口条件已全部达成**：构建 0 警告 0 错误、R3 / R8 / R9 三项人工验证通过、D24 / D25 落地、模板残留清理完毕。
 
 | 编号 | 内容 | 结论 |
 |---|---|---|
-| D1 | 调度端技术 | A — 独立轻量进程 WinForms+AOT |
+| D1 | 调度端技术 | A — 独立轻量进程 + AOT。**UI 层被 D24 改写为纯 Win32**（原 WinForms 部分作废） |
 | D2 | 主窗口导航 | A — 左侧 NavigationView + 来源子项 |
 | D3 | 界面语言 | A — 仅简体中文 |
 | D4 | UWP 延时语义 | B — 做，文案写明会绕过系统启动管理 |
@@ -80,10 +84,19 @@
 | D21 | 单元测试框架 | **A — xUnit v3**（主选 v3 模板 / 降级 SDK 内置模板；NUnit 明确排除，见 `design-spec.md` 6.3） |
 | D22 | 分发形态（MSIX 是否可行） | **A — Inno Setup 安装器 + unpackaged**。MSIX 三条否决理由见 `design-spec.md` 6.4；**取代 D8** |
 | D23 | 安装与数据布局 | **per-user、不提权**：程序 `%LOCALAPPDATA%\Programs\DelayStart`（只读）；配置 `%APPDATA%\DelayStart\config.json`（Roaming）；日志/状态/归档 `%LOCALAPPDATA%\DelayStart\`（Local）。见 `architecture.md` 1.5 |
+| **D24** | **调度端 UI 技术选型（重开 D1）** | **✅ B — 纯 Win32 + AOT**：`Shell_NotifyIcon` 托盘 + 自绘无边框弹窗，全 P/Invoke，不引用任何 UI 框架。否决 A（WinForms+AOT 官方不支持，靠内部属性逃逸）／C（WinUI 3 官方支持 AOT 但冷启动 0.5–0.7s 超 NFR-1.2，**且 WinUI 3 无托盘 API**）／D（放弃 AOT，体积与冷启动不可接受）。见 `design-spec.md` 6.6、`architecture.md` R11 |
 
-> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / **6.5 D23**）。D20 / D21 / D22 / D23 的工程落地：`architecture.md` 1.3 / 1.4 / **1.5** / R9 / R10、`build-and-test.md` 第一、二、七节。
+| **D25** | **Phase 0 模板残留页处理** | **✅ A — 现在就删**：`Pages/` 的 Home / About / Settings 全删，`MainWindow` 导航项清空、**不预置死链**，Phase 3 按 `architecture.md` 1.4 从零建 6 个页面 |
+| **D26** | **测试命令（`dotnet test` 跑不了）** | ⏳ **待决策**：`xunit.v3.mtp-v2` 4.0.1 + SDK 10.0.401 下 `dotnet test` 报"运行了零个测试"（**测试发现本身正常**）。**AI 建议 A**：规范命令改 `dotnet run --project tests/DelayStart.Core.Tests -c Release`（已生效，零改动）；B 补 `xunit.runner.visualstudio` 退回 VSTest（VS 测试资源管理器可用）／C 换包。**不阻塞 Phase 1**。见 `design-spec.md` 6.8 |
+
+> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R9 / R10 / **R11**、`build-and-test.md` 第一、二、四、七、九节。
 >
-> **编码前的第一件事是 Phase 0 验证 R9**（WinUI 3 自包含 + 提权 manifest 是否生效）。不通过则需按降级路径调整 D20 的实现方式，见 `build-and-test.md` 9.0。
+> ✅ **Phase 0（2026-09-19）出口条件全部达成**：骨架生成完毕、Release 构建 **0 警告 0 错误**、冒烟测试 2/2 通过、
+> manifest 三个标记确认嵌入 exe、**R3 / R8 / R9 三项人工验证由用户在 VS 之外实测通过**、模板残留清理完毕（D25）。
+> 执行记录见 `architecture.md` 10.1 与 `build-and-test.md` 9.0。**下一步：Phase 1（Core 层 + 单元测试）。**
+>
+> ⚠️ **两个已知非阻塞项**：D26（测试命令，用 `dotnet run`）与 R2（`TaskScheduler` 命名冲突，推迟到 Phase 2 引入该包时验证）。
+
 
 ---
 
@@ -108,6 +121,8 @@
 15. 🔴 **卸载必须先还原全部接管项再删文件**（NFR-6.4）。还原失败则中止卸载。违反这条会让用户卸载后所有程序永久不自启。
 16. **安装目录只读，运行时数据与安装目录分离**（D23 / NFR-6.7）。程序放 `%LOCALAPPDATA%\Programs\DelayStart`，配置放 `%APPDATA%\DelayStart`（Roaming），日志与状态放 `%LOCALAPPDATA%\DelayStart`（Local）。**全部路径经 `PathService` 解析，禁止硬编码**。
 17. 🔴 **计划任务身份必须是交互用户**（`LogonType=Interactive` + `RunLevel=Highest`），**禁止 SYSTEM / 服务账户**（NFR-6.8）。SYSTEM 下 `%APPDATA%` 会解析到 `systemprofile`，配置读不到、日志写错位置，**且不报错**。
+18. 🔴 **调度端是纯 Win32 + NativeAOT，不引用任何 UI 框架**（D24 = B）。因此调度端里**禁止** `UseWindowsForms` / `UseWPF` / WinUI 3，也**禁止** `.resx` 反射式资源加载（图标一律 `Assembly.GetManifestResourceStream`）、`DataGridView`、`RichTextBox`、动态 COM 互操作、`System.Reflection`。**IL2xxx AOT 警告必须逐个消掉，不能用开关兜着。**
+19. **Release 产物里 `DelayStart.exe`（管理端）与 `DelayStart.Scheduler.exe`（调度端）名字固定**，安装器与计划任务 action 都按这两个名字写死（D22 / D23）。
 
 ---
 

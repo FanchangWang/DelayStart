@@ -242,7 +242,7 @@ remaining = item.DelaySeconds - (now - 登录后的整体开始时刻)
 | 管理端 UI | WinForms + DataGridView | WinUI 3 + NavigationView + ListView | 列表虚拟化、行内按钮、卡片式行需要重做 |
 | 管理端提权 | `app.manifest requireAdministrator` | **同样全程提权（D20 已批复）**。unpackaged 场景用 `app.manifest`（csproj 里 `<ApplicationManifest>app.manifest</ApplicationManifest>`）；`Package.appxmanifest` 只在打包场景需要 | ⚠️ **风险 R9**：`WindowsAppSDKSelfContained=true` 时 manifest 的 `requestedExecutionLevel` 可能被忽略（社区在 WinAppSDK 1.0–1.2 时期报告过）。Phase 0 必须实测，见 `architecture.md` R9 |
 | 提权窗口的文件拖放 | N/A（demo 未做拖放） | UIPI 会拦掉 explorer → 提权进程的拖放（OLE 拖放基本无解） | ⚠️ **风险 R10**：主路径必须用 `[浏览…]` 按钮，拖放只作增强 |
-| 调度端 | WinForms + `PublishAot`（约 6 MB） | **保持轻量独立进程** | ✅ 已决策：WinUI 3 的 `PublishAot` 仍属 preview，且自包含体积大、冷启动 1–2 s，登录瞬间执行不可接受 |
+| 调度端 | WinForms + `PublishAot`（约 6 MB） | **保持轻量独立进程** | ✅ 已决策。理由：WinUI 3 自包含体积大、**冷启动即使 AOT 仍约 0.5–0.7 s**，登录瞬间执行不可接受。（❗ 原文档此处写"WinUI 3 的 `PublishAot` 仍属 preview" —— **该说法已过期**：Windows App SDK **1.6 起 NativeAOT 已是官方支持特性**，详见 `design-spec.md` 6.6；但冷启动与体积两条理由依然成立） |
 | 配置序列化 | `System.Text.Json` 反射模式 | 用 **source generator**（`JsonSerializerContext`） | AOT 友好；WinUI 3 端也需要，避免裁剪问题 |
 | `Microsoft.Win32.TaskScheduler` | 已用 | 继续用（注意与 `System.Threading.Tasks.Task` 的命名冲突） | 该包为 netstandard，WinUI 3 可用 |
 | Toast 通知 | `Microsoft.Windows.SDK.NET.Ref` | WinUI 3 项目已自带 CsWinRT，直接用 `AppNotification` | WinUI 3 下更顺，但仍需 AppUserModelID 注册 |

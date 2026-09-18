@@ -468,7 +468,7 @@
 ## 六、决策点与批复结果
 
 > **状态图例**：`✅` 已批复并锁定 · `⏳` 尚未批复（列出建议值，**未批复前不进入编码**）
-> **D1–D23 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。**
+> **D1–D25 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。D26 待决策（测试命令走向），不阻塞 Phase 1。**
 >
 > - D1–D3、D14–D19：首轮批复
 > - D4–D13：2026-09-19 按建议值批量批复
@@ -476,10 +476,13 @@
 > - D21：xUnit v3
 > - D22：**分发形态改为 Inno Setup 安装器 + unpackaged**，D8 的「第一版 zip」被取代（理由见 6.4）
 > - D23：**安装与数据布局**改为 per-user 不提权安装 + 配置走 Roaming、日志走 Local（理由见 6.5）
+> - D24：**调度端 UI 改纯 Win32**（Phase 0 发现 WinForms + NativeAOT 是官方不支持的组合，**重开 D1**；理由见 6.6）
+> - D25：**Phase 0 模板页全部删除**，导航壳刻意留空，Phase 3 从零建 6 个页面（理由见 6.7）
+> - D26：**`dotnet test` 在本项目不可用**，测试命令改用 `dotnet run`；是否补 VSTest 适配器待定（理由见 6.8）
 
 | 编号 | 决策 | 选项 | 批复 | 优先级 |
 |---|---|---|---|---|
-| **D1** | 调度端技术 | A. 独立轻量进程 WinForms+AOT（≈6MB，冷启动 <0.3s）<br>B. WinUI 3 调度端（体积大、冷启动 1–2s，AOT 仍 preview） | **✅ A** | 🔴 |
+| **D1** | 调度端技术 | A. 独立轻量进程 WinForms+AOT（≈6MB，冷启动 <0.3s）<br>B. WinUI 3 调度端（体积大、冷启动 1–2s） | **✅ A** ⚠️ **被 D24 重开**（2026-09-19 Phase 0 发现 WinForms + AOT 是官方不支持的组合）。**注**：原表此处写"WinUI 3 的 AOT 仍 preview"——该说法已过期，WinAppSDK 1.6 起官方支持 AOT，但冷启动与体积两条理由仍成立，见 6.6 | 🔴 |
 | **D2** | 主窗口导航 | A. 左侧 NavigationView + 来源子项<br>B. 顶部 TabView（沿用 demo 结构）<br>C. 单页 + 筛选 Chips | **✅ A** | 🔴 |
 | **D3** | 界面语言 | A. 仅简体中文<br>B. 中英双语（资源文件） | **✅ A** | 🟡 |
 | **D4** | UWP 延时语义 | A. 不做「延时启动 UWP」，UWP 项只能禁用/启用<br>B. 做「禁用系统自启 + 到点 COM 激活」 | **✅ B** —— UI 文案写明"UWP 延时启动会绕过系统的启动管理" | 🟡 |
@@ -502,9 +505,12 @@
 | **D21** | 单元测试框架 | A. xUnit v3（`xunit.v3`）<br>B. xUnit v2（SDK 内置模板）<br>C. NUnit / MSTest | **✅ A** —— 主选 xUnit v3；v3 模板安装受阻时降级 B。**NUnit 明确排除**（.NET 10 SDK 下存在 MTP 版本冲突 CS1705）。详见 6.3 | 🟡 |
 | **D22** | 分发形态：MSIX 是否可行 | A. Inno Setup 安装器 + **unpackaged**<br>B. MSIX 打包 + 自写提权 bootstrapper<br>C. 维持 D8 的第一版免安装 zip | **✅ A** —— MSIX 三条致命理由（Win10 无法提权 / 注册表虚拟化 / 安装路径含版本号），详见 6.4。同时取代 D8 | 🔴 |
 | **D23** | 安装与数据布局 | A. 装 `Program Files`（需提权安装）+ 数据全放 `%LOCALAPPDATA%`<br>B. **per-user 装 `%LOCALAPPDATA%\Programs\DelayStart`（不提权）**；配置 `%APPDATA%\DelayStart`（Roaming）；日志/状态 `%LOCALAPPDATA%\DelayStart`（Local） | **✅ B** —— 用户定：程序不放 Program Files、配置走 Roaming、日志走 Local。派生三条：安装器 `PrivilegesRequired=lowest`、计划任务改由管理端首次启动注册、卸载默认保留配置与日志。详见 6.5 | 🔴 |
+| **D24** | 调度端 UI 技术选型（Phase 0 重开 D1） | A. 维持 **WinForms + AOT**（靠内部属性放行，**官方不支持**）<br>B. 改 **纯 Win32**（`Shell_NotifyIcon` + 自绘弹窗，**官方完全支持**）<br>C. 改 **WinUI 3 + AOT**（官方支持，但冷启动 0.5–0.7s 超 NFR-1.2，且 WinUI 3 **无托盘 API**）<br>D. **放弃 AOT**（冷启动 1–2s + 需装 Desktop Runtime） | **✅ B** —— 用户批复。Phase 0 已按 B 落地骨架：调度端 csproj 去掉 `UseWindowsForms` 与 `_SuppressWinFormsTrimError`，`Program.cs` 改为纯 Win32 入口。详见 6.6 | 🔴 |
+| **D25** | Phase 0 模板残留页（`Pages/` 的 Home / About / Settings） | A. **现在就删**，导航壳留空，Phase 3 从零建 6 个页面<br>B. 留到 Phase 3 整体替换 | **✅ A** —— 模板页与 `architecture.md` 1.4 的页集不符，留着只是 6 个死文件 + 假导航。已执行。详见 6.7 | 🟢 |
+| **D26** | 测试命令：`dotnet test` 集成有缺陷，怎么走 | A. **只改命令**（用 `dotnet run`，零改动）<br>B. 补 `xunit.runner.visualstudio` + 退回 VSTest 路径（VS 测试资源管理器可用）<br>C. 换掉 `xunit.v3.mtp-v2` 改用 `xunit.v3` | ⏳ **待决策** —— AI 建议 **A（已生效）**。`xunit.v3.mtp-v2` 4.0.1 + SDK 10.0.401 下 `dotnet test` 报零测试（发现本身正常）；B/C 属优化，**不阻塞 Phase 1**。详见 6.8 | 🟡 |
 
 > **D14–D19 归属调度端**，完整论证、技术硬约束（AOT / elevated 通知限制）、通知文案矩阵、跨进程状态文件设计见独立文档 **`docs/scheduler-design.md`**。
-> **D20 / D21 / D22 / D23 的完整论证见下方 6.2 / 6.3 / 6.4 / 6.5**，工程落地见 `architecture.md` 1.4 / 1.5 与 `build-and-test.md` 第一、七节。
+> **D20 / D21 / D22 / D23 / D24 的完整论证见下方 6.2 / 6.3 / 6.4 / 6.5 / 6.6**，工程落地见 `architecture.md` 1.4 / 1.5 与 `build-and-test.md` 第一、二、七节。
 
 ### 6.1 D17 批复说明：失败由用户处理，软件不代劳
 
@@ -709,6 +715,145 @@ dotnet new xunit -o tests/DelayStart.Core.Tests -f net10.0
 - 卸载比"删一个目录"复杂：要先提权还原接管项、删计划任务，再删程序文件，最后询问是否删配置。
 
 > **完整实现规则（6 条）见 `architecture.md` 1.5**；数据契约表见 `requirements.md` 第七节；安装器要点见 `build-and-test.md` 7.1 / 7.2。
+
+### 6.6 ✅ D24（Phase 0 新发现，已批复 B）：调度端 UI 技术选型 —— 重开 D1
+
+> **性质说明**：这不是新需求，是 Phase 0 把 D1 的前提打掉了。D1 定的是"调度端 = 独立轻量进程 WinForms + NativeAOT"，但当时不知道 WinForms + AOT 是**官方不支持、SDK 主动拦截**的组合。现在事实清楚了，必须让用户重新选一次。
+
+**Phase 0 实测事实（不是推断）**
+
+给 `DelayStart.Scheduler` 加上 `PublishAot=true` 后构建**直接失败**：
+
+```
+error NETSDK1175: 启用剪裁时，不支持或不推荐使用 Windows 窗体。
+```
+
+读 SDK 源码定位到确切条件（`Microsoft.NET.RuntimeIdentifierInference.targets:305`）：
+
+```xml
+<NetSdkError Condition="('$(UseWindowsForms)' == 'true') and ('$(PublishTrimmed)' == 'true')
+                     and ('$(_SuppressWinFormsTrimError)' != 'true')"
+             ResourceName="TrimmingWindowsFormsIsNotSupported" />
+```
+
+而 `PublishTrimmed` 是被 `PublishAot` 隐式打开的（`Microsoft.NET.Publish.targets`）：
+
+```xml
+<PublishTrimmed Condition="'$(PublishTrimmed)' == '' And '$(PublishAot)' == 'true'">true</PublishTrimmed>
+```
+
+**官方立场**：微软 *Known trimming incompatibilities* 明确把 WinForms / WPF 列为**不支持 trimming**；.NET 10 的发布说明同样写着 NativeAOT 对 WinForms/WPF 不可用。根因是 **Windows 上的 Native AOT 没有 built-in COM**，而 WinForms 对 built-in COM marshalling 依赖很重。
+
+**社区现状**：`_SuppressWinFormsTrimError` 是 SDK 自己留的逃逸口，**加上后确实能编译、能产出可独立运行的 exe**，但：
+
+- 它是**内部属性**（下划线开头，不在公开 API 文档里）—— 随时可能改名或消失。
+- 它**不修复任何 trim 问题**，只是把拦截降级。社区有实测"编译通过但 exe 启动即闪退"的案例。
+- 已知高危路径里，**本项目会踩到 `.resx` 反射式资源加载**（托盘图标），其余（DataGridView / RichTextBox / 动态 COM）不碰。
+
+**先纠正一条我们自己写错的结论**
+
+本文档 D1 行与 `api-analysis.md` 原先都写着"WinUI 3 的 `PublishAot` 仍属 preview"。**这条是错的，且已过期**：
+
+> **Windows App SDK 1.6 起，NativeAOT 已是官方支持的正式特性。** 微软官方公告（*So what's new with Microsoft native UX technologies*，2024-11）把 Native AOT 列为 WinAppSDK 1.6 的主要新特性之一："In WinAppSDK 1.6, WinUI adds Native Ahead-of-Time compilation support"，官方示例 Contoso Camera **启动时间减少 50%、框架包体积减少约 8 倍、自包含体积减少约 2 倍**。
+
+所以 D1 当初用来排除 WinUI 3 的**两条理由里，一条失效、一条仍成立**：
+
+| D1 的原理由 | 现状 |
+|---|---|
+| "WinUI 3 的 AOT 仍是 preview" | ❌ **失效** —— 1.6 起官方支持 |
+| "自包含体积大、冷启动 1–2s" | ✅ **仍成立且更硬** —— 第三方实测 WinUI 3 即使 AOT 冷启动仍约 **0.5–0.7 s**（WPF 约 0.7s / WinUI 3 约 0.5s，含 AOT），**超出 `NFR-1.2` 的 0.3 秒**；且自包含仍需带上 WinAppSDK |
+
+**再纠正一个默认假设：WinUI 3 根本没有托盘 API**
+
+用户问"以 WinUI 3 的推荐技术规范为准"——这个问法在本问题上**得不到答案，因为前提不存在**：
+
+> **WinUI 3 / Windows App SDK 不提供任何系统托盘（通知区域）API，这是微软有意省略的。** 想在 WinUI 3 里放托盘图标，**唯一的路仍是 `Shell_NotifyIcon` P/Invoke**（官方口径如此，社区库 `H.NotifyIcon.WinUI` / `WinUIEx` 也只是把这套 Win32 调用包了一层）。
+
+**也就是说：把"官方推荐"推到底，落到的正是"用 `Shell_NotifyIcon` 直接做托盘"这条路 —— 而选项 B 就是这条路，只不过它连 WinForms/WinUI 都不叠。**
+
+**四个选项**
+
+| 选项 | 做法 | 官方支持？ | 代价 / 收益 |
+|---|---|---|---|
+| **A. 维持 WinForms + AOT** | csproj 写 `_SuppressWinFormsTrimError=true`（**Phase 0 已临时这么配，否则构建过不去**） | ❌ **官方明确不支持**，靠内部属性逃逸 | 改动最小、当下能跑；但走灰产路径，SDK 一变就返工；`.resx` 写法必须全避开 |
+| **B. 改纯 Win32 + AOT**（推荐） | 弃用 WinForms：`Shell_NotifyIcon` 托盘 + 自绘无边框弹窗（P/Invoke） | ✅ **完全支持** —— 纯 P/Invoke 落在 NativeAOT 的受支持范围内 | 体积最小（可到个位数 MB）、冷启动最快（能守住 `NFR-1.2` 的 0.3s）；代价是面板要自己画，多几百行 Win32 代码 |
+| **C. 改 WinUI 3 + AOT** | 调度端也用 WinUI 3 | ✅ **官方支持**（WinAppSDK 1.6+） | 🔴 冷启动约 0.5–0.7s **超 NFR-1.2**；自包含体积比纯 Win32 大一两个数量级；**而且托盘仍要自己写 `Shell_NotifyIcon`** —— 为了一个只读小面板引入整套 WinAppSDK，收益为负 |
+| **D. 放弃 AOT** | WinForms 走框架依赖 | ✅ 支持 | 冷启动 1–2s、体积 60MB+、还要用户装 .NET Desktop Runtime。**与 D1 立论直接冲突，最差** |
+
+**批复结果：B ✅（2026-09-19 用户批复）**
+
+用户在得知"WinUI 3 没有托盘 API、其 AOT 其实已官方支持"这两个纠正后，选择 **B —— 纯 Win32 + AOT**。
+
+**Phase 0 已按 B 落地**：
+
+| 改动 | 内容 |
+|---|---|
+| `DelayStart.Scheduler.csproj` | **移除** `<UseWindowsForms>true</UseWindowsForms>` 与 `<_SuppressWinFormsTrimError>true</_SuppressWinFormsTrimError>`；保留 `WinExe` + `PublishAot` + `win-x64` + `SelfContained` + `StripSymbols` |
+| `Program.cs` | 模板的 WinForms 入口（`Application.Run(new Form1())`）替换为纯 Win32 入口骨架，并把五条实现铁律写进 XML 注释（WinExe / 禁 `.resx` / 禁反射与动态 COM / 通知只能用 `Shell_NotifyIcon` 气泡 / 禁止 SYSTEM 身份） |
+| 构建复验 | ✅ 去掉逃逸属性后 **0 警告 0 错误** —— 直接证明"不靠内部属性也能通过"，这是 B 相对 A 的直接收益 |
+
+**B 的论证（决策时的完整理由）**
+
+1. **A 是被官方拒绝的路。** 靠 `_SuppressWinFormsTrimError`（下划线开头 = 内部属性、不在公开 API 文档）绕过去，等于把关键路径押在一个微软随时能改名的开关上。
+2. **C 虽然官方支持，但解决不了问题还引入新问题。** 托盘 API 它没有，还是得写 `Shell_NotifyIcon`；而它带来的冷启动（0.5–0.7s）**直接违反 NFR-1.2**。既然托盘代码无论如何都得自己写，不如**只写那一层，不叠框架**。
+3. **B 的需求量本来就只有几百行。** 调度端 UI = 一个托盘图标 + 悬停一行 tooltip + 点击弹出一个只读列表。为省这几百行去背一整个 WindowsDesktop / WinAppSDK，是把负债换成了"少写代码"。
+
+**仍需做的事**：模板生成的 `Form1.cs` / `Form1.Designer.cs` 待删除（Phase 0 已在 csproj 里用 `<Compile Remove>` 临时排除，删完即可移除该块）。
+**R1 照做**：Phase 4 第一件事是写最小 demo 发布 AOT，并在真机登录场景下实测托盘、面板、失焦即关三条路径。
+
+### 6.7 ✅ D25（Phase 0 收尾，已批复 A）：模板页与导航项一并删除
+
+**问题**：`dotnet new winui-navview` 生成的 `Pages/`（HomePage / AboutPage / SettingsPage）与 `MainWindow` 的 `Home`/`About` 两个导航项，跟我们实际的页集对不上。
+
+`architecture.md` 1.4 定义的页集是 **OverviewPage / ItemsPage / DelayPage / SystemPage / LogPage / SettingsPage**。其中只有 `SettingsPage` 名字撞上了 —— 但模板那个是占位符，内容与 `design-spec.md` 第五节定义的设置页毫无关系。
+
+| 选项 | 判断 |
+|---|---|
+| **A. 现在就删**（✅ 批复） | 模板页留着只会变成 **6 个待维护的死文件 + 一个会误导人的假导航**。Phase 3 本来就要按文档从零建 6 个页面，没有复用价值 |
+| B. 留到 Phase 3 整体替换 | 省一次构建验证，代价是 Phase 3 要多做一遍"先删再建"，中间还得忍着死链导航 |
+
+**批复结果：A。**
+
+**已执行（Phase 0）**：
+
+| 改动 | 内容 |
+|---|---|
+| `Pages/` | 6 个文件全部删除（3 组 `.xaml` + `.xaml.cs`），目录一并移除 |
+| `MainWindow.xaml` | 删掉 `Home` / `About` 两个 `NavigationViewItem`；**不预置占位项** —— 点了没反应的死链比没有导航更糟；`IsSettingsVisible=False`（本产品的「设置」是 6 个顶层模块之一，不用 `NavigationView` 内置的那个）；标题由模板的 `DelayStart.App` 改为 **「延时启动管理器」**（D6） |
+| `MainWindow.xaml.cs` | 去掉 `using DelayStart.App.Pages` 与 `NavView_SelectionChanged`（页面类型已不存在，留着就是编译不过或死代码） |
+| 导航落地时机 | **Phase 3**：按 `architecture.md` 1.4 接入 6 个顶层模块，`自启动项` 下再按来源分子项 |
+
+### 6.8 ⏳ D26（Phase 0 新发现，待决策）：`dotnet test` 跑不了，测试命令怎么定
+
+**事实（Phase 0 实测，不是推断）**
+
+| 命令 | 结果 |
+|---|---|
+| `dotnet run --project tests/DelayStart.Core.Tests -c Release` | ✅ `Total: 2, Errors: 0, Failed: 0`，退出码 **0** |
+| `dotnet test tests/DelayStart.Core.Tests` | ❌ `运行了零个测试`，退出码 **5**（MTP 的 `ZeroTests`） |
+
+**已排除的可能**（逐一试过，都不是原因）：
+
+- ~~漏了 `IsTestProject=true`~~ —— 加上无效
+- ~~参数没转发~~ —— `-- --list-tests` 传不进去，但也没有报"未知选项"
+- ~~包版本冲突~~ —— 解析结果是 `Microsoft.Testing.Platform` **2.4.0** + `xunit.v3.mtp-v2` **4.0.1**，两侧都是 MTP v2，对齐
+
+**而测试发现本身是好的**：同一个产物用 xUnit 自带运行器枚举一切正常（`-list tests` 有输出，两个用例都在）。
+所以问题定位在 **`xunit.v3.mtp-v2` 4.0.1 与 .NET SDK 10.0.401 的 `dotnet test` 集成这一段**，不是我们的用法错了。
+
+**选项**
+
+| 选项 | 做法 | 代价 / 收益 |
+|---|---|---|
+| **A. 只改命令**（✅ 已生效，AI 建议） | 规范命令定为 `dotnet run --project tests/DelayStart.Core.Tests -c Release` | **零改动、已验证**。xUnit v3 的测试项目本来就是可执行程序，独立跑 stdout 直读、退出码语义明确；CI 里换成这条命令即可 |
+| B. 补 VSTest 适配器 | 加 `xunit.runner.visualstudio` + 从 `global.json` 去掉 `test.runner: Microsoft.Testing.Platform` | 能退回 VSTest 路径，**VS 的测试资源管理器也能用**；代价是多一个包、且放弃了 MTP |
+| C. 换包 | 从 `xunit.v3.mtp-v2` 换成不带 `-mtp-v2` 变体的 `xunit.v3` | 有可能直接修好 `dotnet test`；但要重新验证，属于版本轮盘 |
+
+**AI 建议 A**，理由：A 今天就能用且已验证；B / C 都是优化，收益是"用上更顺手的命令"，**对产品功能零影响**。
+**不阻塞 Phase 1** —— 测试照写，只是跑的命令不同。
+
+**⚠️ 顺带记一笔对 VS 工作流的影响**：目前**在 VS 的测试资源管理器里看不到、也点不动这些测试**
+（它走 VSTest 适配器，本项目没引用；而 MTP 路径又不通）。要用 VS 跑测试就得选 B。
 
 ---
 

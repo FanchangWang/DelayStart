@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>DelayStart.Scheduler</RootNamespace>
+    <AssemblyName>DelayStart.Scheduler</AssemblyName>
+
+    <!--
+      ★ OutputType 必须是 WinExe（不是 Exe）——用 Exe 会在登录瞬间闪一个控制台黑框。
+      AOT 与体积约束见 docs/architecture.md 8.1；发布配置见 docs/build-and-test.md 6.3。
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <StripSymbols>true</StripSymbols>
+
+    <!--
+      ★ D24 批复 B（2026-09-19）：调度端 UI 走**纯 Win32**，不引用任何 UI 框架。
+
+      坚决不要加 <UseWindowsForms>true</UseWindowsForms>。原因（docs/architecture.md R11）：
+        · WinForms + NativeAOT 是**官方不支持**的组合。微软 *Known trimming incompatibilities*
+          把 WinForms/WPF 列为 trimming 不支持，根因是 Windows 的 Native AOT 没有 built-in COM，
+          而 WinForms 对 built-in COM marshalling 依赖很重。
+        · SDK 会主动拦截：NETSDK1175（Microsoft.NET.RuntimeIdentifierInference.targets:305）。
+        · 唯一放行手段是内部属性 `_SuppressWinFormsTrimError`（下划线开头 = 不在公开 API 文档中），
+          等于把关键路径押在一个微软随时能改名的开关上。
+        · 而 WinUI 3 也不是出路：它**根本没有托盘 API**（微软有意省略），托盘那一层照样得自己写
+          Shell_NotifyIcon，还要额外背上 WinAppSDK 与 0.5–0.7s 的冷启动（超 NFR-1.2 的 0.3s）。
+
+      托盘与面板的实现要求见 docs/scheduler-design.md；Phase 4 落地。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>DelayStart.Core</RootNamespace>
+
+    <!--
+      ★ 架构护栏（docs/architecture.md 1.1）。
+      开启后编译器在构建期报出 AOT 不兼容的 API 使用（IL2026 / IL3050）。
+      Core 被 NativeAOT 的调度端引用，**绝不能**混入 COM 互操作或反射代码——
+      这类代码属于 DelayStart.Management。
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>

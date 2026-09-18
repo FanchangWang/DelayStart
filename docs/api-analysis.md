@@ -239,7 +239,8 @@ remaining = item.DelaySeconds - (now - 登录后的整体开始时刻)
 | 项 | demo (WinForms) | 新方案 (WinUI 3) | 影响 |
 |---|---|---|---|
 | 管理端 UI | WinForms + DataGridView | WinUI 3 + NavigationView + ListView | 列表虚拟化、行内按钮、卡片式行需要重做 |
-| 管理端提权 | `app.manifest requireAdministrator` | 同样需要；WinUI 3 unpackaged 支持 manifest | 需确认 `Package.appxmanifest` vs `app.manifest` 的选择 |
+| 管理端提权 | `app.manifest requireAdministrator` | **同样全程提权（D20 已批复）**。unpackaged 场景用 `app.manifest`（csproj 里 `<ApplicationManifest>app.manifest</ApplicationManifest>`）；`Package.appxmanifest` 只在打包场景需要 | ⚠️ **风险 R9**：`WindowsAppSDKSelfContained=true` 时 manifest 的 `requestedExecutionLevel` 可能被忽略（社区在 WinAppSDK 1.0–1.2 时期报告过）。Phase 0 必须实测，见 `architecture.md` R9 |
+| 提权窗口的文件拖放 | N/A（demo 未做拖放） | UIPI 会拦掉 explorer → 提权进程的拖放（OLE 拖放基本无解） | ⚠️ **风险 R10**：主路径必须用 `[浏览…]` 按钮，拖放只作增强 |
 | 调度端 | WinForms + `PublishAot`（约 6 MB） | **保持轻量独立进程** | ✅ 已决策：WinUI 3 的 `PublishAot` 仍属 preview，且自包含体积大、冷启动 1–2 s，登录瞬间执行不可接受 |
 | 配置序列化 | `System.Text.Json` 反射模式 | 用 **source generator**（`JsonSerializerContext`） | AOT 友好；WinUI 3 端也需要，避免裁剪问题 |
 | `Microsoft.Win32.TaskScheduler` | 已用 | 继续用（注意与 `System.Threading.Tasks.Task` 的命名冲突） | 该包为 netstandard，WinUI 3 可用 |

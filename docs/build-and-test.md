@@ -60,6 +60,68 @@ DelayStart.slnx                      # XML 格式解决方案
 
 **解决方件格式说明**：`.slnx` 需要 .NET 9+ SDK 与 VS 17.14+。本机 SDK 10.0.401 / VS 18 满足。**若 VS 打开报错，回退为 `.sln`**（见 `architecture.md` R8）。
 
+### 2.1 创建骨架：全部用 `dotnet new`
+
+**不手写 csproj，也不从 `demo/` 复制**。`demo/` 只是 API 与注册表用法的参考（见 `api-analysis.md`），不是项目范例。
+
+```bash
+# ① 安装模板包（一次性，装到用户级模板缓存）
+dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates
+dotnet new install xunit.v3.templates
+
+# ② 解决方案与仓库级配置文件
+dotnet new sln -n DelayStart -f slnx
+dotnet new globaljson --sdk-version 10.0.401 --roll-forward latestFeature
+dotnet new editorconfig
+dotnet new buildprops        # Directory.Build.props
+dotnet new packagesprops     # Directory.Packages.props
+
+# ③ 项目
+dotnet new classlib -o src/DelayStart.Core       -f net10.0
+dotnet new classlib -o src/DelayStart.Management -f net10.0
+dotnet new winui-navview -o src/DelayStart.App   -n DelayStart.App -tfm net10.0
+dotnet new winforms -o src/DelayStart.Scheduler  -n DelayStart.Scheduler
+dotnet new xunit3 -o tests/DelayStart.Core.Tests -f net10.0
+
+# ④ 加入解决方案
+dotnet sln DelayStart.slnx add ^
+  src/DelayStart.Core/DelayStart.Core.csproj ^
+  src/DelayStart.Management/DelayStart.Management.csproj ^
+  src/DelayStart.App/DelayStart.App.csproj ^
+  src/DelayStart.Scheduler/DelayStart.Scheduler.csproj ^
+  tests/DelayStart.Core.Tests/DelayStart.Core.Tests.csproj
+```
+
+> `.gitignore` 已存在且已定制，**不要再跑 `dotnet new gitignore`**（会覆盖，需 `--force` 才生效）。
+> 生成后各项目的 TFM / 属性按 `architecture.md` 1.3 覆盖，公共属性集中到 `Directory.Build.props`。
+
+**模板事实（本机实测，2026-09-19）**：
+
+| 项 | 实测值 |
+|---|---|
+| WinUI 模板包 | `Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`，版本 **`0.0.6-alpha`**（发布者 Microsoft） |
+| 可用 WinUI 模板 | `winui`(Blank App) / `winui-navview` / `winui-mvvm` / `winui-lib` / `winui-unittest` 等 |
+| 模板默认 `Microsoft.WindowsAppSDK` | **`1.8.260317003`** |
+| 模板默认 WindowsAppSDK / 平台版本 | TFM `net10.0`，target platform min 默认 `10.0.26100.0` |
+| xUnit 模板包 | `xunit.v3.templates`，短名称 **`xunit3`** |
+| `dotnet new sln` 的 `--format` 默认值 | **`slnx`**（.NET 10 起） |
+
+**为什么选 `winui-navview` 而不是 `winui`**：管理端就是左侧 NavigationView + 6 个顶层模块（见 `design-spec.md` 第三节），navview 模板直接给出可运行的导航骨架。`winui-mvvm` 会带入 CommunityToolkit.Mvvm 与示例代码，与 `architecture.md` 5.2 的 MVVM 约定不完全一致，不采用。
+
+**⚠️ 关键限制：所有 WinUI 3 模板生成的都是 MSIX 打包工程，没有 unpackaged 开关。** 本项目要 unpackaged（D8 免安装 zip），因此生成后必须手工改造：
+
+| 改造项 | 内容 |
+|---|---|
+| csproj 改 | 加 `<WindowsPackageType>None</WindowsPackageType>`、`<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>`、`<ApplicationManifest>app.manifest</ApplicationManifest>` |
+| csproj 删 | `<EnableMsixTooling>`、`<PublishProfile>`、`AppxPackage*` 系列属性 |
+| csproj 删 | `Microsoft.Windows.SDK.BuildTools.WinApp` 包引用（它是为"打包应用的 `dotnet run`"服务的，unpackaged 用不上） |
+| 文件删 | `Package.appxmanifest`；`Assets/` 只保留实际用作图标的文件 |
+| 文件增 | `app.manifest`：`requestedExecutionLevel level="requireAdministrator"` + DPI 感知声明（见 `architecture.md` 1.4） |
+
+> **具体删除清单在 Phase 0 以实际生成物核对后固化**，此处不预先拍脑袋。
+
+**模板包是 alpha 版 —— 这是事实，且只影响"生成一次"这一步**：产物是普通文本文件，之后与模板无耦合。若 Phase 0 发现生成物不可用，降级为**手写 csproj**（WinUI 3 unpackaged 的 csproj 只有约 30 行属性，见 `architecture.md` 1.3）。
+
 ---
 
 ## 三、构建
@@ -110,18 +172,44 @@ C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuil
 
 ## 四、测试
 
-### 4.1 框架
+### 4.1 框架：xUnit v3（D21）
 
-**xUnit v3**（`xunit.v3`）+ `Microsoft.NET.Test.Sdk` + `coverlet.collector`。
+**选型结论**：`xunit.v3`（MTP 版包 `xunit.v3.mtp-v2`）。对应决策点 **D21**（✅ 已批复）。
 
-选它的理由：本项目测试大量依赖 `[Theory]` 覆盖解析/时序的边界值，xUnit 的数据驱动写法最直接；v3 对 .NET 10 与 AOT 周边工具链支持最好。
+```bash
+# 主路径：安装 v3 模板（一次性），然后创建测试项目
+dotnet new install xunit.v3.templates
+dotnet new xunit3 -o tests/DelayStart.Core.Tests -f net10.0
 
-> 该选型对应决策点 **D21**（⏳ 待批复）。
+# 降级路径：若模板安装失败（网络/源问题），用 SDK 内置模板
+dotnet new xunit -o tests/DelayStart.Core.Tests -f net10.0
+```
+
+> **创建后必须手改两处**：`<TargetFramework>` 从 `net10.0` 改为 **`net10.0-windows`**（与 `Core` / `Management` 对齐）；删掉模板生成的 `UnitTest1.cs`。
+>
+> 走降级路径时，csproj 会多出 `xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk` 走 VSTest 老路径。**测试代码本身零改动**——`[Fact]` / `[Theory]` / `Assert` 在两个版本间完全一致。
+
+**为什么是 xUnit v3，而不是"微软推荐"**：微软对 WinUI 3 测试**没有单一推荐框架**，官方文档把 MSTest / NUnit / xUnit 三者并列。选择依据是技术性的：
+
+| 框架 | 结论 | 理由 |
+|---|---|---|
+| **xUnit v3** | ✅ 选它 | 单一 NuGet 包、原生 MTP、`OutputType=Exe` 可独立运行、`Assert.Skip` / `Assert.SkipWhen` 支持条件跳过、无版本冲突 |
+| xUnit v2 | 🟡 降级备选 | SDK 内置可用，但需额外的 VSTest 适配器包 |
+| NUnit | ❌ 排除 | .NET 10 SDK 下已知缺陷：`NUnit3TestAdapter` 5.1.0 与 SDK 注入的 `Microsoft.Testing.Platform` 版本冲突，报 **CS1705** 且不给出可诊断的包依赖，必须手动 pin 两个平台包才能编译 |
+| MSTest | ❌ 排除 | 独有价值是 `[UITestMethod]`（XAML 线程测试），**第一版不做 UI 自动化测试**，用不上 |
+
+完整论证见 `design-spec.md` 6.3。
+
+**测试项目的 TFM 只需 `net10.0-windows`**——**不需要** `net10.0-windows10.0.19041.0`，**不需要** `WindowsAppSDKSelfContained`，**不需要**预装 Windows App Runtime，**也不需要** `RuntimeIdentifiers`。
+
+> 微软文档 *Test apps built with the Windows App SDK and WinUI 3* 里那套配置要求，前提是**测试项目直接引用 WinUI 3 项目**。本项目的测试只引用普通类库，所以不适用。**任何让测试项目引用 `DelayStart.App` 的改动都会把这些包袱带回来——不要这么做**（见 `architecture.md` 1.3）。
+
+**【必须】** 测试项目以**普通权限**运行即可。不得要求管理员权限——单元测试不碰真实系统。若某个测试必须提权才能跑，说明它不该是单元测试，应移到手工验证清单。
 
 ### 4.2 运行
 
 ```bash
-# 全部测试
+# 全部测试（走 Microsoft Testing Platform）
 dotnet test DelayStart.slnx
 
 # 带覆盖率
@@ -130,21 +218,28 @@ dotnet test DelayStart.slnx --collect:"XPlat Code Coverage"
 # 单跑某个项目 / 某个测试
 dotnet test tests/DelayStart.Core.Tests
 dotnet test tests/DelayStart.Core.Tests --filter "FullyQualifiedName~DelayCalculator"
+
+# xUnit v3 是 OutputType=Exe，也可直接跑（输出更干净，退出码可靠）
+dotnet run --project tests/DelayStart.Core.Tests
 ```
 
-**【必须】** 提交前 `dotnet test` 必须全绿。
+> **AI 与 CI 场景优先用 `dotnet run`**：xUnit v3 的独立可执行模式下，stdout 直接可读、退出码语义明确，不需要解析 VSTest 的输出格式。
+
+**【必须】** 提交前 `dotnet test`（或 `dotnet run --project tests/DelayStart.Core.Tests`）必须全绿。
 
 ### 4.3 测试范围
 
-| 必测 | 不测（真机手工验证） |
+| 层 | 必测 |
 |---|---|
-| `DelayCalculator` 时序计算 | 注册表实际读写 |
-| `ItemKeyBuilder` 主键生成 | 计划任务实际创建 |
-| `CommandLineService` 路径/参数解析 | 进程实际启动与降权 |
-| `LaunchResultEvaluator` 成功判定三分支 | UI 渲染与交互 |
-| `ConfigService` 加载 / 迁移 / 损坏恢复 | 托盘图标与通知 |
-| `FailureStreakService` 连续失败计数 | |
-| `StartupSortComparer` 排序稳定性 | |
+| `Core` | `DelayCalculator` 时序计算（含 `remaining <= 0` 过期分支） |
+| `Core` | `ItemKeyBuilder` 主键生成与稳定性 |
+| `Core` | `CommandLineService` 路径/参数解析（引号、空格、环境变量） |
+| `Core` | `LaunchResultEvaluator` 成功判定三分支 |
+| `Core` | `ConfigService` 加载 / 迁移 / 损坏恢复 |
+| `Core` | `StartupSortComparer` 排序稳定性 |
+| `Management` | 连续失败计数（纯函数部分，给定 `RunRecord` 列表 → 连续失败次数） |
+
+**不测（真机手工验证，见第九节）**：注册表实际读写、计划任务实际创建、进程实际启动与降权、UI 渲染与交互、托盘图标与通知、提权 manifest 是否生效。
 
 **【必须】** 单元测试中**禁止**触碰真实注册表、真实文件、真实进程。所有系统交互通过 `IClock` / `IProcessLauncher` / `IAppConfigStore` 等接口注入假实现（见 `coding-standards.md` 十四）。
 
@@ -154,17 +249,29 @@ dotnet test tests/DelayStart.Core.Tests --filter "FullyQualifiedName~DelayCalcul
 
 ### 5.1 管理端
 
+管理端是**全程提权**的应用（D20），这会影响调试方式。
+
 ```bash
+# 直接运行构建产物（会弹 UAC，这是预期行为）
+src/DelayStart.App/bin/Debug/net10.0-windows10.0.19041.0/win-x64/DelayStart.App.exe
+
+# dotnet run 也可用，但因提权后进程脱离父控制台，stdout 会分离，不便于看日志
 dotnet run --project src/DelayStart.App
 ```
 
 命令行参数（用于验证通知跳转链路）：
 
 ```bash
-dotnet run --project src/DelayStart.App -- --goto-log --run=20260919-084112
+src/DelayStart.App/bin/Debug/net10.0-windows10.0.19041.0/win-x64/DelayStart.App.exe --goto-log --run=20260919-084112
 ```
 
+**【必须】** 开发期调试管理端的正确做法：**以管理员身份运行 Visual Studio**，然后 F5 启动。否则每次 F5 都会弹一次 UAC。
+
+> **提权状态下 VS 的"附加到进程"仍可用**，但**热重载（Hot Reload）不可用**——这是提权调试的固有代价，接受它。
+
 > WinUI 3 unpackaged 运行需要 Windows App Runtime。本项目设为 `WindowsAppSDKSelfContained=true`，因此**不依赖系统预装的运行时而直接可跑**。代价是发布体积增大（见第七节）。
+>
+> **但自包含 + 提权有冲突风险（R9）**，Phase 0 必须先验证。若不通过，按 `architecture.md` R9 的三条降级路径调整（首选去掉自包含改为框架依赖）。
 
 ### 5.2 调度端
 
@@ -327,6 +434,16 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 
 ### 9.4 权限与身份
 
+**管理端（D20）**
+
+- [ ] 双击管理端 exe → **弹出 UAC**（NFR-3.1）
+- [ ] UAC 选「否」→ 提示「本程序需要管理员权限才能管理自启动项」后**退出**，不进入主界面（E17 / NFR-3.6）
+- [ ] 手动添加 → `[浏览…]` 能正常打开文件对话框并选中 exe（提权下的文件选择，`InitializeWithWindow` 生效）
+- [ ] 从资源管理器拖文件到「手动添加」拖放区 → **记录结果**（R10）。若不通，确认拖放区已降级为纯按钮且不影响完成添加
+- [ ] 「以其他用户身份运行」→ 检测到配置目录不匹配时给出提示（E18 / NFR-3.8）
+
+**被接管的条目**
+
 - [ ] 「管理员」身份的条目启动时**不弹 UAC**
 - [ ] 「普通用户」身份的条目启动后，在任务管理器中确认其**不是以管理员身份**运行
 - [ ] 手动把降权开关关掉 → 该条目以管理员身份启动（验证开关生效）
@@ -427,7 +544,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 | 托盘图标显示但糊 | 用了 16×16 图标 | 提供 16/20/24/32 多尺寸 `.ico` |
 | 列表里图标模糊（高 DPI） | 用了 `SHGetFileInfo` 的 32×32 | 改 `IShellItemImageFactory` 按 DPI 取（见 `architecture.md` 3.4） |
 | 气泡通知不出现 | 通知被系统"专注助手"拦截，或托盘图标未创建 | 检查专注助手；确认通知前托盘图标已创建 |
-| 计划任务创建失败 | 无管理员权限 | 提示提权入口（见 `architecture.md` R6） |
+| 计划任务创建失败 | ACL / 组策略拒绝 | 指出具体条目，提示该项受系统策略保护（见 `architecture.md` R6） |
 | 接管后某程序仍是开机自启 | `StartupApproved` 键名不匹配 | 检查三级回退逻辑（坑 1） |
 | WOW6432Node 项禁用无效且无报错 | 标记写到了 `Run` 而不是 `Run32` | 见 `api-analysis.md` 坑 2 |
 | 恢复后程序还是不自启 | 恢复时 hive 判断错误（静默失效） | 检查是否用了显式 `scope` 枚举（坑 5） |

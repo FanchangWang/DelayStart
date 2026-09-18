@@ -75,11 +75,55 @@ DelayStart/
 |---|---|---|
 | `DelayStart.Core` | `net10.0-windows` | `IsAotCompatible=true`、`Nullable=enable` |
 | `DelayStart.Management` | `net10.0-windows` | 普通库 |
-| `DelayStart.App` | `net10.0-windows10.0.19041.0` | `UseWinUI=true`、`WindowsPackageType=None`（unpackaged）、自包含 |
+| `DelayStart.App` | `net10.0-windows10.0.19041.0` | `UseWinUI=true`、`WindowsPackageType=None`（unpackaged）、`WindowsAppSDKSelfContained=true`、`ApplicationManifest=app.manifest` |
 | `DelayStart.Scheduler` | `net10.0-windows` | `OutputType=WinExe`、`PublishAot=true`、`UseWindowsForms=true` |
-| `DelayStart.Core.Tests` | `net10.0-windows` | `IsPackable=false` |
+| `DelayStart.Core.Tests` | `net10.0-windows` | `IsPackable=false`、`OutputType=Exe`（xUnit v3 要求） |
 
-> 所有版本号以创建项目时的 NuGet / SDK 最新稳定版为准写入 `Directory.Packages.props`，不照搬 demo 的版本下限。
+> 所有版本号以创建项目时的最新稳定版为准写入 `Directory.Packages.props`，不照搬 demo 的版本下限。
+
+**版本基线（本机实测，2026-09-19）**：
+
+| 包 | 版本 | 说明 |
+|---|---|---|
+| `Microsoft.WindowsAppSDK` | **`1.8.260317003`** | WinUI 3 模板的默认值，CPM 中固定 |
+| `Microsoft.Windows.SDK.BuildTools` | **`10.0.26100.7705`** | 同上 |
+| `xunit.v3` | 创建测试项目时取最新稳定版 | 见 `build-and-test.md` 4.1 |
+
+**项目创建一律走 `dotnet new`**，命令清单与模板实测事实见 **`build-and-test.md` 2.1**。其中一条硬限制必须记住：**WinUI 3 模板只生成 MSIX 打包工程，没有 unpackaged 开关**，生成后需按 2.1 的改造清单转成 unpackaged（本项目 D8 要求免安装 zip）。
+
+**关于测试项目的 TFM**：微软官方文档 *Test apps built with the Windows App SDK and WinUI 3* 要求"测试项目的 TFM 必须与 WinUI 3 项目匹配、加 `WindowsAppSDKSelfContained`、机器上要装 Windows App Runtime"——**本项目不适用这套配置**。
+
+原因是那套要求的前提是**测试项目直接引用 WinUI 3 项目**。本项目的测试项目只引用 `Core` / `Management`（均为普通类库，无 WinUI 依赖），因此：
+
+| 项 | 微软 WinUI 3 测试项目要求 | 本项目 |
+|---|---|---|
+| TFM | `net10.0-windows10.0.19041.0` | `net10.0-windows` |
+| `WindowsAppSDKSelfContained` | 需要 | **不需要** |
+| 预装 Windows App Runtime | 需要 | **不需要** |
+| `RuntimeIdentifiers` 多 RID | 需要 | **不需要** |
+
+**这是 1.1 节分层策略的额外收益**：UI 与逻辑彻底解耦后，逻辑测试不必背 WindowsAppSDK 的包袱，跑起来是秒级、无环境依赖的。反过来说，**任何试图让测试项目引用 `DelayStart.App` 的改动，都会立刻把这些包袱全部带回来**——不要这么做。
+
+### 1.4 权限模型（D20）
+
+**结论：两个进程全程以管理员权限运行。**
+
+| 进程 | 权限 | 实现 | 理由 |
+|---|---|---|---|
+| `DelayStart.App` | **必须 elevated** | `app.manifest` → `requestedExecutionLevel level="requireAdministrator" uiAccess="false"` | 核心链路 100% 需要：注册调度器计划任务、HKLM 三项软禁用、系统启动文件夹、系统级计划任务、服务 `delayed-auto` |
+| `DelayStart.Scheduler` | **必须 elevated** | 计划任务 `RunLevel=Highest` | 免 UAC 启动"管理员身份"的托管程序 |
+
+**原「按需提权」建议已被否**，完整论证见 `design-spec.md` 6.2。核心判据：**只要有一个必需功能必须提权，按需提权就省不掉那次 UAC**，剩下的只是纯粹的复杂度。
+
+**必须配套实现的三件事：**
+
+1. **UAC 被拒 → 退出，不降级。** 启动时检测 `IsInRole(WindowsBuiltInRole.Administrator)`；若为 false，显示说明后退出（对应 `requirements.md` E17）。降级运行会造成"用户以为禁用成功、实际静默失败"的最坏状态。
+2. **提权窗口的拖放**（详见 R10）。主路径是 `[浏览…]` 按钮，**不依赖拖放**；拖放作为增强能力尝试补上。
+3. **拒绝「以其他用户身份运行」**（NFR-3.8 / E18）。该模式下 `%LOCALAPPDATA%` 指向另一账户，配置读不到。
+
+> **实现注意**：`Environment.GetFolderPath(SpecialFolder.LocalApplicationData)` 在 **UAC 提权**（同一用户 + 管理员令牌）场景下是正确的；只有"以其他用户身份运行"才会错。这两者必须区分开，不要因为担心前者而误封后者。
+
+**App 提权的已知风险（R9）**：社区报告在 `WindowsAppSDKSelfContained=true` 时，`app.manifest` 里的 `requestedExecutionLevel` 可能被忽略（不弹 UAC、也不提权）。**Phase 0 必须实测**，见 R9 的三条降级路径。
 
 ---
 
@@ -566,7 +610,7 @@ DelayStart.Scheduler/
 | 层 | 策略 |
 |---|---|
 | `Core` 纯逻辑 | 参数非法 → `ArgumentException`；状态非法 → `InvalidOperationException` |
-| 系统操作（注册表/任务/COM） | 捕获 `UnauthorizedAccessException` / `SecurityException` → 包装为 `StartupOperationException`（带"需要管理员权限"语义） |
+| 系统操作（注册表/任务/COM） | 捕获 `UnauthorizedAccessException` / `SecurityException` → 包装为 `StartupOperationException`（`StartupFailureReason.AccessDenied`，消息带**具体条目标识**）。管理端已全程提权（D20），此异常正常只来自 ACL / 组策略保护项，**不是**"需要提权" |
 | `ScanService` | 每个 Source 单独 try/catch，失败项记为"读取失败"并进日志，**不向上抛** |
 | 调度引擎 | 每条目单独 try/catch，失败记入 `RunItemResult`，不中断后续 |
 | UI | 顶层 `UnhandledException` 处理器：写日志 + `InfoBar` 提示，不静默崩 |
@@ -597,9 +641,33 @@ DelayStart.Scheduler/
 | **R3** | WinUI 3 unpackaged 下 `app.manifest` 与 `Package.appxmanifest` 的选择 | 提权与 DPI 声明是否生效 | 建项目时确认；unpackaged 用 `app.manifest` | Phase 1 |
 | **R4** | `IShellItemImageFactory` 取到的 `HBITMAP` 转 WinUI `ImageSource` 的生命周期 | 图标不显示或 GDI 句柄泄漏 | 小规模实测 + `DeleteObject` | Phase 3 |
 | **R5** | Core 层引入 AOT 不兼容 API | 调度端发布失败 | `IsAotCompatible=true` 让编译器在构建期报错 | 持续 |
-| **R6** | 计划任务创建需要管理员权限 | 首次接管时弹 UAC（预期行为，但需明确的失败路径） | 无权限时给出明确提示与提权入口 | Phase 2 |
+| **R6** | 计划任务创建/修改被 ACL 或组策略拒绝 | 接管链路中断 | 管理端已全程提权（D20），正常不会因权限失败。仍需捕获 `UnauthorizedAccessException` 并指出**具体条目** | Phase 2 |
 | **R7** | 高 DPI 下时间轴与列表行错位 | 界面不可用 | 100/150/200% 三档实测 | Phase 3 / 5 |
-| **R8** | `DelayStart.slnx` 与 WinUI 3 项目兼容性 | 无法打开解决方案 | 若 VS 2026 报错则回退 `.sln` | Phase 1 |
+| **R8** | `DelayStart.slnx` 与 WinUI 3 项目兼容性 | 无法打开解决方案 | 若 VS 2026 报错则回退 `.sln` | Phase 0 |
+| **R9** | 🔴 **`WindowsAppSDKSelfContained=true` 时 `requireAdministrator` 可能被忽略** | **管理端不弹 UAC 也不提权 → D20 的整个权限模型失效** | **Phase 0 第一件事就是实测**：建最小 WinUI 3 unpackaged 项目 + 自包含 + manifest 提权，Release 下双击 exe，确认弹出 UAC 且 `WindowsPrincipal.IsInRole(Administrator)` 为 true。**三条降级路径见下方** | **Phase 0** |
+| **R10** | 🟡 提权窗口接收不到资源管理器的拖放（UIPI） | 「手动添加」的拖放区失效 | 主路径 `[浏览…]` 按钮（`FileOpenPicker` + `InitializeWithWindow`）必须 100% 可用，**不依赖拖放**；拖放作为增强：`ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES/MSGFLT_ALLOW)` + `DragAcceptFiles` + 子类化窗口处理 `WM_DROPFILES`。**不通则拖放区降级为纯按钮，不接受"等待修复"** | Phase 3 |
+
+#### R9 详解：这是本轮唯一可能推翻 D20 的技术风险
+
+**现象**：多个社区报告（StackOverflow 75175782、WindowsAppSDK Discussion #3038）指出，WinUI 3 unpackaged 应用在 `WindowsAppSDKSelfContained=true` 时，`app.manifest` 的 `requestedExecutionLevel` 可能不生效——exe 图标上没有盾牌、双击不弹 UAC、进程仍是中等完整性。其中有分析认为：**自包含模式生成"免注册 WinRT 条目"的过程可能错误地写入了信任信息**，从而吞掉了 manifest 的提权声明。
+
+**背景**：WinAppSDK **1.1 起已官方移除**"不能以管理员身份运行"的限制（官方博客原文：*Development, administration, and system management tools can now leverage the full power of Windows App SDK*）。所以**问题不是"不支持提权"，而是"自包含模式可能吞掉 manifest 声明"**。这些报告多来自 2022 年（WinAppSDK 1.0–1.2），当前版本是否已修复**必须实测，不能靠推断**。
+
+**Phase 0 实测步骤**（三条路，按优先级试）：
+
+1. 建最小 WinUI 3 unpackaged + 自包含项目，`app.manifest` 写 `requireAdministrator`
+2. **Release 构建**，**在 VS 之外直接双击 exe**（在 VS 里调试会继承 VS 的权限，测不准）
+3. 判定：出现 UAC 盾牌 / 弹 UAC 对话框 / `IsInRole(Administrator) == true` → **通过**
+
+**三条降级路径**（按推荐顺序）：
+
+| 路径 | 做法 | 代价 |
+|---|---|---|
+| **① 去掉自包含**（社区验证最有效） | `WindowsAppSDKSelfContained=false`，改为框架依赖 | 用户机器需预装 Windows App Runtime。**本机已装**（`C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime*` 已确认存在）；分发时需处理（D8 的 Inno Setup 阶段可带上运行时安装） |
+| **② 运行时自提权** | manifest 保持 `asInvoker`，在 `App.OnLaunched` 最早期检测权限，不足则 `Process.Start(new ProcessStartInfo { FileName = exePath, Verb = "runas", UseShellExecute = true })` 重启自己，然后退出当前实例 | 多一次进程启动；**必须传参防止无限重启循环**（如加 `--elevated-retry` 标记位，失败则直接退出） |
+| **③ 外部启动器** | 新增极小 AOT 控制台/窗口 exe 作为 `DelayStart.Launcher.exe`，manifest 标 `requireAdministrator`，只负责以提升权限拉起 `DelayStart.App.exe` | 多一个 exe 要维护；快捷方式指向 launcher |
+
+> **R9 不通过就不进入 Phase 1。** 这是唯一会推翻已批复决策（D20）的风险，必须在写第一行业务代码前解决。
 
 ---
 
@@ -607,10 +675,10 @@ DelayStart.Scheduler/
 
 | Phase | 内容 | 出口条件 |
 |---|---|---|
-| **0** | 环境与骨架：创建 4 个项目 + 测试项目、`Directory.Build.props`、CPM、`.editorconfig` | `dotnet build` 全绿；R2 / R3 / R8 已确认 |
+| **0** | 环境与骨架：`dotnet new` 生成 4 个项目 + 测试项目（`build-and-test.md` 2.1）、`Directory.Build.props`、CPM、`.editorconfig`；**并验证 R9**（自包含 + manifest 提权） | `dotnet build` 全绿；R2 / R3 / R8 已确认；**R9 有明确结论** |
 | **1** | `Core` 层：模型、`ConfigService`、`DelayCalculator`、`ItemKeyBuilder`、`CommandLineService`、`LaunchResultEvaluator` + 单元测试 | 单元测试全绿 |
 | **2** | `Management` 层：4 个 Source 的扫描 + 软禁用 + 恢复、`TakeoverService`、`TaskRegistrationService` | 注册表导出对比验证"零数据损坏" |
-| **3** | 管理端骨架：导航 + 自启动项页 + 延时启动页，跑通"扫描 → 接管 → 移除"单链路 | 端到端手工验证通过 |
+| **3** | 管理端骨架：导航 + 自启动项页 + 延时启动页，跑通"扫描 → 接管 → 移除"单链路；验证 R10（提权下的文件选择/拖放） | 端到端手工验证通过；「手动添加」的 `[浏览…]` 路径可用 |
 | **4** | 调度端：先验 R1，再做引擎 + 托盘 + 通知 + 状态文件 | 重启实测延时准确 |
 | **5** | 总览 / 日志 / 设置 / 系统启动项页 | 全部页面文案对齐 `design-spec.md` |
 | **6** | 模拟调度、打包、真机全面验收 | `requirements.md` 第九节全部勾选 |

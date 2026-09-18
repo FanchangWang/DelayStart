@@ -183,17 +183,18 @@ catch (Exception ex)
 }
 ```
 
-**【必须】** 系统权限类异常统一转换为语义异常：
+**【必须】** 系统访问被拒类异常统一转换为语义异常。**注意语义已经变了**：管理端全程提权（D20），因此 `UnauthorizedAccessException` **不再等于"需要提权"**，而是"该项受 ACL / 组策略保护"：
 
 ```csharp
 catch (UnauthorizedAccessException ex)
 {
     throw new StartupOperationException(
-        StartupFailureReason.NeedElevation, "修改该项需要管理员权限", ex);
+        StartupFailureReason.AccessDenied, $"访问被拒绝：{entry.Id}", ex);
 }
 ```
 
-让 UI 层能据此显示"需要管理员权限"而不是一句"操作失败"。
+- 异常消息**必须带具体条目标识**。提权状态下还遇到拒绝访问属于异常情况，需要可诊断（对应 `E2`）
+- UI 据此显示"该项受系统策略保护，已跳过"，而不是笼统的"操作失败"，也**不要**提示用户"以管理员身份运行"——他已经在管理员身份下了
 
 **【必须】** `ScanService` 与调度引擎中的**单条目失败绝不向外抛**——记入结果对象后继续处理下一条（FR-1.4 / FR-5.5）。
 
@@ -315,6 +316,40 @@ public sealed partial class ItemsViewModel : ObservableObject
 
 **【建议】** 资源字典按用途拆分（`Colors.xaml` / `Styles.xaml` / `Icons.xaml`），在 `App.xaml` 合并。
 
+### 12.1 提权带来的额外约束（D20）
+
+管理端**全程以管理员权限运行**，这会让一部分 WinUI 3 交互行为发生变化，必须按下面的方式写。
+
+**【必须】** 启动时检查权限，不足则提示后**退出**，绝不降级运行（`NFR-3.6` / `E17`）：
+
+```csharp
+using var identity = WindowsIdentity.GetCurrent();
+var isAdmin = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+if (!isAdmin)
+{
+    // 显示「本程序需要管理员权限才能管理自启动项」→ 退出
+}
+```
+
+> 这个检查是可靠的：**未提权的管理员账户**，其令牌里的 Administrators 组被标记为 `SE_GROUP_USE_FOR_DENY_ONLY`，`IsInRole` 会返回 `false`；提权后才返回 `true`。
+
+**【必须】** 所有需要窗口句柄的 WinRT 交互显式传入 HWND——提权进程不会自动关联正确窗口：
+
+```csharp
+var hwnd = WindowNative.GetWindowHandle(this);
+InitializeWithWindow.Initialize(picker, hwnd);      // FileOpenPicker / FolderPicker
+```
+
+**【禁止】** 把依赖 OLE 拖放的交互作为**唯一**入口。提权进程受 UIPI 限制，**收不到**从资源管理器拖来的内容（`R10`）。规则：
+
+| 能力 | 主入口（必须有） | 增强（有则更好） |
+|---|---|---|
+| 选择要添加的程序 | `[浏览…]` 按钮（`FileOpenPicker` + `InitializeWithWindow`） | 拖放区 |
+
+若坚持做拖放，实现方式是**旧式 `WM_DROPFILES` 路径**（`ChangeWindowMessageFilterEx` 放行 + `DragAcceptFiles` + 子类化窗口处理消息），**不是** WinUI 的 `AllowDrop` 事件——后者走 OLE 拖放，UIPI 下无解。**不通就老实降级为纯按钮，不要留一个"拖进去没反应"的控件。**
+
+**【禁止】** 设计"从本程序拖出到其他应用"的交互（拖到任务栏固定、拖到别的窗口）。这个方向 UIPI 无解，做不了。
+
 ---
 
 ## 十三、注释与文档
@@ -349,21 +384,25 @@ foreach (var candidate in EnumerateNameCandidates(entry.Name)) { ... }
 
 ### 14.1 范围
 
-**只测 `Core` / `Management` 的纯逻辑**。测试项目不引用任何 UI 框架。
+**框架：xUnit v3**（`D21`）。**只测 `Core` / `Management` 的纯逻辑**，测试项目不引用任何 UI 框架。
 
-| 必测 | 说明 |
-|---|---|
-| `DelayCalculator` | 时序计算（绝对时间点语义、`remaining <= 0`、排序） |
-| `ItemKeyBuilder` | 主键生成与规范化 |
-| `CommandLineService` | 注册表值解析（带引号路径、含空格路径、参数识别边界） |
-| `LaunchResultEvaluator` | 三种判定分支（存活 / 退出码 0 / 退出码非 0） |
-| `ConfigService` | 加载、损坏恢复、v1→v2 迁移、原子写 |
-| `FailureStreakService` | 连续失败计数（含中断、乱序 runId、不同条目交错） |
-| `StartupSortComparer` | 同延时内 `SortOrder` 稳定性 |
+| 层 | 必测 | 说明 |
+|---|---|---|
+| `Core` | `DelayCalculator` | 时序计算（绝对时间点语义、`remaining <= 0`、排序） |
+| `Core` | `ItemKeyBuilder` | 主键生成与规范化 |
+| `Core` | `CommandLineService` | 注册表值解析（带引号路径、含空格路径、参数识别边界） |
+| `Core` | `LaunchResultEvaluator` | 三种判定分支（存活 / 退出码 0 / 退出码非 0） |
+| `Core` | `ConfigService` | 加载、损坏恢复、v1→v2 迁移、原子写 |
+| `Core` | `StartupSortComparer` | 同延时内 `SortOrder` 稳定性 |
+| `Management` | 连续失败计数 | 纯函数部分：`RunRecord` 列表 → 连续失败次数（含中断、乱序 runId、不同条目交错） |
 
-**不测**（用真机手工验证）：注册表实际读写、计划任务实际创建、进程实际启动、UI 渲染。
+**不测**（用真机手工验证）：注册表实际读写、计划任务实际创建、进程实际启动、UI 渲染、提权 manifest 是否生效。
 
 **【必须】** 单元测试中**禁止**触碰真实注册表、真实文件系统路径、真实进程。所有系统交互必须通过接口注入假实现（`IClock`、`IProcessLauncher`、`IAppConfigStore`）。
+
+**【必须】** 单元测试以**普通权限**运行即可，**不得**要求管理员权限。若某个测试非提权跑不了，说明它不该是单元测试，应移到 `build-and-test.md` 第九节的手工验证清单。
+
+**【必须】** 测试项目 TFM 用 `net10.0-windows`，**不**加 `WindowsAppSDKSelfContained`，**不**引用 `DelayStart.App`（见 `architecture.md` 1.3）。
 
 ### 14.2 命名与结构
 
@@ -394,6 +433,27 @@ Assert.Equal(TimeSpan.FromSeconds(20), result);
 ```
 
 **【建议】** 边界值必须覆盖：`0`、负数、`int.MaxValue`、空字符串、`null`、单元素集合。
+
+### 14.3 xUnit v3 特性约定
+
+**【必须】** 条件跳过用 `Assert.Skip` / `Assert.SkipWhen`（v3 新增能力），**不用** `[Fact(Skip = "...")]` 硬编码——后者是永久的，前者是运行期判定的：
+
+```csharp
+[Fact]
+public void SomePathTest()
+{
+    Assert.SkipWhen(!OperatingSystem.IsWindows(), "仅 Windows 可用");
+    // ...
+}
+```
+
+**【建议】** 跨测试类共享的昂贵资源用 `IClassFixture<T>`；需要跨整个程序集共享时用 v3 的 `[assembly: AssemblyFixture(typeof(T))]`。
+
+**【建议】** 需要捕获被测代码的 `Console` 输出时用 `[CaptureConsole]`，别自己重定向 `Console.Out`。
+
+**【必须】** v3 主路径下**不要**引入 `Microsoft.NET.Test.Sdk`——那是 VSTest 时代的入口，v3 走 MTP，加进来只会增加版本冲突面。仅当按 `build-and-test.md` 4.1 走了降级路径（SDK 内置模板）时才需要它。
+
+**【禁止】** 跨框架混用（如同时装 xUnit 与 NUnit 适配器）。三个框架的 MTP 版本约束不同，混装必然撞版本。
 
 ---
 
@@ -472,6 +532,14 @@ dotnet test
 - [ ] 单条目失败不会中断整批处理
 - [ ] 非托管资源在异常路径上也会释放
 - [ ] 配置文件走原子写
+
+### 权限（D20）
+
+- [ ] 管理端提权失败时**退出**，没有降级运行的路径
+- [ ] 所有 `FileOpenPicker` / `FolderPicker` 都调用了 `InitializeWithWindow.Initialize(picker, hwnd)`
+- [ ] 没有把拖放作为选择文件的**唯一**入口（`R10`）
+- [ ] 没有设计"从本程序拖出到其他应用"的交互
+- [ ] 没有依赖"以其他用户身份运行"场景（`%LOCALAPPDATA%` 会错）
 
 ### 可维护性
 

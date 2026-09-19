@@ -1,38 +1,44 @@
-﻿using Microsoft.UI.Xaml;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
-
 namespace DelayStart.App;
 
 /// <summary>
-/// Provides application-specific behavior to supplement the default Application class.
+/// 管理端的应用对象。
 /// </summary>
+/// <remarks>
+/// 🔴 <see cref="IServiceProvider"/> 由构造函数注入，**不是**静态单例。
+/// 静态定位器会让"界面用了哪些服务"从类型签名里消失，而且容器生命周期
+/// （随进程退出释放）就没有明确的持有者了。
+/// </remarks>
 public partial class App : Application
 {
+    private readonly IServiceProvider _services;
+
     private Window? _window;
-    
-    /// <summary>
-    /// Initializes the singleton application object.  This is the first line of authored code
-    /// executed, and as such is the logical equivalent of main() or WinMain().
-    /// </summary>
-    public App()
+
+    /// <summary>构造应用对象。</summary>
+    /// <param name="services">共享容器，由 <see cref="Program"/> 构建一次后传入。</param>
+    public App(IServiceProvider services)
     {
+        ArgumentNullException.ThrowIfNull(services);
+
+        _services = services;
         InitializeComponent();
     }
 
     /// <summary>
-    /// Invoked when the application is launched.
+    /// 应用启动时调用；解析主窗口并激活。
     /// </summary>
-    /// <param name="args">Details about the launch request and process.</param>
+    /// <param name="args">启动参数。</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
+        _window = _services.GetRequiredService<MainWindow>();
         _window.Activate();
     }
 }

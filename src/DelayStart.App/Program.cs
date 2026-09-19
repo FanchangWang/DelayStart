@@ -1,5 +1,7 @@
 using DelayStart.App.Cli;
+using DelayStart.App.Services;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
@@ -9,17 +11,23 @@ namespace DelayStart.App;
 /// 进程入口（D32）。取代 XamlCompiler 自动生成的 <c>Main</c>
 /// （见 <c>DelayStart.App.csproj</c> 的 <c>DISABLE_XAML_GENERATED_MAIN</c>）。
 /// </summary>
-/// <remarks>
-/// <para>
-/// 分流逻辑：命令行命中 headless 子命令 → 执行完直接返回退出码，**完全不初始化 WinUI**；
-/// 否则走标准的 WinUI 启动流程。
-/// </para>
-/// <para>
-/// 🔴 顺序不能颠倒。若先 <see cref="Application.Start"/> 再判命令行，headless 调用会
-/// 先弹出窗口再退出 —— 用户在卸载过程中会看到一个窗口一闪而过，而且
-/// <c>Application.Start</c> 是阻塞的，根本走不到后面的判断。
-/// </para>
-/// </remarks>
+    /// <remarks>
+    /// <para>
+    /// 分流逻辑：命令行命中 headless 子命令 → 执行完直接返回退出码，**完全不初始化 WinUI**；
+    /// 否则走标准的 WinUI 启动流程。
+    /// </para>
+    /// <para>
+    /// 🔴 顺序不能颠倒。若先 <see cref="Application.Start"/> 再判命令行，headless 调用会
+    /// 先弹出窗口再退出 —— 用户在卸载过程中会看到一个窗口一闪而过，而且
+    /// <c>Application.Start</c> 是阻塞的，根本走不到后面的判断。
+    /// </para>
+    /// <para>
+    /// 🔴 **容器在分流之前构建，且全进程只有一个。** CLI 与 GUI 共用
+    /// <c>PathService</c> 与 <c>ILogSink</c> —— 两个 <c>FileLogger</c> 同时打开
+    /// <c>manager.log</c> 会共享冲突。放在分流之前还保证 headless 路径
+    /// 也不会漏掉"建目录树"这个副作用。
+    /// </para>
+    /// </remarks>
 public static class Program
 {
     /// <summary>进程入口。</summary>
@@ -28,7 +36,14 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        if (CliHost.TryExecute(args, out var exitCode))
+        var services = new ServiceCollection();
+        services.AddDelayStartServices();
+
+        // using：Application.Start 是阻塞的，返回即进程结束，此时才释放容器。
+        // 容器的 Dispose 会连带释放它创建的 IDisposable（含 FileLogger 的文件句柄）。
+        using var provider = services.BuildServiceProvider();
+
+        if (CliHost.TryExecute(provider, args, out var exitCode))
         {
             return exitCode;
         }
@@ -45,7 +60,7 @@ public static class Program
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
-            _ = new App();
+            _ = new App(provider);
         });
 
         return 0;

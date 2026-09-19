@@ -1,5 +1,6 @@
 using System.Globalization;
 
+using DelayStart.Core.Logging;
 using DelayStart.Core.Models;
 using DelayStart.Management.Models;
 
@@ -31,13 +32,20 @@ internal static class CliHost
     /// <summary>
     /// 若命令行命中子命令则执行并给出退出码。
     /// </summary>
+    /// <param name="services">共享容器，由调用方在进程启动时构建一次。</param>
     /// <param name="args">命令行参数。</param>
     /// <param name="exitCode">执行结果对应的退出码。</param>
     /// <returns>
     /// 命中子命令（已执行）时为 <see langword="true"/>；
     /// 命令行没有 <c>--</c> 参数时为 <see langword="false"/>，调用方应正常启动图形界面。
     /// </returns>
-    public static bool TryExecute(string[] args, out int exitCode)
+    /// <remarks>
+    /// 🔴 容器由**调用方**传入而不是这里自己建：同一个进程里 GUI 与 CLI 只会走一条路，
+    /// 但它们共用 <see cref="DelayStart.Core.Services.PathService"/> 与
+    /// <see cref="DelayStart.Core.Abstractions.ILogSink"/>，容器必须是同一个
+    /// （两个 <see cref="DelayStart.Core.Logging.FileLogger"/> 打开同一个日志文件会共享冲突）。
+    /// </remarks>
+    public static bool TryExecute(IServiceProvider services, string[] args, out int exitCode)
     {
         exitCode = ExitSuccess;
 
@@ -58,15 +66,15 @@ internal static class CliHost
                 return true;
             }
 
-            var services = CliServices.Create();
+            var cli = CliServices.Create(services);
 
             exitCode = command switch
             {
-                "--scan" => RunScan(services),
-                "--takeover" => RunTakeover(services, args),
-                "--release" => RunRelease(services, args),
-                "--restore-all" => RunRestoreAll(services),
-                "--reinstall-task" => RunReinstallTask(services),
+                "--scan" => RunScan(cli),
+                "--takeover" => RunTakeover(cli, args),
+                "--release" => RunRelease(cli, args),
+                "--restore-all" => RunRestoreAll(cli),
+                "--reinstall-task" => RunReinstallTask(cli),
                 _ => UnknownCommand(command),
             };
         }

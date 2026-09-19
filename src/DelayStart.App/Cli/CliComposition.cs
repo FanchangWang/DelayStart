@@ -1,10 +1,10 @@
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Logging;
-using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Management.Abstractions;
 using DelayStart.Management.Services;
-using DelayStart.Management.Sources;
+
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DelayStart.App.Cli;
 
@@ -12,8 +12,19 @@ namespace DelayStart.App.Cli;
 /// headless CLI 的依赖装配（D32）。
 /// </summary>
 /// <remarks>
-/// 单独放一个类型而不是塞进 <c>CliHost</c>：Phase 3 的管理端也要装配同一批依赖，
-/// 届时这里会演化成共享的组合根。现在先按"命令行的最小需要"装配，不做过度抽象。
+/// <para>
+/// 🔴 **这里是容器的一层薄壳，不再是第二套装配。** 它在 D35 之前自己 <c>new</c> 一整套对象，
+/// 那时只有 CLI 一个消费者；Phase 3 加上 GUI 之后就变成两个装配点，而 CLI 与界面必须拿到
+/// **同一批实例** —— 否则会出现"命令行看到的配置和界面看到的不一致"这类极难复现的问题，
+/// 更实际的是两个 <see cref="FileLogger"/> 同时打开同一个日志文件会直接产生共享冲突。
+/// 所以装配统一收敛到 <see cref="DelayStart.App.Services.ServiceRegistration"/>，
+/// 这里只做解析。
+/// </para>
+/// <para>
+/// 保留这个 record 而不是让 <c>CliHost</c> 直接收 <see cref="IServiceProvider"/>：
+/// CLI 的六个方法签名写的是"我需要什么"，不是"我去容器里取什么"，
+/// 需要什么一眼可见，测试时也只需造这几个字段。
+/// </para>
 /// </remarks>
 /// <param name="Paths">路径解析服务。</param>
 /// <param name="Log">日志接收端。</param>
@@ -30,42 +41,24 @@ internal sealed record CliServices(
     ISchedulerTaskRegistrar TaskRegistrar)
 {
     /// <summary>
-    /// 按正式运行路径装配全部依赖。
+    /// 从共享容器解析 CLI 需要的服务。
     /// </summary>
+    /// <param name="services">由 <see cref="DelayStart.App.Services.ServiceRegistration"/> 构建的容器。</param>
     /// <returns>可直接使用的服务集合。</returns>
     /// <remarks>
-    /// 来源的注册顺序即 <c>--scan</c> 的输出顺序，与 <c>architecture.md</c> 4.1 的表一致：
-    /// 注册表三项 → 启动文件夹两项 → 计划任务 → UWP。
+    /// 来源集合不再在这里列举 —— 注册顺序即 <c>--scan</c> 的输出顺序这条语义
+    /// 已随来源注册一起移到 <see cref="DelayStart.App.Services.ServiceRegistration"/>。
     /// </remarks>
-    public static CliServices Create()
+    public static CliServices Create(IServiceProvider services)
     {
-        var paths = new PathService();
-        paths.EnsureCreated();
-
-        var clock = SystemClock.Instance;
-        var log = new FileLogger(paths.ManagerLogPath, "Manager", clock);
-        var configStore = new ConfigService(paths, log, clock);
-        var resolver = new ShellLinkResolver(log);
-
-        IStartupSource[] sources =
-        [
-            new RegistryStartupSource(StartupScope.Hkcu, clock, log),
-            new RegistryStartupSource(StartupScope.Hklm, clock, log),
-            new RegistryStartupSource(StartupScope.HklmWow, clock, log),
-            new StartupFolderSource(StartupScope.UserFolder, resolver, clock, log),
-            new StartupFolderSource(StartupScope.SystemFolder, resolver, clock, log),
-            new ScheduledTaskSource(log),
-            new UwpStartupSource(log),
-        ];
-
-        var registrar = new TaskRegistrationService(paths, log);
+        ArgumentNullException.ThrowIfNull(services);
 
         return new CliServices(
-            paths,
-            log,
-            configStore,
-            new ScanService(sources, configStore, log),
-            new TakeoverService(configStore, registrar, sources, log),
-            registrar);
+            services.GetRequiredService<PathService>(),
+            services.GetRequiredService<ILogSink>(),
+            services.GetRequiredService<IAppConfigStore>(),
+            services.GetRequiredService<ScanService>(),
+            services.GetRequiredService<TakeoverService>(),
+            services.GetRequiredService<ISchedulerTaskRegistrar>());
     }
 }

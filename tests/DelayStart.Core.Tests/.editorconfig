@@ -1,0 +1,10 @@
+# 测试项目专用规则（就近覆盖根 .editorconfig）
+#
+# CA1707「标识符不应包含下划线」与 coding-standards.md §14.2 强制的测试方法命名格式
+# 「被测方法_场景_期望结果」直接冲突。规范是权威，分析器让位。
+#
+# 只在此目录生效：生产代码仍受 CA1707 约束（src/ 下不允许下划线成员名）。
+# 若将来新增测试项目（如 DelayStart.Management.Tests），需同样放置本文件。
+
+[*.cs]
+dotnet_diagnostic.CA1707.severity = none

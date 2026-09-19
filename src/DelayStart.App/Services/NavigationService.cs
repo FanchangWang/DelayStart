@@ -31,11 +31,23 @@ namespace DelayStart.App.Services;
 /// </remarks>
 public sealed class NavigationService
 {
+    /// <summary>「总览」模块的导航标签。</summary>
+    public const string OverviewTag = "overview";
+
     /// <summary>「自启动项」模块的导航标签。</summary>
     public const string ItemsTag = "items";
 
     /// <summary>「延时启动」模块的导航标签。</summary>
     public const string DelayTag = "delay";
+
+    /// <summary>「系统启动项」模块的导航标签（只读，FR-7）。</summary>
+    public const string SystemTag = "system";
+
+    /// <summary>「运行日志」模块的导航标签（FR-8）。</summary>
+    public const string RunsTag = "runs";
+
+    /// <summary>「设置」模块的导航标签（FR-9）。</summary>
+    public const string SettingsTag = "settings";
 
     private readonly IServiceProvider _services;
     private readonly Dictionary<string, Type> _pages;
@@ -49,8 +61,12 @@ public sealed class NavigationService
         _services = services;
         _pages = new Dictionary<string, Type>(StringComparer.Ordinal)
         {
+            [OverviewTag] = typeof(Views.OverviewPage),
             [ItemsTag] = typeof(Views.ItemsPage),
             [DelayTag] = typeof(Views.DelayPage),
+            [SystemTag] = typeof(Views.SystemPage),
+            [RunsTag] = typeof(Views.RunsPage),
+            [SettingsTag] = typeof(Views.SettingsPage),
         };
     }
 

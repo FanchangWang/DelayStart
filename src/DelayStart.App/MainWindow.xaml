@@ -49,6 +49,11 @@
             IsSettingsVisible="False"
             SelectionChanged="NavView_SelectionChanged">
             <NavigationView.MenuItems>
+                <NavigationViewItem Content="总览" Tag="overview">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE80F;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="自启动项" Tag="items">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8FD;" />
@@ -57,6 +62,21 @@
                 <NavigationViewItem Content="延时启动" Tag="delay">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE916;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="系统启动项" Tag="system">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D9;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="运行日志" Tag="runs">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE81C;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="设置" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

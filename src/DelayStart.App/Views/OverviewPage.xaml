@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="DelayStart.App.Views.OverviewPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:conv="using:DelayStart.App.Converters"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:DelayStart.App.ViewModels"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <conv:BoolToBrushConverter x:Key="BoolToBrush" />
+    </Page.Resources>
+
+    <!-- 「总览」页（design-spec 页面 1）：统计 + 上次运行横幅 + 最近一次调度 + 模拟调度（D37 进度列表） -->
+    <Grid Padding="32,20,32,24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="总览" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="接管了多少、调度是否正常，一眼看全。" />
+        </StackPanel>
+
+        <!-- 上次运行结果横幅（FR-6.7）：只在有失败时出现，全部成功不打扰 -->
+        <InfoBar
+            Grid.Row="1"
+            IsClosable="False"
+            IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
+            Message="{x:Bind ViewModel.LastRunBanner, Mode=OneWay}"
+            Severity="Warning"
+            Title="上次运行有失败" />
+
+        <!-- 统计卡片（D5）：与 HTML 原型对齐的四卡 —— 扫描数 / 接管数 / 加载窗口 / 调度任务 -->
+        <Grid Grid.Row="2" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border
+                Grid.Column="0"
+                Padding="16,12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+                <StackPanel Spacing="2">
+                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="系统自启动项" />
+                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="{x:Bind ViewModel.TotalEntries, Mode=OneWay}" />
+                </StackPanel>
+            </Border>
+
+            <Border
+                Grid.Column="1"
+                Padding="16,12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+                <StackPanel Spacing="2">
+                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="已接管延时启动" />
+                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="{x:Bind ViewModel.TakenOverEntries, Mode=OneWay}" />
+                </StackPanel>
+            </Border>
+
+            <Border
+                Grid.Column="2"
+                Padding="16,12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+                <StackPanel Spacing="2">
+                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="开机加载窗口" />
+                    <TextBlock
+                        FontSize="18"
+                        FontWeight="SemiBold"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Text="{x:Bind ViewModel.BootWindowText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Border>
+
+            <Border
+                Grid.Column="3"
+                Padding="16,12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+                <StackPanel Spacing="2">
+                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="开机调度任务" />
+                    <TextBlock
+                        Foreground="{x:Bind ViewModel.IsTaskMissing, Converter={StaticResource BoolToBrush}, Mode=OneWay}"
+                        FontSize="18"
+                        FontWeight="SemiBold"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Text="{x:Bind ViewModel.TaskReadyText, Mode=OneWay}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 最近一次开机调度（D5）：上次运行的逐条结果，全部成功时不打扰（横幅只在有失败时出现） -->
+        <Border
+            Grid.Row="3"
+            Padding="16,12"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="{StaticResource ControlCornerRadius}">
+            <StackPanel Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.RecentRunTitle, Mode=OneWay}" />
+                <ListView ItemsSource="{x:Bind ViewModel.RecentRunRows}" SelectionMode="None">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RunItemRow">
+                            <Grid Padding="4,2" ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="90" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="90" />
+                                    <ColumnDefinition Width="70" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    Grid.Column="0"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind LaunchedAtText}" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Text="{x:Bind Name}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <TextBlock
+                                    Grid.Column="2"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind DelayText}" />
+                                <TextBlock
+                                    Grid.Column="3"
+                                    Foreground="{x:Bind IsFailed, Converter={StaticResource BoolToBrush}, Mode=OneWay}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind StateText}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="还没有调度记录 —— 接管条目并重启后，每次登录的启动结果会显示在这里"
+                    Visibility="{x:Bind ViewModel.RecentRunEmpty, Converter={StaticResource BoolToVisibility}}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 模拟调度（D37：时间轴砍掉，改为进度列表 + 10 倍速时钟） -->
+        <StackPanel Grid.Row="4" Spacing="8">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    Grid.Column="0"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource SubtitleTextBlockStyle}"
+                    Text="{x:Bind ViewModel.SimulationTitle, Mode=OneWay}" />
+
+                <Button
+                    Grid.Column="1"
+                    Command="{x:Bind ViewModel.ToggleSimulationCommand}"
+                    Content="{x:Bind ViewModel.SimulateButtonText, Mode=OneWay}" />
+            </Grid>
+
+            <ListView ItemsSource="{x:Bind ViewModel.SimulationRows}" SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SimulationRow">
+                        <Grid Padding="12,6" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock
+                                Grid.Column="0"
+                                VerticalAlignment="Center"
+                                Text="{x:Bind Name}"
+                                TextTrimming="CharacterEllipsis" />
+
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind DelayText}" />
+
+                            <TextBlock
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                HorizontalTextAlignment="Right"
+                                Text="{x:Bind StatusText, Mode=OneWay}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </StackPanel>
+    </Grid>
+</Page>

@@ -61,6 +61,10 @@ internal static class ServiceRegistration
         // ── 配置 ─────────────────────────────────────────────────────────────
         services.AddSingleton<IAppConfigStore, ConfigService>();
 
+        // 运行状态（Phase 5 总览页 / 运行日志页读它；调度端经同一实现写它）。
+        // 状态文件是全局共享的，GUI 与 headless CLI 必须看到同一份 —— 单例。
+        services.AddSingleton<IRunStateStore, RunStateService>();
+
         // ── 快捷方式解析（启动文件夹的两个来源要用）──────────────────────────
         services.AddSingleton<IShellLinkResolver, ShellLinkResolver>();
 
@@ -83,10 +87,17 @@ internal static class ServiceRegistration
         // 否则 PickSingleFileAsync 直接抛异常。
         services.AddSingleton<WindowHandleProvider>();
 
+        // ── 只读展示与运行记录（Phase 5）───────────────────────────────────
+        services.AddSingleton<ServiceQueryService>();
+
         // ── ViewModel（瞬态）────────────────────────────────────────────────
         services.AddTransient<ShellViewModel>();
         services.AddTransient<ItemsViewModel>();
         services.AddTransient<DelayViewModel>();
+        services.AddTransient<OverviewViewModel>();
+        services.AddTransient<SystemViewModel>();
+        services.AddTransient<RunsViewModel>();
+        services.AddTransient<SettingsViewModel>();
 
         // ── 页面（瞬态）─────────────────────────────────────────────────────
         // 页面注册进容器，导航时由 NavigationService 解析 —— 这样页面可以直接构造函数
@@ -96,6 +107,10 @@ internal static class ServiceRegistration
         services.AddTransient<MainWindow>();
         services.AddTransient<ItemsPage>();
         services.AddTransient<DelayPage>();
+        services.AddTransient<OverviewPage>();
+        services.AddTransient<SystemPage>();
+        services.AddTransient<RunsPage>();
+        services.AddTransient<SettingsPage>();
 
         services.AddSingleton<NavigationService>();
 

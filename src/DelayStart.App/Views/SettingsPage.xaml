@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="DelayStart.App.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- 「设置」页（FR-9）：改动即时落盘，校验失败整体不保存 -->
+    <Grid Padding="32,20,32,24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="设置" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="改动保存后即时生效，下次登录调度时按新值执行。" />
+        </StackPanel>
+
+        <ScrollView Grid.Row="1">
+            <StackPanel MaxWidth="720" HorizontalAlignment="Left" Spacing="4">
+
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SubtitleTextBlockStyle}" Text="延时" />
+
+                <!-- FR-9.2 延时预设 -->
+                <TextBlock Text="延时预设值（逗号分隔，驱动编辑器快选按钮）" />
+                <TextBox
+                    PlaceholderText="0, 10, 30, 60, 120"
+                    Text="{x:Bind ViewModel.DelayPresetsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="留空则不显示快选按钮；保存时自动升序去重。" />
+
+                <!-- FR-9.3 上限 -->
+                <TextBlock Margin="0,12,0,0" Text="单条目延时上限（秒，0 = 不限制，仅做输入校验）" />
+                <TextBox Text="{x:Bind ViewModel.MaxDelayText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Margin="0,24,0,4" Style="{StaticResource SubtitleTextBlockStyle}" Text="调度" />
+
+                <!-- FR-9.6 重试 -->
+                <TextBlock Text="同一次运行内的重试次数（0–5）" />
+                <TextBox Text="{x:Bind ViewModel.RetryCountText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                <!-- FR-9.7 通知策略 -->
+                <TextBlock Margin="0,12,0,0" Text="全部启动完成后的通知" />
+                <ComboBox
+                    MinWidth="220"
+                    HorizontalAlignment="Left"
+                    ItemsSource="{x:Bind ViewModel.NotifyModes}"
+                    SelectedIndex="{x:Bind ViewModel.NotifyModeIndex, Mode=TwoWay}" />
+
+                <!-- FR-9.9 降权 -->
+                <CheckBox
+                    Margin="0,12,0,0"
+                    Content="普通用户条目优先降权启动（以普通用户身份运行，而非管理员）"
+                    IsChecked="{x:Bind ViewModel.PreferDeElevatedLaunch, Mode=TwoWay}" />
+                <CheckBox
+                    Margin="16,0,0,0"
+                    Content="降权失败时回退为直接启动（关闭则判为失败）"
+                    IsChecked="{x:Bind ViewModel.FallbackOnDeElevationFailure, Mode=TwoWay}" />
+
+                <TextBlock Margin="0,24,0,4" Style="{StaticResource SubtitleTextBlockStyle}" Text="托盘" />
+
+                <!-- FR-9.8 托盘开关 -->
+                <CheckBox
+                    Content="登录后显示调度进度托盘图标（关闭后调度端完全无形）"
+                    IsChecked="{x:Bind ViewModel.ShowTrayIcon, Mode=TwoWay}" />
+
+                <!-- FR-9.5 保留秒数 -->
+                <TextBlock Text="全部启动完成后托盘图标保留的秒数（0–3600）" />
+                <TextBox Text="{x:Bind ViewModel.TrayKeepText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            </StackPanel>
+        </ScrollView>
+
+        <!-- 保存 / 状态条 -->
+        <Grid Grid.Row="2" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <InfoBar
+                Grid.Column="0"
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasStatus, Mode=OneWay}"
+                Message="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}" />
+
+            <Button
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Click="OnSave"
+                Content="保存设置"
+                Style="{StaticResource AccentButtonStyle}" />
+        </Grid>
+    </Grid>
+</Page>

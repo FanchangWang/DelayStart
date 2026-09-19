@@ -12,11 +12,21 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid>
+    <!--
+        UI v2（PowerToys 风格，docs/ui-mockup-v2.html）：
+        ① 标题栏不带应用图标，折叠按钮由 TitleBar 的 pane toggle 承担；
+        ② 内容区与标题栏 / 菜单同背景（Mica 通透），页面内不铺底色；
+        ③ 底部调度任务状态条已移除 —— 任务状态改由总览页的开关承担。
+        ④ 自启动项 / 系统启动项改为带子项的父级菜单（来源与分区即入口）。
+
+        🔴 本文件里**不要写 <NavigationViewSeparator />**：WinAppSDK 1.8.260224000
+        的 XamlCompiler pass-1 遇到它会静默崩溃（退出码 1、零错误输出）。
+        分隔线由 code-behind 在运行时插入（见 MainWindow.xaml.cs 的 InsertSeparatorAfter）。
+    -->
+    <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <TitleBar
@@ -25,22 +35,8 @@
             BackRequested="TitleBar_BackRequested"
             IsBackButtonVisible="{x:Bind NavFrame.CanGoBack, Mode=OneWay}"
             IsPaneToggleButtonVisible="True"
-            PaneToggleRequested="TitleBar_PaneToggleRequested">
-            <TitleBar.IconSource>
-                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
-            </TitleBar.IconSource>
-        </TitleBar>
+            PaneToggleRequested="TitleBar_PaneToggleRequested" />
 
-        <!--
-          导航结构与页面清单见 docs/architecture.md 5.1 与 docs/design-spec.md 第二节：
-          最终是 6 个顶层模块（总览 / 自启动项 / 延时启动 / 系统启动项 / 运行日志 / 设置），
-          其中「自启动项」下再按来源分子项。
-
-          ⚠️ 这里**故意只挂已经实现的模块**。D25 = A 定下的原则是"不预置死链"——
-          点了没反应的导航项比没有导航更糟。总览 / 系统启动项 / 运行日志 / 设置四个模块
-          随各自的页面（Phase 5）一起加进来，所以这里的 MenuItems 会分阶段增长，
-          这是刻意的，不是遗漏。导航映射表在 Services/NavigationService.cs。
-        -->
         <NavigationView
             x:Name="NavView"
             Grid.Row="1"
@@ -48,15 +44,20 @@
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="False"
             SelectionChanged="NavView_SelectionChanged">
+
+            <!--
+                问题1（2026-09-19）：内容区与标题栏 / 菜单颜色不同 ——
+                NavigationView 默认给内容区铺 LayerFillColorDefault 半透明层，
+                在 Mica 背景上会显得比窗格亮。置为 Transparent 让 Mica 一贯到底。
+            -->
+            <NavigationView.Resources>
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+            </NavigationView.Resources>
+
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="总览" Tag="overview">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE80F;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="自启动项" Tag="items">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8FD;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="延时启动" Tag="delay">
@@ -64,11 +65,43 @@
                         <FontIcon Glyph="&#xE916;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="系统启动项" Tag="system">
+
+                <!--
+                    自启动项：四个来源即四个入口（UI v2），进入各自的来源页。
+                    🔴 父级菜单 SelectsOnInvoked=False（用户反馈 5）：点击只展开 / 折叠，
+                    不切换页面 —— 自启动项没有总页面。
+                -->
+                <NavigationViewItem
+                    Content="自启动项"
+                    SelectsOnInvoked="False"
+                    Tag="items">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8FD;" />
+                    </NavigationViewItem.Icon>
+                    <NavigationViewItem.MenuItems>
+                        <NavigationViewItem Content="注册表" Tag="items-registry" />
+                        <NavigationViewItem Content="启动文件夹" Tag="items-folder" />
+                        <NavigationViewItem Content="计划任务" Tag="items-task" />
+                        <NavigationViewItem Content="UWP Apps" Tag="items-uwp" />
+                    </NavigationViewItem.MenuItems>
+                </NavigationViewItem>
+
+                <!-- 系统启动项：四个分区即四个入口（全部只读），父级同样只展开不切页 -->
+                <NavigationViewItem
+                    Content="系统启动项"
+                    SelectsOnInvoked="False"
+                    Tag="system">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE9D9;" />
                     </NavigationViewItem.Icon>
+                    <NavigationViewItem.MenuItems>
+                        <NavigationViewItem Content="服务" Tag="sys-services" />
+                        <NavigationViewItem Content="驱动" Tag="sys-drivers" />
+                        <NavigationViewItem Content="Winlogon" Tag="sys-winlogon" />
+                        <NavigationViewItem Content="组策略" Tag="sys-gpo" />
+                    </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
+
                 <NavigationViewItem Content="运行日志" Tag="runs">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE81C;" />
@@ -82,20 +115,5 @@
             </NavigationView.MenuItems>
             <Frame x:Name="NavFrame" />
         </NavigationView>
-
-        <!--
-          底部状态条（design-spec 第二节）。调度任务不存在时延时启动根本不生效，
-          而用户看不到任何别的迹象 —— 所以这一行必须在窗口里常驻。
-        -->
-        <Border
-            Grid.Row="2"
-            Padding="16,6"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="0,1,0,0">
-            <TextBlock
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Style="{StaticResource CaptionTextBlockStyle}"
-                Text="{x:Bind ViewModel.TaskStatusText, Mode=OneWay}" />
-        </Border>
     </Grid>
 </Window>

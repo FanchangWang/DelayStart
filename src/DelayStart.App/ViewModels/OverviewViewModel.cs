@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
+using DelayStart.App.Services;
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
 using DelayStart.Core.Services;
@@ -12,153 +13,254 @@ using DelayStart.Management.Services;
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 总览页 ViewModel：统计 + 「上次运行结果」横幅（FR-6.7）+ 模拟调度（D37 改进度列表）。
+/// 总览页 ViewModel（UI v2，PowerToys 分节布局，<c>docs/ui-mockup-v2.html</c>）：
+/// 延时列表来源计数 / 最大延时 / 开机调度任务开关 / 扫描来源计数 / 最近一次开机调度。
 /// </summary>
+/// <remarks>
+/// D1（A）：模拟调度已删除。D3 的开关语义：开 = 注册计划任务，关 = 删除 ——
+/// 原外壳状态条（只读）的职责合并进这里的开关。
+/// </remarks>
 public partial class OverviewViewModel : ObservableObject
 {
-    private readonly ScanService _scanner;
     private readonly IAppConfigStore _configStore;
     private readonly IRunStateStore _runState;
     private readonly ISchedulerTaskRegistrar _registrar;
+    private readonly ScanCacheService _scanCache;
 
     /// <summary>构造总览页 ViewModel。</summary>
-    /// <param name="scanner">全量扫描服务。</param>
     /// <param name="configStore">配置读取端。</param>
-    /// <param name="runState">运行状态读取端（统计卡与「最近一次开机调度」）。</param>
-    /// <param name="registrar">调度任务查询端（统计卡用，只读不注册 —— 与外壳状态条同一原则）。</param>
+    /// <param name="runState">运行状态读取端。</param>
+    /// <param name="registrar">调度计划任务注册端（开关直接注册 / 删除）。</param>
+    /// <param name="scanCache">扫描缓存（来源计数，启动后已有）。</param>
     public OverviewViewModel(
-        ScanService scanner,
         IAppConfigStore configStore,
         IRunStateStore runState,
-        ISchedulerTaskRegistrar registrar)
+        ISchedulerTaskRegistrar registrar,
+        ScanCacheService scanCache)
     {
-        ArgumentNullException.ThrowIfNull(scanner);
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(runState);
         ArgumentNullException.ThrowIfNull(registrar);
+        ArgumentNullException.ThrowIfNull(scanCache);
 
-        _scanner = scanner;
         _configStore = configStore;
         _runState = runState;
         _registrar = registrar;
+        _scanCache = scanCache;
     }
 
-    /// <summary>系统里扫到的自启动项总数。</summary>
-    [ObservableProperty]
-    public partial int TotalEntries { get; set; }
+    // ── 延时启动（来源计数 chips）──────────────────────────────────────────
 
-    /// <summary>已接管（软禁用 + 进延时列表）的条目数。</summary>
+    /// <summary>延时列表里来自注册表的条目数。</summary>
     [ObservableProperty]
-    public partial int TakenOverEntries { get; set; }
+    public partial int DelayedRegistry { get; set; }
 
-    /// <summary>延时列表里的条目数（含手动添加与已停用）。</summary>
+    /// <summary>延时列表里来自启动文件夹的条目数。</summary>
     [ObservableProperty]
-    public partial int DelayedEntries { get; set; }
+    public partial int DelayedFolder { get; set; }
 
-    /// <summary>开机加载窗口文案（D5）：从登录到最后一个程序发起启动的时长。</summary>
+    /// <summary>延时列表里来自计划任务的条目数。</summary>
     [ObservableProperty]
-    public partial string BootWindowText { get; set; } = "—";
+    public partial int DelayedTask { get; set; }
 
-    /// <summary>开机调度任务统计卡文案（D5）：已就绪 / 未创建 / 无法确认。</summary>
+    /// <summary>延时列表里来自 UWP 的条目数。</summary>
     [ObservableProperty]
-    public partial string TaskReadyText { get; set; } = "—";
+    public partial int DelayedUwp { get; set; }
 
-    /// <summary>调度任务是否缺失或查询失败（统计卡转警示色）。</summary>
+    /// <summary>延时列表里手动添加的条目数（用户反馈 3：总览缺手动添加数量）。</summary>
     [ObservableProperty]
-    public partial bool IsTaskMissing { get; set; }
+    public partial int DelayedManual { get; set; }
 
-    /// <summary>「最近一次开机调度」的条目行（D5）；从未运行过为空集合。</summary>
+    // ── 最大延时（原「开机加载窗口」，按用户反馈改为直观口径）────────────
+
+    /// <summary>最长条目的延时文案。</summary>
+    [ObservableProperty]
+    public partial string MaxDelayText { get; set; } = "—";
+
+    // ── 开机调度任务开关 ──────────────────────────────────────────────────
+
+    /// <summary>调度任务是否存在（开关的绑定值）。</summary>
+    [ObservableProperty]
+    public partial bool IsTaskRegistered { get; set; }
+
+    /// <summary>开关旁的状态描述。</summary>
+    [ObservableProperty]
+    public partial string TaskStatusText { get; set; } = "正在检查…";
+
+    /// <summary>开关操作是否正在进行（防止连点）。</summary>
+    [ObservableProperty]
+    public partial bool IsTogglingTask { get; set; }
+
+    // ── 系统自启动项（扫描来源计数 chips）────────────────────────────────
+
+    /// <summary>扫描到的注册表条目数。</summary>
+    [ObservableProperty]
+    public partial int ScannedRegistry { get; set; }
+
+    /// <summary>扫描到的启动文件夹条目数。</summary>
+    [ObservableProperty]
+    public partial int ScannedFolder { get; set; }
+
+    /// <summary>扫描到的计划任务条目数。</summary>
+    [ObservableProperty]
+    public partial int ScannedTask { get; set; }
+
+    /// <summary>扫描到的 UWP 条目数。</summary>
+    [ObservableProperty]
+    public partial int ScannedUwp { get; set; }
+
+    // ── 最近一次开机调度 ──────────────────────────────────────────────────
+
+    /// <summary>「最近一次开机调度」的条目行；从未运行过为空集合。</summary>
     public ObservableCollection<RunItemRow> RecentRunRows { get; } = [];
 
-    /// <summary>「最近一次开机调度」卡片标题（带运行时刻）。</summary>
+    /// <summary>「最近一次开机调度」标题（带运行时刻）。</summary>
     [ObservableProperty]
     public partial string RecentRunTitle { get; set; } = "最近一次开机调度";
 
-    /// <summary>是否没有可展示的最近运行记录（卡片显示占位文案）。</summary>
-    public bool RecentRunEmpty => RecentRunRows.Count == 0;
+    /// <summary>「最近一次开机调度」摘要（成功 / 失败数）。</summary>
+    [ObservableProperty]
+    public partial string RecentRunSummary { get; set; } = "还没有调度记录 —— 接管条目并重启后，每次登录的启动结果会显示在这里";
+
+    /// <summary>是否没有可展示的最近运行记录。</summary>
+    /// <remarks>
+    /// 🔴 必须是 <c>[ObservableProperty]</c> 而不是 <c>=&gt; Rows.Count == 0</c> 计算属性：
+    /// x:Bind 的 OneWay 要求路径上有通知源，get-only 计算属性会让 XamlCompiler 报
+    /// "OneWay bindings require ..."（增量 pass-2 下按错误处理，构建失败）。
+    /// 在 <see cref="FillRecentRun"/> 里显式赋值。
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool RecentRunEmpty { get; set; } = true;
 
     /// <summary>上次运行横幅文案；全部成功或从未运行时为空（FR-6.7 / 9.3）。</summary>
     [ObservableProperty]
     public partial string LastRunBanner { get; set; } = string.Empty;
 
-    /// <summary>横幅是否可见。</summary>
-    public bool HasBanner => LastRunBanner.Length > 0;
-
-    /// <summary>模拟调度的行集合（D37：时间轴改进度列表）。</summary>
-    public ObservableCollection<SimulationRow> SimulationRows { get; } = [];
-
-    /// <summary>模拟调度是否在进行中。</summary>
+    /// <summary>横幅是否可见。同为 OneWay 绑定要求的通知源（见 <see cref="RecentRunEmpty"/>）。</summary>
     [ObservableProperty]
-    public partial bool Simulating { get; set; }
+    public partial bool HasBanner { get; set; }
 
-    /// <summary>模拟调度的进度标题。</summary>
-    [ObservableProperty]
-    public partial string SimulationTitle { get; set; } = string.Empty;
-
-    /// <summary>模拟按钮文案（运行中变「停止」）。页面只读绑定，不放 code-behind。</summary>
-    [ObservableProperty]
-    public partial string SimulateButtonText { get; set; } = "开始模拟调度";
-
-    /// <summary>模拟时钟（加速流逝的"登录后秒数"）。</summary>
-    private double _simulatedSeconds;
-
-    /// <summary>刷新统计与横幅。页面进入时调用。</summary>
+    /// <summary>刷新全部数据。页面进入时调用（全部读缓存 / 小文件，秒回）。</summary>
     /// <returns>异步任务。</returns>
     public async Task LoadAsync()
     {
         var config = _configStore.Load();
 
-        TotalEntries = await Task.Run(_scanner.Scan).ConfigureAwait(true) is { } scan
-            ? scan.TotalCount
-            : 0;
-        TakenOverEntries = config.Items.Count(static item => !item.IsManual);
-        DelayedEntries = config.Items.Count;
+        // ── 延时列表来源计数 ─────────────────────────────────────────────
+        DelayedRegistry = config.Items.Count(static item => item.Source == StartupSource.Registry);
+        DelayedFolder = config.Items.Count(static item => item.Source == StartupSource.StartupFolder);
+        DelayedTask = config.Items.Count(static item => item.Source == StartupSource.ScheduledTask);
+        DelayedUwp = config.Items.Count(static item => item.Source == StartupSource.Uwp);
+        DelayedManual = config.Items.Count(static item => item.Source == StartupSource.Manual);
 
-        var banner = await Task.Run(BuildLastRunBanner).ConfigureAwait(true);
-        LastRunBanner = banner;
-        OnPropertyChanged(nameof(HasBanner));
-
-        BootWindowText = config.Items.Any(static item => item.Enabled)
-            ? DisplayText.DelayOf(config.Items.Where(static item => item.Enabled).Max(static item => item.DelaySeconds))
+        // ── 最大延时 ─────────────────────────────────────────────────────
+        var enabledDelays = config.Items.Where(static item => item.Enabled).Select(static item => item.DelaySeconds).ToList();
+        MaxDelayText = enabledDelays.Count > 0
+            ? DisplayText.DelayOf(enabledDelays.Max())
             : "尚无启用的条目";
 
-        RefreshTaskCard();
-        var current = await Task.Run(() => _runState.ReadCurrent()).ConfigureAwait(true);
+        // ── 扫描来源计数（读缓存：启动后已扫过一次，bug#7）────────────────
+        var snapshot = await _scanCache.EnsureLoadedAsync().ConfigureAwait(true);
+        ScannedRegistry = snapshot.Entries.Count(static entry => entry.Source == StartupSource.Registry);
+        ScannedFolder = snapshot.Entries.Count(static entry => entry.Source == StartupSource.StartupFolder);
+        ScannedTask = snapshot.Entries.Count(static entry => entry.Source == StartupSource.ScheduledTask);
+        ScannedUwp = snapshot.Entries.Count(static entry => entry.Source == StartupSource.Uwp);
 
-        // ⚠️ 行的灌入必须在 UI 线程：ObservableCollection 的集合变更事件被
-        // x:Bind / ListView 直接消费，在后台线程 Clear/Add 会当场抛
-        // "使用来自其他线程的 CollectionView"。文件读取已由上面的 Task.Run 承担。
-        RecentRunRows.Clear();
-        if (current is not null)
-        {
-            foreach (var item in current.Items)
-            {
-                RecentRunRows.Add(new RunItemRow(item));
-            }
-
-            RecentRunTitle = $"最近一次开机调度 · {current.StartedAt:yyyy-MM-dd HH:mm:ss}";
-        }
-        else
-        {
-            RecentRunTitle = "最近一次开机调度";
-        }
-
-        OnPropertyChanged(nameof(RecentRunEmpty));
+        RefreshTaskState();
+        await FillRecentRun().ConfigureAwait(true);
     }
 
-    /// <summary>查询开机调度任务状态（只读；查询失败按缺失处理并保持界面可用）。</summary>
-    private void RefreshTaskCard()
+    /// <summary>开 / 关开机调度任务（用户点开关）：开 = 注册，关 = 删除。</summary>
+    /// <returns>异步任务。</returns>
+    /// <remarks>
+    /// 失败时把开关回拨并写明原因 —— 开关态必须永远与系统真实状态一致，
+    /// 否则用户以为关了、下次登录调度器照样跑。
+    /// </remarks>
+    [RelayCommand]
+    private async Task ToggleTaskAsync()
+    {
+        if (IsTogglingTask)
+        {
+            return;
+        }
+
+        IsTogglingTask = true;
+        try
+        {
+            if (IsTaskRegistered)
+            {
+                await Task.Run(_registrar.Delete).ConfigureAwait(true);
+                IsTaskRegistered = false;
+                TaskStatusText = "未创建 · 延时启动不会生效";
+            }
+            else
+            {
+                await Task.Run(_registrar.RegisterOrUpdate).ConfigureAwait(true);
+                IsTaskRegistered = true;
+                TaskStatusText = "已创建 · 登录后按各条目延时分批启动";
+            }
+        }
+        catch (Exception ex)
+        {
+            // 回拨开关并保留真实状态文案：查询一次兜底，查询也失败就按缺失处理。
+            RefreshTaskState();
+            TaskStatusText = $"操作失败：{ex.Message}";
+        }
+        finally
+        {
+            IsTogglingTask = false;
+        }
+    }
+
+    /// <summary>查询调度任务状态（查询失败按缺失处理并保持界面可用）。</summary>
+    private void RefreshTaskState()
     {
         try
         {
-            IsTaskMissing = !_registrar.IsRegistered();
-            TaskReadyText = IsTaskMissing ? "未创建" : "已就绪";
+            IsTaskRegistered = _registrar.IsRegistered();
+            TaskStatusText = IsTaskRegistered
+                ? "已创建 · 登录后按各条目延时分批启动"
+                : "未创建 · 延时启动不会生效";
         }
         catch
         {
-            IsTaskMissing = true;
-            TaskReadyText = "无法确认";
+            IsTaskRegistered = false;
+            TaskStatusText = "无法确认 · 延时启动可能不会生效";
         }
+    }
+
+    /// <summary>把「最近一次运行」灌进日志区（读文件放后台，行灌入留在 UI 线程）。</summary>
+    /// <returns>异步任务。</returns>
+    private async Task FillRecentRun()
+    {
+        var current = await Task.Run(_runState.ReadCurrent).ConfigureAwait(true);
+
+        RecentRunRows.Clear();
+        if (current is null)
+        {
+            RecentRunTitle = "最近一次开机调度";
+            RecentRunSummary = "还没有调度记录 —— 接管条目并重启后，每次登录的启动结果会显示在这里";
+            RecentRunEmpty = RecentRunRows.Count == 0;
+            return;
+        }
+
+        foreach (var item in current.Items)
+        {
+            RecentRunRows.Add(new RunItemRow(item));
+        }
+
+        var ok = current.Items.Count(static item => item.State == RunItemState.Done);
+        var failed = current.Items.Count(static item => item.State == RunItemState.Failed);
+        RecentRunTitle = $"最近一次开机调度 · {current.StartedAt:yyyy-MM-dd HH:mm:ss}";
+        RecentRunSummary = failed > 0
+            ? $"{ok}/{current.Items.Count} 成功 · 失败 {failed}"
+            : $"{current.Items.Count}/{current.Items.Count} 全部成功";
+
+        RecentRunEmpty = RecentRunRows.Count == 0;
+
+        // 横幅（失败提示）与日志区共用一次读取。
+        LastRunBanner = await Task.Run(BuildLastRunBanner).ConfigureAwait(true);
+        HasBanner = LastRunBanner.Length > 0;
     }
 
     /// <summary>按 scheduler-design.md 9.3 的横幅文案矩阵生成「上次运行结果」。</summary>
@@ -167,7 +269,7 @@ public partial class OverviewViewModel : ObservableObject
         var current = _runState.ReadCurrent();
         if (current is null)
         {
-            return string.Empty; // 从未运行：不显示横幅
+            return string.Empty;
         }
 
         var failedItems = current.Items
@@ -176,12 +278,11 @@ public partial class OverviewViewModel : ObservableObject
 
         if (failedItems.Count == 0)
         {
-            return string.Empty; // 全部成功：不显示横幅（设计稿 9.3 第一行）
+            return string.Empty;
         }
 
         var runs = _runState.ReadRecent(FailureStreakService.DefaultMaxRunsScanned);
 
-        // 取连续失败次数最高的条目决定横幅等级（9.2 升级机制）。
         var worstStreak = 0;
         string worstName = string.Empty;
         foreach (var item in failedItems)
@@ -206,104 +307,4 @@ public partial class OverviewViewModel : ObservableObject
 
         return $"上次登录：{failedItems.Count} 个程序启动失败";
     }
-
-    /// <summary>开始模拟调度：按调度端同样的排序与绝对时间点语义，10 倍速推进。</summary>
-    /// <returns>异步任务。</returns>
-    [RelayCommand]
-    public void ToggleSimulation()
-    {
-        if (Simulating)
-        {
-            Simulating = false;
-            SimulateButtonText = "开始模拟调度";
-            return;
-        }
-
-        var config = _configStore.Load();
-        var items = config.Items
-            .Where(static item => item.Enabled)
-            .OrderBy(static item => item, StartupSortComparer.Instance)
-            .ToList();
-
-        SimulationRows.Clear();
-        foreach (var item in items)
-        {
-            SimulationRows.Add(new SimulationRow(item.Name, item.DelaySeconds));
-        }
-
-        Simulating = items.Count > 0;
-        _simulatedSeconds = 0;
-        SimulationTitle = "模拟调度 · 登录后 0 秒";
-        SimulateButtonText = Simulating ? "停止模拟" : "开始模拟调度";
-    }
-
-    /// <summary>推进模拟时钟（由页面的 DispatcherTimer 每 100ms 调用 = 10 倍速）。</summary>
-    /// <returns>模拟是否仍在进行。</returns>
-    public bool AdvanceSimulation()
-    {
-        if (!Simulating)
-        {
-            return false;
-        }
-
-        _simulatedSeconds += 0.1;
-
-        var allDone = true;
-        foreach (var row in SimulationRows)
-        {
-            if (row.State != RunItemState.Done && _simulatedSeconds >= row.DelaySeconds)
-            {
-                row.State = RunItemState.Done;
-                row.StatusText = "已启动";
-            }
-
-            if (row.State != RunItemState.Done)
-            {
-                allDone = false;
-            }
-        }
-
-        SimulationTitle = $"模拟调度 · 登录后 {(int)_simulatedSeconds} 秒";
-
-        if (allDone)
-        {
-            Simulating = false;
-            SimulateButtonText = "开始模拟调度";
-            return false;
-        }
-
-        return true;
-    }
-}
-
-/// <summary>模拟调度的一行。</summary>
-public partial class SimulationRow : ObservableObject
-{
-    /// <summary>构造一行模拟。</summary>
-    /// <param name="name">条目名。</param>
-    /// <param name="delaySeconds">配置延时（秒）。</param>
-    public SimulationRow(string name, int delaySeconds)
-    {
-        ArgumentNullException.ThrowIfNull(name);
-
-        Name = name;
-        DelaySeconds = delaySeconds;
-    }
-
-    /// <summary>条目名。</summary>
-    public string Name { get; }
-
-    /// <summary>配置延时（秒），模拟时钟据此判断「是否到点」。</summary>
-    public int DelaySeconds { get; }
-
-    /// <summary>配置延时文案。</summary>
-    public string DelayText => $"{DelaySeconds} 秒";
-
-    /// <summary>模拟状态。</summary>
-    [ObservableProperty]
-    public partial RunItemState State { get; set; } = RunItemState.Waiting;
-
-    /// <summary>状态文案。</summary>
-    [ObservableProperty]
-    public partial string StatusText { get; set; } = "等待中";
 }

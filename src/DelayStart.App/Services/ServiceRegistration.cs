@@ -87,11 +87,19 @@ internal static class ServiceRegistration
         // 否则 PickSingleFileAsync 直接抛异常。
         services.AddSingleton<WindowHandleProvider>();
 
+        // ── 扫描缓存（UI v2，bug#7）：启动后扫一次，页面直接读缓存 ────────
+        services.AddSingleton<ScanCacheService>();
+
+        // ── 跨页导航（UI v2）：总览的计数 chip 跳菜单用 ────────────────────
+        services.AddSingleton<ShellNavigator>();
+
+        // ── 主题（FR-9 主题设置）：读配置 + 切换广播 ────────────────────────
+        services.AddSingleton<ThemeService>();
+
         // ── 只读展示与运行记录（Phase 5）───────────────────────────────────
         services.AddSingleton<ServiceQueryService>();
 
         // ── ViewModel（瞬态）────────────────────────────────────────────────
-        services.AddTransient<ShellViewModel>();
         services.AddTransient<ItemsViewModel>();
         services.AddTransient<DelayViewModel>();
         services.AddTransient<OverviewViewModel>();
@@ -102,7 +110,7 @@ internal static class ServiceRegistration
         // ── 页面（瞬态）─────────────────────────────────────────────────────
         // 页面注册进容器，导航时由 NavigationService 解析 —— 这样页面可以直接构造函数
         // 注入 ViewModel，不必在 code-behind 里静态取服务。
-        // 主窗口也走容器：它的构造函数要注入 ShellViewModel 与 NavigationService，
+        // 主窗口也走容器：它的构造函数要注入 NavigationService 与 ShellNavigator，
         // 由 App.OnLaunched 解析。这样窗口本身不必知道容器存在。
         services.AddTransient<MainWindow>();
         services.AddTransient<ItemsPage>();

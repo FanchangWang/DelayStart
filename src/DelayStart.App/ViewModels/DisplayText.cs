@@ -83,19 +83,21 @@ public static class DisplayText
         return entry.IsEnabled ? "已启用" : "已禁用";
     }
 
-    /// <summary>延时秒数 → 界面文案。</summary>
+    /// <summary>延时秒数 → 界面文案（短格式：不带「登录后」前缀）。</summary>
     /// <param name="seconds">相对登录时刻的绝对秒数。</param>
-    /// <returns>形如 <c>登录后 30 秒</c> / <c>登录后 2 分 00 秒</c> / <c>登录后立即</c>。</returns>
+    /// <returns>形如 <c>立即</c> / <c>30 秒</c> / <c>2 分 30 秒</c> / <c>2 分</c>。</returns>
     public static string DelayOf(int seconds)
     {
         if (seconds <= 0)
         {
-            return "登录后立即";
+            return "立即";
         }
 
         return seconds < 60
-            ? $"登录后 {seconds} 秒"
-            : $"登录后 {seconds / 60} 分 {seconds % 60:00} 秒";
+            ? $"{seconds} 秒"
+            : seconds % 60 == 0
+                ? $"{seconds / 60} 分"
+                : $"{seconds / 60} 分 {seconds % 60} 秒";
     }
 
     /// <summary>启动身份 → 界面文案。</summary>

@@ -1,83 +1,178 @@
 using DelayStart.App.Dialogs;
+using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
 using DelayStart.Management.Models;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
+
+using Windows.ApplicationModel.DataTransfer;
 
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「自启动项」页（<c>design-spec.md</c> 页面 2）。本页只读系统里已经存在的自启动项。
+/// 「自启动项」来源页（UI v2：四个来源共用本页，<c>NavigationTag</c> 决定来源）。
 /// </summary>
-public sealed partial class ItemsPage : Page
+public sealed partial class ItemsPage : Page, INavigationTarget
 {
+    private readonly WindowHandleProvider _handles;
+
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
-    public ItemsPage(ItemsViewModel viewModel)
+    /// <param name="handles">主窗口句柄提供者（编辑器选文件用）。</param>
+    public ItemsPage(ItemsViewModel viewModel, WindowHandleProvider handles)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(handles);
 
         ViewModel = viewModel;
+        _handles = handles;
 
         InitializeComponent();
 
-        // FR-1.2：进入即扫描一次。挂在 Loaded 而不是构造函数里，是为了让窗口先出现 ——
-        // 扫描要读三个注册表 hive、两个启动文件夹、计划任务库与 UWP，首屏不该等它。
+        // 读缓存秒回，但仍挂 Loaded：让窗口先画出来，再灌列表。
         Loaded += OnLoaded;
     }
 
     /// <summary>本页的 ViewModel，供 <c>x:Bind</c> 使用。</summary>
     public ItemsViewModel ViewModel { get; }
 
-    /// <summary>来源分段 Tab 点击（D1）：维护互斥选中并同步 ViewModel 的筛选序号。</summary>
-    /// <param name="sender">被点的 <see cref="ToggleButton"/>，<see cref="FrameworkElement.Tag"/> 是来源序号。</param>
-    /// <param name="e">事件参数。</param>
-    /// <remarks>
-    /// 放 code-behind 而不是 ViewModel：互斥选中是**视图状态**（五个按钮的 IsChecked），
-    /// ViewModel 只认序号 —— 把按钮状态塞进 ViewModel 会让它背上视图的债。
-    /// ToggleButton 点击后已自动翻转自己的 IsChecked，这里负责"把别人翻回去"。
-    /// </remarks>
-    private void OnSourceTabClicked(object sender, RoutedEventArgs e)
+    /// <inheritdoc />
+    public string? NavigationTag
     {
-        if (sender is not ToggleButton clicked || clicked.Tag is not string tagText
-            || !int.TryParse(tagText, out var index))
+        get => field;
+        set
         {
-            return;
+            field = value;
+            ApplyTag(value);
         }
+    }
 
-        ViewModel.SourceFilterIndex = index;
+    /// <summary>把导航标签翻译成来源筛选与页标题。</summary>
+    private void ApplyTag(string? tag) => ViewModel.SourceFilter = tag switch
+    {
+        NavigationService.ItemsRegistryTag => ApplyTitle(StartupSource.Registry, "自启动项 · 注册表"),
+        NavigationService.ItemsFolderTag => ApplyTitle(StartupSource.StartupFolder, "自启动项 · 启动文件夹"),
+        NavigationService.ItemsTaskTag => ApplyTitle(StartupSource.ScheduledTask, "自启动项 · 计划任务"),
+        NavigationService.ItemsUwpTag => ApplyTitle(StartupSource.Uwp, "自启动项 · UWP Apps"),
+        _ => null,
+    };
 
-        foreach (var element in ((StackPanel)clicked.Parent).Children)
-        {
-            if (element is ToggleButton button)
-            {
-                button.IsChecked = ReferenceEquals(button, clicked);
-            }
-        }
+    private StartupSource ApplyTitle(StartupSource source, string title)
+    {
+        PageTitleText.Text = title;
+        return source;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        // 页面对象与 Loaded 是一对一的（每次导航新建），但仍显式退订：
-        // x:Load / 重入导航都可能让它触发第二次，那会变成一次多余的完整扫描。
         Loaded -= OnLoaded;
-
-        if (ViewModel.RefreshCommand.CanExecute(null))
+        if (ViewModel.LoadCommand.CanExecute(null))
         {
-            ViewModel.RefreshCommand.Execute(null);
+            ViewModel.LoadCommand.Execute(null);
+        }
+    }
+
+    // ── 行操作 ───────────────────────────────────────────────────────────
+
+    /// <summary>「查看」：打开条目对应的注册表位置 / 文件目录 / 任务计划。</summary>
+    private void OnViewRequested(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: StartupEntryRow row })
+        {
+            return;
+        }
+
+        try
+        {
+            OpenLocation(row.Entry);
+        }
+        catch (Exception ex)
+        {
+            _ = ShowMessageAsync("未能打开位置", ex.Message);
+        }
+    }
+
+    /// <summary>按来源打开对应位置。</summary>
+    /// <remarks>
+    /// <para>
+    /// 注册表：regedit 支持 <c>LastKey</c> 定位（写 Applets\Regedit\LastKey 再启动），
+    /// 同时把键路径放进剪贴板兜底 —— regedit 已在运行时不会重新定位，剪贴板仍可用。
+    /// </para>
+    /// <para>
+    /// 启动文件夹：explorer /select 直达并选中 .lnk；计划任务：打开任务计划程序；
+    /// UWP：打开系统「启动应用」设置页。
+    /// </para>
+    /// </remarks>
+    private static void OpenLocation(StartupEntry entry)
+    {
+        switch (entry.Source)
+        {
+            case StartupSource.Registry:
+            {
+                var hive = entry.Scope switch
+                {
+                    StartupScope.Hklm => "HKEY_LOCAL_MACHINE",
+                    StartupScope.HklmWow => "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node",
+                    _ => "HKEY_CURRENT_USER",
+                };
+                var keyPath = $@"计算机\{hive}\SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+
+                var clipboard = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+                clipboard.SetText(keyPath);
+                Clipboard.SetContent(clipboard);
+
+                try
+                {
+                    using var applets = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                        @"Software\Microsoft\Windows\CurrentVersion\Applets\Regedit", writable: true);
+                    applets?.SetValue("LastKey", keyPath);
+                }
+                catch
+                {
+                    // 写不进 LastKey 不影响流程：剪贴板里已有键路径。
+                }
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("regedit.exe")
+                {
+                    UseShellExecute = true,
+                });
+                break;
+            }
+
+            case StartupSource.StartupFolder:
+            {
+                var folder = entry.Scope == StartupScope.UserFolder
+                    ? Environment.GetFolderPath(Environment.SpecialFolder.Startup)
+                    : Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup);
+                var target = System.IO.Path.Combine(folder, entry.SourceKey);
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe")
+                {
+                    Arguments = $"/select,\"{target}\"",
+                    UseShellExecute = true,
+                });
+                break;
+            }
+
+            case StartupSource.ScheduledTask:
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("taskschd.msc")
+                {
+                    UseShellExecute = true,
+                });
+                break;
+
+            case StartupSource.Uwp:
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:startupapps")
+                {
+                    UseShellExecute = true,
+                });
+                break;
         }
     }
 
     /// <summary>打开延时配置编辑器，确认后接管该条目。</summary>
-    /// <param name="sender">触发按钮。</param>
-    /// <param name="e">事件参数。</param>
-    /// <remarks>
-    /// 放在 code-behind 而不是 ViewModel 的 <c>RelayCommand</c>：弹窗需要 <c>XamlRoot</c>，
-    /// 那是视图的概念；ViewModel 只负责"接管"这个动作本身（<c>coding-standards.md</c> 12）。
-    /// </remarks>
     private async void OnDelayRequested(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { DataContext: StartupEntryRow row })
@@ -85,13 +180,14 @@ public sealed partial class ItemsPage : Page
             return;
         }
 
-        var dialog = new DelayEditorDialog(row.Entry, ViewModel.DelayPresets, ViewModel.MaxDelaySeconds)
+        var dialog = new DelayEditorDialog(row.Entry, ViewModel.DelayPresets, ViewModel.DefaultPreset)
         {
-            // ContentDialog 必须挂到窗口的 XamlRoot 上，否则 ShowAsync 直接抛异常。
             XamlRoot = XamlRoot,
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        // 二次确认（自定义延时）走弹窗内确认面板：确认后 Hide() 的结果值是 None。
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary && !dialog.DelayConfirmed)
         {
             return;
         }
@@ -100,43 +196,134 @@ public sealed partial class ItemsPage : Page
         {
             DelaySeconds = dialog.DelaySeconds,
             RunAsAdmin = dialog.RunAsAdmin,
-
-            // 留空 = 沿用原自启动项自带的参数（FR-4.5）。传空串会被当成"显式指定无参数"。
             Arguments = string.IsNullOrWhiteSpace(dialog.Arguments) ? null : dialog.Arguments,
         };
 
-        var outcome = ViewModel.Takeover(row.Entry, options);
-
-        if (outcome.Succeeded)
+        var outcome = ViewModel.Takeover(row.Entry, options, row);
+        if (!outcome.Succeeded)
         {
-            // 重新扫描：该条目此刻应显示为「已接管」，列表副标题的计数也要跟着变。
-            if (ViewModel.RefreshCommand.CanExecute(null))
-            {
-                ViewModel.RefreshCommand.Execute(null);
-            }
+            await ShowMessageAsync(
+                "未能加入延时启动",
+                outcome.Message ?? "未给出具体原因，详情见运行日志。");
+        }
+    }
 
+    /// <summary>「移出延时」（bug#4）：恢复系统项并删除配置，行就地变回原状态。</summary>
+    private async void OnReleaseRequested(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: StartupEntryRow row })
+        {
             return;
         }
 
-        // TakeoverOutcome.Message 理论上是非空的，但它是外部契约，界面层不能假设 ——
-        // 兜底成一句用户能看懂的话，而不是把 null 显示成空白弹窗。
-        await ShowFailureAsync(outcome.Message ?? "未给出具体原因，详情见运行日志。");
+        var confirm = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = $"移出「{row.Name}」的延时启动？",
+            Content = "该程序的原始自启动项将恢复为你接管前的状态。下次登录时它会按系统原本的方式启动，不再受本程序控制。",
+            PrimaryButtonText = "移除并恢复",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        // 🔴 同 DelayPage：Release 的意外异常不允许冲出 async void（会把进程带崩）。
+        TakeoverOutcome outcome;
+        try
+        {
+            outcome = ViewModel.Release(row);
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync(
+                "未能移出延时启动",
+                $"移除过程发生意外错误：{ex.Message}\n\n该条目仍保持接管状态 —— 可稍后重试，详情见运行日志。");
+            return;
+        }
+
+        if (!outcome.Succeeded)
+        {
+            await ShowMessageAsync(
+                "未能移出延时启动",
+                $"{outcome.Message}\n\n该条目仍保持接管状态 —— 可以稍后重试，详情见运行日志。");
+        }
     }
 
-    /// <summary>接管失败时给出可操作的提示。</summary>
-    /// <param name="message">失败原因。</param>
-    /// <returns>提示关闭后的 <see cref="Task"/>。</returns>
-    /// <remarks>
-    /// 这里不用 <c>ConfigureAwait</c>：<c>ContentDialog.ShowAsync</c> 返回的是
-    /// <c>IAsyncOperation&lt;T&gt;</c>（WinRT 异步操作），它本身不提供 <c>ConfigureAwait</c>，
-    /// 而 await 它默认就回到原 UI 上下文，正是我们要的。
-    /// </remarks>
-    private async Task ShowFailureAsync(string message)
+    /// <summary>「禁用」：纯禁用（StartupApproved 写标记），不接管（D3）。</summary>
+    private async void OnDisableRequested(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: StartupEntryRow row })
+        {
+            return;
+        }
+
+        if (!ViewModel.SetEntryEnabled(row, enabled: false))
+        {
+            await ShowMessageAsync("未能禁用", "写入软禁用标记失败，详情见运行日志。该项不会被删除，可重试。");
+        }
+    }
+
+    /// <summary>「启用」：删除 StartupApproved 标记。</summary>
+    private async void OnEnableRequested(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: StartupEntryRow row })
+        {
+            return;
+        }
+
+        if (!ViewModel.SetEntryEnabled(row, enabled: true))
+        {
+            await ShowMessageAsync("未能启用", "删除软禁用标记失败，详情见运行日志。可重试。");
+        }
+    }
+
+    /// <summary>「编辑」已接管项：延时 / 参数 / 工作目录。</summary>
+    private async void OnEditRequested(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: StartupEntryRow row })
+        {
+            return;
+        }
+
+        DelayedItem item;
+        try
+        {
+            item = ViewModel.GetItemFor(row);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await ShowMessageAsync("未能打开编辑器", ex.Message);
+            return;
+        }
+
+        var dialog = new DelayEditorDialog(item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles)
+        {
+            XamlRoot = XamlRoot,
+        };
+
+        // 二次确认（自定义延时）走弹窗内确认面板：确认后 Hide() 的结果值是 None。
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary && !dialog.DelayConfirmed)
+        {
+            return;
+        }
+
+        if (!ViewModel.ApplyEdit(row, dialog.ToValues()))
+        {
+            await ShowMessageAsync("未能保存修改", "配置中找不到该条目，请先刷新本页。");
+        }
+    }
+
+    private async Task ShowMessageAsync(string title, string message)
     {
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
-            Title = "未能加入延时启动",
+            Title = title,
             Content = message,
             CloseButtonText = "知道了",
             DefaultButton = ContentDialogButton.Close,

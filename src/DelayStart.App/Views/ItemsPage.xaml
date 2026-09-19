@@ -10,9 +10,10 @@
     mc:Ignorable="d">
 
     <!--
-        「自启动项」页（docs/design-spec.md 页面 2）。
-        Phase 3 本批只落地「页头 + 常驻说明条 + 失败提示 + 刷新 + 列表」，
-        搜索 / 筛选 / 排序 / 状态徽标配色 / 行内操作菜单 / 批量模式在后续批次补。
+        「自启动项」来源页（UI v2：注册表 / 启动文件夹 / 计划任务 / UWP Apps 四个入口共用本页，
+        由导航标签决定显示哪个来源，docs/ui-mockup-v2.html）。
+        列表读自扫描缓存（bug#7）；行操作（bug#3/#4/#6）：查看 / 接管 / 移出延时 / 禁用 / 启用 / 编辑。
+        二轮 bug 批复 3/4：列宽全部固定（表头与行严格同列）；行内不再重复显示来源文字。
     -->
     <Page.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
@@ -23,19 +24,10 @@
             <Setter Property="Padding" Value="8,0" />
             <Setter Property="MinHeight" Value="0" />
         </Style>
-
-        <!-- 来源分段 Tab 的药丸按钮（D1）：选中态由 code-behind 维护互斥 -->
-        <Style x:Key="SourceTabStyle" TargetType="ToggleButton">
-            <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Padding" Value="10,4" />
-            <Setter Property="MinWidth" Value="0" />
-            <Setter Property="FontSize" Value="12.5" />
-        </Style>
     </Page.Resources>
 
     <Grid Padding="32,20,32,24" RowSpacing="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -44,23 +36,63 @@
 
         <!-- 页头 -->
         <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="自启动项" />
+            <TextBlock x:Name="PageTitleText" Style="{StaticResource TitleTextBlockStyle}" Text="自启动项" />
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
                 Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
         </StackPanel>
 
-        <!-- 常驻说明条：必须解释"软禁用"与"手动条目不在本页"两件事（design-spec 页面 2） -->
-        <InfoBar
-            Grid.Row="1"
-            IsClosable="False"
-            IsOpen="True"
-            Message="不会删除注册表值，也不会移动文件，随时可以还原成系统默认状态。本页只列出系统里已经存在的自启动项；手动添加的程序属于调度任务而非系统自启动项，只出现在「延时启动」页。"
-            Severity="Informational"
-            Title="这里的「禁用」与「移出延时」都是软禁用" />
+        <!-- 工具栏：状态筛选 + 排序 + 搜索 + 刷新本页（筛选只过滤显示，不触发重扫） -->
+        <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-        <!-- 来源级失败提示（FR-1.4）：必须说清"列表可能不完整" -->
+            <ComboBox
+                Grid.Column="0"
+                MinWidth="120"
+                VerticalAlignment="Center"
+                SelectedIndex="{x:Bind ViewModel.StatusFilterIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="全部状态" />
+                <ComboBoxItem Content="已启用" />
+                <ComboBoxItem Content="已禁用" />
+                <ComboBoxItem Content="已接管" />
+            </ComboBox>
+
+            <ComboBox
+                Grid.Column="1"
+                MinWidth="110"
+                VerticalAlignment="Center"
+                SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="按名称" />
+                <ComboBoxItem Content="按状态" />
+            </ComboBox>
+
+            <ProgressBar
+                Grid.Column="2"
+                IsIndeterminate="True"
+                VerticalAlignment="Center"
+                Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+
+            <TextBox
+                Grid.Column="3"
+                MinWidth="220"
+                VerticalAlignment="Center"
+                PlaceholderText="搜索名称、命令或位置"
+                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+            <Button
+                Grid.Column="4"
+                Command="{x:Bind ViewModel.RefreshCommand}"
+                Content="刷新本页" />
+        </Grid>
+
+        <!-- 来源级失败提示（FR-1.4） -->
         <InfoBar
             Grid.Row="2"
             IsClosable="False"
@@ -69,170 +101,151 @@
             Severity="Warning"
             Title="部分来源扫描失败" />
 
-        <!-- 工具栏：来源分段 Tab + 状态筛选 + 排序 + 搜索 + 刷新（筛选只过滤显示，不触发重扫） -->
-        <StackPanel Grid.Row="3" Spacing="8">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-                <ToggleButton
-                    Click="OnSourceTabClicked"
-                    Content="全部"
-                    IsChecked="True"
-                    Style="{StaticResource SourceTabStyle}"
-                    Tag="0" />
-                <ToggleButton
-                    Click="OnSourceTabClicked"
-                    Content="注册表"
-                    Style="{StaticResource SourceTabStyle}"
-                    Tag="1" />
-                <ToggleButton
-                    Click="OnSourceTabClicked"
-                    Content="启动文件夹"
-                    Style="{StaticResource SourceTabStyle}"
-                    Tag="2" />
-                <ToggleButton
-                    Click="OnSourceTabClicked"
-                    Content="计划任务"
-                    Style="{StaticResource SourceTabStyle}"
-                    Tag="3" />
-                <ToggleButton
-                    Click="OnSourceTabClicked"
-                    Content="UWP"
-                    Style="{StaticResource SourceTabStyle}"
-                    Tag="4" />
-            </StackPanel>
+        <!-- 列表：绑定筛选后的可见集合（D2 批复 A：列表包进卡片） -->
+        <Border
+            Grid.Row="3"
+            Padding="8,4"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="7">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+                <!--
+                    表头：列宽与行模板**逐列相同**（40 / * / 100 / 300）——
+                    之前的 Auto 列让表头与行按各自内容测宽，列位置错开（二轮 bug 批复 3）。
+                -->
+                <Grid Grid.Row="0" Padding="28,8,28,4" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="100" />
+                        <ColumnDefinition Width="300" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        Grid.Column="1"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="程序" />
+                    <TextBlock
+                        Grid.Column="2"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="状态" />
+                    <TextBlock
+                        Grid.Column="3"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="操作" />
+                </Grid>
 
-                <ProgressBar
-                    Grid.Column="2"
-                    IsIndeterminate="True"
-                    VerticalAlignment="Center"
-                    Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+                <ListView
+                    Grid.Row="1"
+                    ItemContainerStyle="{StaticResource ItemRowStyle}"
+                    ItemsSource="{x:Bind ViewModel.FilteredRows}"
+                    SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="vm:StartupEntryRow">
+                        <Grid Padding="12,10" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="40" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="300" />
+                            </Grid.ColumnDefinitions>
 
-                <ComboBox
-                    Grid.Column="0"
-                    MinWidth="120"
-                    VerticalAlignment="Center"
-                    SelectedIndex="{x:Bind ViewModel.StatusFilterIndex, Mode=TwoWay}">
-                    <ComboBoxItem Content="全部状态" />
-                    <ComboBoxItem Content="已启用" />
-                    <ComboBoxItem Content="已禁用" />
-                    <ComboBoxItem Content="已接管" />
-                </ComboBox>
+                            <!-- 图标（D30）：行对象不可变，OneTime 绑定（WMC1506） -->
+                            <Grid
+                                Grid.Column="0"
+                                Height="32"
+                                VerticalAlignment="Center">
+                                <Image
+                                    Source="{x:Bind Icon}"
+                                    Stretch="Uniform"
+                                    Visibility="{x:Bind HasIcon}" />
+                                <FontIcon
+                                    FontSize="20"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Glyph="&#xE7C3;"
+                                    Visibility="{x:Bind HasNoIcon}" />
+                            </Grid>
 
-                <ComboBox
-                    Grid.Column="1"
-                    MinWidth="110"
-                    VerticalAlignment="Center"
-                    SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}">
-                    <ComboBoxItem Content="按来源" />
-                    <ComboBoxItem Content="按名称" />
-                    <ComboBoxItem Content="按状态" />
-                </ComboBox>
+                            <!-- 名称 + 命令行；完整位置（注册表键 / 文件路径）放 Tooltip，不在行里重复占行（二轮 bug 批复 4） -->
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="2"
+                                ToolTipService.ToolTip="{x:Bind LocationText}">
+                                <TextBlock
+                                    FontWeight="SemiBold"
+                                    Text="{x:Bind Name}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind CommandLine}"
+                                    TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
 
-                <TextBox
-                    Grid.Column="3"
-                    MinWidth="220"
-                    VerticalAlignment="Center"
-                    PlaceholderText="搜索名称、命令或位置"
-                    Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <!-- 状态徽标（D1）：药丸样式，配色按 StatusKind 分档 -->
+                            <Border
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Left"
+                                Background="{x:Bind StatusKind, Converter={StaticResource StatusBrush}, ConverterParameter=bg, Mode=OneTime}"
+                                CornerRadius="4"
+                                Padding="8,3">
+                                <TextBlock
+                                    Foreground="{x:Bind StatusKind, Converter={StaticResource StatusBrush}, ConverterParameter=fg, Mode=OneTime}"
+                                    FontSize="12"
+                                    Text="{x:Bind StatusText, Mode=OneTime}" />
+                            </Border>
 
-                <Button
-                    Grid.Column="4"
-                    Command="{x:Bind ViewModel.RefreshCommand}"
-                    Content="刷新扫描" />
-            </Grid>
-        </StackPanel>
-
-        <!-- 列表：绑定筛选后的可见集合 -->
-        <ListView
-            Grid.Row="4"
-            ItemContainerStyle="{StaticResource ItemRowStyle}"
-            ItemsSource="{x:Bind ViewModel.FilteredRows}"
-            SelectionMode="None">
-            <ListView.ItemTemplate>
-                <DataTemplate x:DataType="vm:StartupEntryRow">
-                    <Grid Padding="12,10" ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-
-                        <!-- 图标（D30）：64px 源显示为 32 DIP，200% DPI 下不糊；取不到时显示占位符 -->
-                        <Grid
-                            Grid.Column="0"
-                            Width="32"
-                            Height="32"
-                            VerticalAlignment="Center">
-                            <!-- 行对象不可变，图标在构造时定型：OneTime 即可（OneWay 在非 INPC 行上是编译错误 WMC1506） -->
-                            <Image
-                                Source="{x:Bind Icon}"
-                                Stretch="Uniform"
-                                Visibility="{x:Bind HasIcon}" />
-                            <FontIcon
-                                FontSize="20"
-                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                Glyph="&#xE7C3;"
-                                Visibility="{x:Bind HasNoIcon}" />
+                            <!-- 行操作（UI v2）：按状态显隐 —— 查看 / 接管 / 移出延时 / 禁用 / 启用 / 编辑 -->
+                            <StackPanel
+                                Grid.Column="3"
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="4">
+                                <Button
+                                    Click="OnViewRequested"
+                                    Content="查看" />
+                                <Button
+                                    Click="OnDelayRequested"
+                                    Content="加入延时"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Visibility="{x:Bind CanTakeOver, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                                <Button
+                                    Click="OnReleaseRequested"
+                                    Content="移出延时"
+                                    Visibility="{x:Bind CanRelease, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                                <Button
+                                    Click="OnDisableRequested"
+                                    Content="禁用"
+                                    Visibility="{x:Bind CanDisable, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                                <Button
+                                    Click="OnEnableRequested"
+                                    Content="启用"
+                                    Visibility="{x:Bind CanEnable, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                                <Button
+                                    Click="OnEditRequested"
+                                    Content="编辑"
+                                    Visibility="{x:Bind CanEdit, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                            </StackPanel>
                         </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
 
-                        <StackPanel Grid.Column="1" Spacing="2">
-                            <TextBlock
-                                FontWeight="SemiBold"
-                                Text="{x:Bind Name}"
-                                TextTrimming="CharacterEllipsis" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind CommandLine}"
-                                TextTrimming="CharacterEllipsis" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind LocationText}"
-                                TextTrimming="CharacterEllipsis" />
-                        </StackPanel>
-
-                        <!-- 状态徽标（D1）：药丸样式，配色经 StatusBrush 转换器按 StatusKind 分档 -->
-                        <Border
-                            Grid.Column="2"
-                            VerticalAlignment="Center"
-                            Background="{x:Bind StatusKind, Converter={StaticResource StatusBrush}, ConverterParameter=bg, Mode=OneTime}"
-                            CornerRadius="4"
-                            Padding="8,3">
-                            <TextBlock
-                                Foreground="{x:Bind StatusKind, Converter={StaticResource StatusBrush}, ConverterParameter=fg, Mode=OneTime}"
-                                FontSize="12"
-                                Text="{x:Bind StatusText, Mode=OneTime}" />
-                        </Border>
-
-                        <!--
-                            「延时启动」入口只在可接管时可见（受保护 / 已失效 / 已接管的条目不显示），
-                            判据来自模型的 CanTakeOver，界面不复制一份。
-                        -->
-                        <Button
-                            Grid.Column="3"
-                            VerticalAlignment="Center"
-                            Click="OnDelayRequested"
-                            Content="延时启动"
-                            Style="{StaticResource AccentButtonStyle}"
-                            Visibility="{x:Bind CanTakeOver, Converter={StaticResource BoolToVisibility}}" />
-                    </Grid>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
-
-        <!-- 空状态：区分"系统里没有"与"被筛光了"，文案与显隐都来自 ViewModel -->
+        <!-- 空状态：区分"系统里没有"与"被筛光了" -->
         <StackPanel
-            Grid.Row="4"
+            Grid.Row="3"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Spacing="6"

@@ -5,17 +5,34 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:conv="using:DelayStart.App.Converters"
     xmlns:m="using:DelayStart.Management.Models"
     xmlns:vm="using:DelayStart.App.ViewModels"
     mc:Ignorable="d">
 
     <!--
-        「系统启动项」页（FR-7，全部只读）。
-        服务 / 驱动 / Winlogon / 登录脚本 —— 本程序**永远不会碰它们**，只展示，
-        让用户知道还有哪些启动位置不在本程序的管辖范围。
+        「系统启动项」分区页（UI v2：服务 / 驱动 / Winlogon / 组策略 四个入口共用本页，全部只读）。
+        2026-09-20 批复修订：
+        5/6 —— 描述与路径合并为一列（先描述、换行路径，描述为空只显示路径）；
+        5 —— 驱动分区右上角开关文案为「显示 Windows 内置驱动」（code-behind 按分区设置），
+             并补空列表提示（默认只显示第三方时驱动可能一条都没有）；
+        7 —— 组策略分区为空时给出"正常现象"说明。
     -->
+    <Page.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <conv:NonEmptyToVisibilityConverter x:Key="NonEmptyToVisibility" />
+        <conv:ServiceStatusToBrushConverter x:Key="StatusColor" />
+
+        <Style x:Key="ItemRowStyle" TargetType="ListViewItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+    </Page.Resources>
+
     <Grid Padding="32,20,32,24" RowSpacing="12">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -24,7 +41,7 @@
 
         <!-- 页头 -->
         <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="系统启动项" />
+            <TextBlock x:Name="PageTitleText" Style="{StaticResource TitleTextBlockStyle}" Text="系统启动项" />
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
@@ -39,138 +56,194 @@
             Severity="Informational"
             Title="本页全部只读" />
 
-        <!-- 加载条 + 内置过滤开关（D2/D3）：默认只看第三方，标题栏数字会随开关变 -->
-        <Grid Grid.Row="2" Margin="0,0,0,8">
+        <!-- 加载条 + 内置过滤开关（仅服务 / 驱动分区显示；文案按分区切换） -->
+        <Grid Grid.Row="2" Margin="0,0,0,4">
             <ProgressBar
                 IsIndeterminate="True"
                 VerticalAlignment="Center"
                 Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
             <CheckBox
+                x:Name="BuiltinToggle"
                 HorizontalAlignment="Right"
+                Content="显示 Windows 内置服务"
                 IsChecked="{x:Bind ViewModel.ShowBuiltinServices, Mode=TwoWay}"
-                Content="显示 Windows 内置服务 / 驱动" />
+                Visibility="{x:Bind ViewModel.IsServiceSection, Mode=OneTime, Converter={StaticResource BoolToVisibility}}" />
         </Grid>
 
-        <!-- 分区折叠展示：服务 / 驱动 / Winlogon / 登录脚本 -->
-        <ScrollView Grid.Row="3">
-            <StackPanel Spacing="8">
-                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                    <Expander.Header>
-                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ServicesHeaderText, Mode=OneWay}" />
-                    </Expander.Header>
-                    <ListView ItemsSource="{x:Bind ViewModel.Services}" SelectionMode="None">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="m:ServiceInfo">
-                                <Grid Padding="12,6" ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220" />
-                                        <ColumnDefinition Width="110" />
-                                        <ColumnDefinition Width="110" />
-                                        <ColumnDefinition Width="90" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{x:Bind DisplayName}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ServiceName}" />
-                                    <TextBlock
-                                        Grid.Column="1"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind StartType}" />
-                                    <TextBlock
-                                        Grid.Column="2"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind StatusText}" />
-                                    <TextBlock
-                                        Grid.Column="3"
-                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                        HorizontalTextAlignment="Right"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind DelayedAutoText}" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                </Expander>
+        <!-- 名值列表（Winlogon / 组策略）的空提示（批复 7：组策略为空是正常现象，要说清楚） -->
+        <TextBlock
+            Grid.Row="3"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Style="{StaticResource BodyTextBlockStyle}"
+            Text="{x:Bind ViewModel.TextEmptyHint, Mode=OneWay}"
+            TextWrapping="Wrap"
+            Visibility="{x:Bind ViewModel.TextEmptyHint, Mode=OneWay, Converter={StaticResource NonEmptyToVisibility}}" />
 
-                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                    <Expander.Header>
-                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.DriversHeaderText, Mode=OneWay}" />
-                    </Expander.Header>
-                    <ListView ItemsSource="{x:Bind ViewModel.Drivers}" SelectionMode="None">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="m:ServiceInfo">
-                                <Grid Padding="12,6" ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220" />
-                                        <ColumnDefinition Width="110" />
-                                        <ColumnDefinition Width="110" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{x:Bind DisplayName}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ServiceName}" />
-                                    <TextBlock
-                                        Grid.Column="1"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind StartType}" />
-                                    <TextBlock
-                                        Grid.Column="2"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind StatusText}" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                </Expander>
+        <!-- 服务类列表（服务 / 驱动）—— 列表包进卡片 -->
+        <Border
+            Grid.Row="4"
+            Padding="8,4"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="7"
+            Visibility="{x:Bind ViewModel.IsServiceSection, Mode=OneTime, Converter={StaticResource BoolToVisibility}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                    <Expander.Header>
-                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.WinlogonHeaderText, Mode=OneWay}" />
-                    </Expander.Header>
-                    <ListView ItemsSource="{x:Bind ViewModel.WinlogonEntries}" SelectionMode="None">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="m:ReadOnlyEntry">
-                                <Grid Padding="12,6" ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="160" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" FontWeight="SemiBold" Text="{x:Bind Name}" ToolTipService.ToolTip="{x:Bind Location}" />
-                                    <TextBlock
-                                        Grid.Column="1"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind Detail}"
-                                        TextWrapping="Wrap" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                </Expander>
+                <!-- 表头：列定义与行模板一致（250/110/100/*，批复 6：描述与路径合并列） -->
+                <Grid Grid.Row="0" Padding="28,8,28,4" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="250" />
+                        <ColumnDefinition Width="110" />
+                        <ColumnDefinition Width="100" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        Grid.Column="0"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="名称" />
+                    <TextBlock
+                        Grid.Column="1"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="启动类型" />
+                    <TextBlock
+                        Grid.Column="2"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="状态" />
+                    <TextBlock
+                        Grid.Column="3"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="描述 / 路径" />
+                </Grid>
 
-                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                    <Expander.Header>
-                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ScriptsHeaderText, Mode=OneWay}" />
-                    </Expander.Header>
-                    <ListView ItemsSource="{x:Bind ViewModel.LogonScripts}" SelectionMode="None">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="m:ReadOnlyEntry">
-                                <Grid Padding="12,6" ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="200" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Location}" />
-                                    <TextBlock
-                                        Grid.Column="1"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind Detail}"
-                                        TextWrapping="Wrap" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                </Expander>
-            </StackPanel>
-        </ScrollView>
+                <!-- 空列表提示（批复 5：默认只显示第三方时，驱动分区可能整页为空） -->
+                <TextBlock
+                    Grid.Row="1"
+                    Margin="28,4,28,10"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="{x:Bind ViewModel.EmptyHint, Mode=OneWay}"
+                    TextWrapping="Wrap"
+                    Visibility="{x:Bind ViewModel.IsListEmpty, Mode=OneWay, Converter={StaticResource BoolToVisibility}}" />
+
+                <!-- 🔴 ItemsSource 必须只由 code-behind 按分区设置（服务 / 驱动各一个集合）。
+                     此前这里有 ItemsSource={x:Bind ViewModel.Services}（OneTime），它在 Loading
+                     阶段求值，会**覆盖** ApplyTag 里设置的驱动集合 —— 驱动页永远显示空的服务集合
+                     （2026-09-20 Round H 实锤）。 -->
+                <ListView
+                    x:Name="ServiceList"
+                    Grid.Row="2"
+                    ItemContainerStyle="{StaticResource ItemRowStyle}"
+                    SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="m:ServiceInfo">
+                        <Grid Padding="12,6" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="250" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{x:Bind DisplayName}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ServiceName}" />
+                            <TextBlock
+                                Grid.Column="1"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind StartType}" />
+                            <!-- 批复 11：状态按运行态着色（运行 = 绿 / 过渡 = 橙 / 停止 = 灰） -->
+                            <TextBlock
+                                Grid.Column="2"
+                                Foreground="{x:Bind StatusText, Converter={StaticResource StatusColor}, Mode=OneTime}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind StatusText}" />
+                            <!-- 批复 6：合并列 —— 描述非空显示描述，路径始终显示在第二行 -->
+                            <StackPanel Grid.Column="3" Spacing="1">
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                    Text="{x:Bind Description}"
+                                    TextTrimming="CharacterEllipsis"
+                                    Visibility="{x:Bind Description, Converter={StaticResource NonEmptyToVisibility}, Mode=OneTime}"
+                                    ToolTipService.ToolTip="{x:Bind Description}" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind BinaryPath}"
+                                    TextTrimming="CharacterEllipsis"
+                                    ToolTipService.ToolTip="{x:Bind BinaryPath}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <!-- 名值列表（Winlogon / 组策略）：ItemsSource 由 code-behind 按分区指定 -->
+        <Border
+            Grid.Row="4"
+            Padding="8,4"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="7"
+            Visibility="{x:Bind ViewModel.IsTextSection, Mode=OneTime, Converter={StaticResource BoolToVisibility}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Padding="28,8,28,4" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="200" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        Grid.Column="0"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="名称" />
+                    <TextBlock
+                        Grid.Column="1"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="内容" />
+                </Grid>
+
+                <ListView
+                    x:Name="ReadOnlyList"
+                    Grid.Row="1"
+                    ItemContainerStyle="{StaticResource ItemRowStyle}"
+                    SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="m:ReadOnlyEntry">
+                        <Grid Padding="12,6" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Location}" />
+                            <TextBlock
+                                Grid.Column="1"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind Detail}"
+                                TextTrimming="CharacterEllipsis"
+                                ToolTipService.ToolTip="{x:Bind Detail}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
     </Grid>
 </Page>

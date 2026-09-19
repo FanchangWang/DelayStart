@@ -5,10 +5,16 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ctl="using:DelayStart.App.Controls"
     mc:Ignorable="d"
     CloseButtonText="取消"
     DefaultButton="Primary"
     PrimaryButtonClick="OnPrimaryButtonClick">
+
+    <!-- 2026-09-20 批复 4：解除 ContentDialog 默认 540px 最大宽度限制；840 过宽回调到 700。 -->
+    <ContentDialog.Resources>
+        <x:Double x:Key="ContentDialogMaxWidth">700</x:Double>
+    </ContentDialog.Resources>
 
     <!--
         延时配置编辑器（docs/design-spec.md 三之二）。
@@ -20,12 +26,25 @@
           手动添加   —— 目标程序可选择
 
         分叉的唯一依据是"这条记录有没有系统来源"，由 code-behind 按形态切 ① 里的面板。
+        🔴 根节点是 Grid：自定义延时提交前的二次确认面板（ConfirmOverlay）要覆盖整个内容区
+        （ContentDialog 之上不能叠第二个 ContentDialog，2026-09-19 用户批复 6）。
+        二轮 bug 批复 3/4/5：延时胶囊与身份胶囊统一 8 间距；胶囊宽度自适应内容；
+        校验提示（ValidationBar）放在**内容区顶部**——弹窗内容超高时不滚动也能看到。
     -->
-    <ScrollViewer
-        MaxHeight="520"
-        HorizontalScrollMode="Disabled"
-        VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="14" Width="560">
+    <Grid>
+        <ScrollViewer
+            MaxHeight="520"
+            HorizontalScrollMode="Disabled"
+            VerticalScrollBarVisibility="Auto">
+            <!-- 2026-09-20 批复 4：去掉固定 Width，跟随 ContentDialogMaxWidth=700 自适应。 -->
+            <StackPanel Spacing="14">
+
+            <!-- 校验提示：置顶（二轮 bug 批复 5）—— 内容区滚动位置在哪儿都看得见 -->
+            <InfoBar
+                x:Name="ValidationBar"
+                IsClosable="False"
+                IsOpen="False"
+                Severity="Error" />
 
             <TextBlock
                 x:Name="SubtitleText"
@@ -64,17 +83,15 @@
                     </StackPanel>
                 </Border>
 
-                <!-- 形态 B-1：还没选程序（允许拖放 —— R10 已在主窗口放行 UIPI 拖放消息） -->
+                <!-- 形态 B-1：还没选程序（拖放走经典 WM_DROPFILES —— XAML 拖放在提权进程里
+                     被 UIPI 拦死，批复 4 改造后由 FileDropReceiver 广播路径进来） -->
                 <Border
                     x:Name="PickEmptyBorder"
                     Padding="0"
-                    AllowDrop="True"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
-                    CornerRadius="{StaticResource ControlCornerRadius}"
-                    DragOver="OnTargetDragOver"
-                    Drop="OnTargetDrop">
+                    CornerRadius="{StaticResource ControlCornerRadius}">
                     <Button
                         x:Name="PickFileButton"
                         Padding="16,18"
@@ -94,17 +111,14 @@
                     </Button>
                 </Border>
 
-                <!-- 形态 B-2：已选程序（同样允许拖放更换） -->
+                <!-- 形态 B-2：已选程序（同样接受拖放更换） -->
                 <Border
                     x:Name="PickFilledBorder"
                     Padding="12,10"
-                    AllowDrop="True"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
-                    CornerRadius="{StaticResource ControlCornerRadius}"
-                    DragOver="OnTargetDragOver"
-                    Drop="OnTargetDrop">
+                    CornerRadius="{StaticResource ControlCornerRadius}">
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -143,15 +157,24 @@
                     PlaceholderText="留空则使用程序所在目录" />
             </StackPanel>
 
-            <!-- ② 延时时间 -->
+            <!-- ② 延时时间（胶囊快选：WrapGrid 换行 + 按内容自适应宽度，间距 8） -->
             <StackPanel Spacing="6">
                 <TextBlock FontWeight="SemiBold" Text="② 延时时间" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="相对登录时刻的时间点" />
+                    Text="以登录时刻为起点的绝对时间点；同一时间点的多个程序几乎同时启动" />
 
-                <RadioButtons x:Name="DelayChoices" SelectionChanged="OnDelayPresetChanged" />
+                <!-- 胶囊由 code-behind 填充（选中 = 当前延时；自定义值不在预设里时全部弹起）。
+                     🔴 Round H 批复 5：横向 StackPanel 超宽直接被裁掉看不到 → 换自绘 WrapPanel
+                     （按内容测量 + 自动换行，宽度仍自适应）。 -->
+                <ItemsControl x:Name="DelayChoices">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ctl:WrapPanel Spacing="8" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <NumberBox
@@ -165,23 +188,17 @@
                         VerticalAlignment="Bottom"
                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="预设值可在「设置」里改" />
+                        Text="手动输入的自定义值提交前需要确认" />
                 </StackPanel>
-
-                <TextBlock
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="延时是相对登录时刻的绝对时间点，不是累加。同一时间点的多个程序会几乎同时启动。"
-                    TextWrapping="Wrap" />
             </StackPanel>
 
-            <!-- ③ 启动身份 -->
+            <!-- ③ 启动身份（一行两个胶囊，间距与延时胶囊一致 = 8） -->
             <StackPanel Spacing="6">
                 <TextBlock FontWeight="SemiBold" Text="③ 启动身份" />
-                <RadioButtons x:Name="IdentityChoices" SelectionChanged="OnIdentityChanged">
-                    <RadioButton Content="普通用户（推荐）" />
-                    <RadioButton Content="管理员" />
-                </RadioButtons>
+                <StackPanel
+                    x:Name="IdentityChoices"
+                    Orientation="Horizontal"
+                    Spacing="8" />
                 <TextBlock
                     x:Name="IdentityHintText"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -243,14 +260,33 @@
                 FontWeight="SemiBold"
                 TextWrapping="Wrap" />
 
-            <!-- 校验提示 -->
-            <InfoBar
-                x:Name="ValidationBar"
-                IsClosable="False"
-                IsOpen="False"
-                Severity="Error"
-                Title="填写不完整" />
-
         </StackPanel>
-    </ScrollViewer>
+        </ScrollViewer>
+
+        <!-- 二次确认覆盖层（用户批复 6：手动编辑自定义延时后提交需确认） -->
+        <Border
+            x:Name="ConfirmOverlay"
+            Padding="24"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="{StaticResource OverlayCornerRadius}"
+            Visibility="Collapsed">
+            <StackPanel Spacing="14" VerticalAlignment="Center">
+                <TextBlock FontSize="18" FontWeight="SemiBold" Text="确认自定义延时" />
+                <TextBlock
+                    x:Name="ConfirmText"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    TextWrapping="Wrap" />
+                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                    <Button Click="OnConfirmDelayRejected" Content="返回修改" />
+                    <Button
+                        Click="OnConfirmDelayAccepted"
+                        Content="确认使用"
+                        Style="{StaticResource AccentButtonStyle}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
 </ContentDialog>

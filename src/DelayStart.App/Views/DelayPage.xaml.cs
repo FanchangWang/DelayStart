@@ -2,6 +2,7 @@ using DelayStart.App.Dialogs;
 using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
+using DelayStart.Management.Models;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -55,12 +56,15 @@ public sealed partial class DelayPage : Page
     /// </remarks>
     private async void OnAddManualRequested(object sender, RoutedEventArgs e)
     {
-        var dialog = new DelayEditorDialog(ViewModel.DelayPresets, ViewModel.MaxDelaySeconds, _handles)
+        var dialog = new DelayEditorDialog(ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles)
         {
             XamlRoot = XamlRoot,
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        // 二次确认（自定义延时）走弹窗内确认面板：确认后 Hide() 的结果值是 None，
+        // 所以这里必须同时接受 Primary 与 DelayConfirmed。
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary && !dialog.DelayConfirmed)
         {
             return;
         }
@@ -85,12 +89,14 @@ public sealed partial class DelayPage : Page
             return;
         }
 
-        var dialog = new DelayEditorDialog(row.Item, ViewModel.DelayPresets, ViewModel.MaxDelaySeconds, _handles)
+        var dialog = new DelayEditorDialog(row.Item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles)
         {
             XamlRoot = XamlRoot,
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        // 二次确认（自定义延时）走弹窗内确认面板：确认后 Hide() 的结果值是 None。
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary && !dialog.DelayConfirmed)
         {
             return;
         }
@@ -198,7 +204,22 @@ public sealed partial class DelayPage : Page
             return;
         }
 
-        var outcome = ViewModel.Release(row);
+        // 🔴 Release 内部把可预期的失败折成 TakeoverOutcome，但意外异常（如配置读取
+        // 失败、COM 调用出错）仍可能冲出来 —— async void 里未捕获异常会直接带崩进程
+        // （2026-09-19 用户实测「删除一个条目时软件崩溃」）。这里统一兜住转成提示。
+        TakeoverOutcome outcome;
+        try
+        {
+            outcome = ViewModel.Release(row);
+        }
+        catch (Exception ex)
+        {
+            await ShowFailureAsync(
+                "未能移出延时启动",
+                $"移除过程发生意外错误：{ex.Message}\n\n该条目仍保持接管状态 —— 可稍后重试，详情见运行日志。");
+            return;
+        }
+
         if (outcome.Succeeded)
         {
             return;

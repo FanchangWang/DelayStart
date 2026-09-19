@@ -87,6 +87,8 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- PowerToys 同款设置卡片（UI v2.2，D1 批复 A）。 -->
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" />
   </ItemGroup>
 
 </Project>

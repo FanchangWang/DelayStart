@@ -42,6 +42,14 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup Label="PowerToys 同款设置卡片（UI v2.2，D1 批复 A）">
+    <!--
+      CommunityToolkit.WinUI.Controls.SettingsControls：SettingsCard / SettingsExpander。
+      PowerToys 设置页就用它渲染截图里的圆角卡片行；引入同款控件 1:1 对齐样式。
+    -->
+    <PackageVersion Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
+  </ItemGroup>
+
   <ItemGroup Label="单元测试（D21：xUnit v3 / Microsoft.Testing.Platform v2）">
     <PackageVersion Include="xunit.v3.mtp-v2" Version="4.0.1" />
   </ItemGroup>

@@ -9,6 +9,14 @@
     mc:Ignorable="d">
 
     <!-- 「运行日志」页（FR-8）：按次分组的调度结果，最新在前，保留最近 30 次 -->
+    <Page.Resources>
+        <Style x:Key="RunRowStyle" TargetType="ListViewItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+    </Page.Resources>
+
     <Grid Padding="32,20,32,24" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -51,63 +59,105 @@
 
         <ProgressBar Grid.Row="2" IsIndeterminate="True" Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay}" />
 
-        <!-- 分组列表：一次登录 = 一组 -->
-        <ListView
+        <!-- 分组列表：一次登录 = 一组（D2 批复 A：列表包进卡片） -->
+        <Border
             Grid.Row="3"
-            ItemsSource="{x:Bind ViewModel.Groups}"
-            SelectionMode="None">
+            Padding="8,4"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="7">
+            <ListView
+                ItemsSource="{x:Bind ViewModel.Groups}"
+                SelectionMode="None">
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="vm:RunGroupRow">
                     <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                         <Expander.Header>
                             <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" />
                         </Expander.Header>
-                        <ListView ItemsSource="{x:Bind Items}" SelectionMode="None">
-                            <ListView.ItemTemplate>
-                                <DataTemplate x:DataType="vm:RunItemRow">
-                                    <Grid Padding="12,5" ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="70" />
-                                            <ColumnDefinition Width="90" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <!-- 表头：内缩与行内容对齐（Border 8 + ListViewItem 8 + 行 Grid 12 = 28） -->
+                            <Grid Padding="28,8,28,2" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="70" />
+                                    <ColumnDefinition Width="90" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    Grid.Column="0"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="程序" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="延时" />
+                                <TextBlock
+                                    Grid.Column="2"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="结果" />
+                                <TextBlock
+                                    Grid.Column="3"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="说明" />
+                            </Grid>
 
-                                        <TextBlock
-                                            Grid.Column="0"
-                                            Text="{x:Bind Name}"
-                                            TextTrimming="CharacterEllipsis" />
+                            <ListView
+                                ItemContainerStyle="{StaticResource RunRowStyle}"
+                                ItemsSource="{x:Bind Items}"
+                                SelectionMode="None">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RunItemRow">
+                                        <Grid Padding="12,5" ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="90" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
 
-                                        <TextBlock
-                                            Grid.Column="1"
-                                            VerticalAlignment="Center"
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                            Style="{StaticResource CaptionTextBlockStyle}"
-                                            Text="{x:Bind DelayText}" />
+                                            <TextBlock
+                                                Grid.Column="0"
+                                                Text="{x:Bind Name}"
+                                                TextTrimming="CharacterEllipsis" />
 
-                                        <TextBlock
-                                            Grid.Column="2"
-                                            VerticalAlignment="Center"
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                            Style="{StaticResource CaptionTextBlockStyle}"
-                                            Text="{x:Bind StateText}" />
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                VerticalAlignment="Center"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind DelayText}" />
 
-                                        <TextBlock
-                                            Grid.Column="3"
-                                            VerticalAlignment="Center"
-                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                            Style="{StaticResource CaptionTextBlockStyle}"
-                                            Text="{x:Bind ReasonText}"
-                                            TextTrimming="CharacterEllipsis"
-                                            ToolTipService.ToolTip="{x:Bind ReasonText}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
-                        </ListView>
+                                            <TextBlock
+                                                Grid.Column="2"
+                                                VerticalAlignment="Center"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind StateText}" />
+
+                                            <TextBlock
+                                                Grid.Column="3"
+                                                VerticalAlignment="Center"
+                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind ReasonText}"
+                                                TextTrimming="CharacterEllipsis"
+                                                ToolTipService.ToolTip="{x:Bind ReasonText}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </StackPanel>
                     </Expander>
                 </DataTemplate>
             </ListView.ItemTemplate>
-        </ListView>
+            </ListView>
+        </Border>
 
         <!-- 空状态 -->
         <StackPanel

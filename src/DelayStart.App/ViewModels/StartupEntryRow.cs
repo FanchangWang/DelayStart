@@ -29,9 +29,14 @@ public sealed class StartupEntryRow
     public StartupEntryRow(StartupEntry entry, IconPixels? iconPixels)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
         Entry = entry;
+        Pixels = iconPixels;
         Icon = IconRenderer.ToImageSource(iconPixels);
     }
+
+    /// <summary>原始图标像素，供行级局部刷新时复用（新行沿用旧图标，不重新提取）。</summary>
+    public IconPixels? Pixels { get; }
 
     /// <summary>原始条目，供后续操作（接管 / 禁用 / 打开文件位置）取用。</summary>
     public StartupEntry Entry { get; }
@@ -112,4 +117,19 @@ public sealed class StartupEntryRow
     /// "能不能接管"是模型的语义，界面只负责把它显示成按钮的可用性。
     /// </remarks>
     public bool CanTakeOver => Entry.CanTakeOver;
+
+    /// <summary>已接管项可执行「移出延时」（bug#4：此前行上没有这个入口）。</summary>
+    public bool CanRelease => Entry.IsTakenOver;
+
+    /// <summary>已接管项可打开编辑器改延时 / 参数 / 工作目录。</summary>
+    public bool CanEdit => Entry.IsTakenOver;
+
+    /// <summary>
+    /// 可执行「禁用」（纯禁用，不接管 —— D3：与接管后的禁用同一软禁用机制，只是不写配置）。
+    /// 受保护 / 已失效 / 已接管项不可再禁。
+    /// </summary>
+    public bool CanDisable => Entry.IsEnabled && !Entry.IsTakenOver && !Entry.IsProtected && !Entry.IsMissing;
+
+    /// <summary>可执行「启用」（写标记的反向：删除 StartupApproved 标记）。</summary>
+    public bool CanEnable => !Entry.IsEnabled && !Entry.IsTakenOver && !Entry.IsProtected && !Entry.IsMissing;
 }

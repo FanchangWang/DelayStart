@@ -1,5 +1,4 @@
-using System.Globalization;
-
+using DelayStart.App.Interop;
 using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
@@ -7,10 +6,7 @@ using DelayStart.Management.Models;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-
-using Windows.ApplicationModel.DataTransfer;
-using Windows.Storage;
-using Windows.Storage.Pickers;
+using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace DelayStart.App.Dialogs;
 
@@ -31,13 +27,18 @@ namespace DelayStart.App.Dialogs;
 /// ① 里的三块目标程序面板（只读卡片 / 未选择 / 已选择）按形态切可见性，
 /// 而不是做三个弹窗 —— ②③④ 与底部摘要是四种进入方式完全共享的部分。
 /// </para>
+/// <para>
+/// 2026-09-19 用户批复：**单条目延时上限已移除**（自定义值只受 7 天的输入兜底约束）；
+/// 手动编辑自定义延时后提交需要**二次确认** —— 弹窗内的确认面板，点「确认使用」才真正提交。
+/// bug 批复：延时预设与启动身份均为**胶囊**形态；文件选择走 Win32 对话框（提权进程里
+/// WinRT 选择器打不开）；弹窗打开后对主窗口子树放行 UIPI 拖放消息。
+/// </para>
 /// </remarks>
 public sealed partial class DelayEditorDialog : ContentDialog
 {
-    /// <summary>自定义延时数字框的上限（无设置上限时的兜底：7 天）。</summary>
+    /// <summary>自定义延时数字框的输入兜底上限：7 天（上限配置已移除，只挡明显的误输入）。</summary>
     private const int FallbackMaxDelay = 604800;
 
-    private readonly int _maxDelaySeconds;
     private readonly WindowHandleProvider? _handles;
 
     private bool _suppressSync;
@@ -45,18 +46,22 @@ public sealed partial class DelayEditorDialog : ContentDialog
     private string _targetPath = string.Empty;
     private bool _nameWasAutoFilled;
 
+    /// <summary>用户是否手动改过自定义延时（选预设不算）。</summary>
+    private bool _manualDelayEdit;
+
+    /// <summary>自定义延时是否已经过确认面板确认。</summary>
+    private bool _manualDelayConfirmed;
+
     /// <summary>构造「加入系统项」形态：目标程序由扫描到的自启动项绑定，不可更改。</summary>
     /// <param name="entry">要接管的系统自启动项。</param>
     /// <param name="presets">延时预设值（秒），来自 <c>Settings.DelayPresets</c>。</param>
-    /// <param name="maxDelaySeconds">单条目延时上限；<c>0</c> 表示不限制。</param>
-    public DelayEditorDialog(StartupEntry entry, int[] presets, int maxDelaySeconds)
+    /// <param name="defaultPreset">默认预设（秒）—— 接管时预选的延时。</param>
+    public DelayEditorDialog(StartupEntry entry, int[] presets, int defaultPreset)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        _maxDelaySeconds = maxDelaySeconds;
-
         InitializeComponent();
-        InitializeCommon(presets);
+        InitializeCommon(presets, defaultPreset);
 
         Title = "加入延时启动";
         PrimaryButtonText = "加入延时启动";
@@ -74,29 +79,28 @@ public sealed partial class DelayEditorDialog : ContentDialog
         InfoImpactText.Text = "原自启动项将被软禁用：不删除注册表值、不移动文件，随时可完整恢复。";
 
         UseReadOnlyTarget();
-        SetDelay(DelayedItem.DefaultDelaySeconds);
+        SetDelay(defaultPreset);
         SetIdentity(false);
     }
 
     /// <summary>构造「编辑已有条目」形态：系统项的目标程序只读，手动项可更换。</summary>
     /// <param name="item">要编辑的配置条目。</param>
     /// <param name="presets">延时预设值（秒）。</param>
-    /// <param name="maxDelaySeconds">单条目延时上限；<c>0</c> 表示不限制。</param>
+    /// <param name="defaultPreset">默认预设（秒）；编辑形态下预选条目现有延时。</param>
     /// <param name="handles">主窗口句柄提供者，手动形态选文件时需要。</param>
     public DelayEditorDialog(
         DelayedItem item,
         int[] presets,
-        int maxDelaySeconds,
+        int defaultPreset,
         WindowHandleProvider handles)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(handles);
 
-        _maxDelaySeconds = maxDelaySeconds;
         _handles = handles;
 
         InitializeComponent();
-        InitializeCommon(presets);
+        InitializeCommon(presets, defaultPreset);
 
         var manual = item.IsManual;
 
@@ -134,6 +138,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
             InfoImpactText.Text = "原自启动项保持软禁用状态，本次修改不会改变它在系统中的状态。";
 
             UseReadOnlyTarget();
+            WorkingDirBox.Text = item.WorkingDirectory;
         }
 
         ArgumentsBox.Text = item.Arguments;
@@ -143,24 +148,23 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
     /// <summary>构造「手动添加」形态：目标程序由用户选择。</summary>
     /// <param name="presets">延时预设值（秒）。</param>
-    /// <param name="maxDelaySeconds">单条目延时上限；<c>0</c> 表示不限制。</param>
+    /// <param name="defaultPreset">默认预设（秒）—— 打开时预选的延时。</param>
     /// <param name="handles">主窗口句柄提供者，选文件时需要。</param>
-    public DelayEditorDialog(int[] presets, int maxDelaySeconds, WindowHandleProvider handles)
+    public DelayEditorDialog(int[] presets, int defaultPreset, WindowHandleProvider handles)
     {
         ArgumentNullException.ThrowIfNull(handles);
 
-        _maxDelaySeconds = maxDelaySeconds;
         _handles = handles;
 
         InitializeComponent();
-        InitializeCommon(presets);
+        InitializeCommon(presets, defaultPreset);
 
         Title = "手动添加延时启动";
         PrimaryButtonText = "加入延时启动";
         SubtitleText.Text = "选择一个程序，由本程序在登录后延时启动";
 
-        // R10 已落地：主窗口在创建时经 ChangeWindowMessageFilterEx 放行了 UIPI
-        // 拖放消息白名单，提权窗口现在可以接收资源管理器的拖放（设计稿原文恢复）。
+        // 选择程序的主路径是 Win32 通用对话框（提权可用）；拖放是增强，
+        // 弹窗 Opened 后对主窗口子树放行 UIPI 拖放消息（见 OnDialogOpened）。
         TargetHintText.Text = "拖入文件或点击选择";
 
         ImpactHeaderText.Text = "④ 系统影响";
@@ -169,15 +173,39 @@ public sealed partial class DelayEditorDialog : ContentDialog
         InfoImpactText.Text = "不改动注册表、启动文件夹、计划任务；移除时直接删除本条配置，无残留。";
 
         UsePickTarget();
-        SetDelay(DelayedItem.DefaultDelaySeconds);
+        SetDelay(defaultPreset);
         SetIdentity(false);
     }
 
     /// <summary>最终选择的延时秒数。</summary>
     public int DelaySeconds => _delaySeconds;
 
+    /// <summary>
+    /// 自定义延时是否已经过确认面板确认。
+    /// </summary>
+    /// <remarks>
+    /// 二次确认走弹窗内的确认面板（ContentDialog 之上不能叠第二个 ContentDialog），
+    /// 确认后用 <c>Hide()</c> 关闭 —— 结果值为 <see cref="ContentDialogResult.None"/>，
+    /// 调用方必须用「Primary 或本属性为真」判定提交。
+    /// </remarks>
+    public bool DelayConfirmed => _manualDelayConfirmed;
+
     /// <summary>最终选择的启动身份。</summary>
-    public bool RunAsAdmin => IdentityChoices.SelectedIndex == 1;
+    public bool RunAsAdmin
+    {
+        get
+        {
+            foreach (var child in IdentityChoices.Children)
+            {
+                if (child is ToggleButton { Tag: "admin" } pill && pill.IsChecked == true)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
 
     /// <summary>命令行参数；留空表示沿用原自启动项自带的参数（FR-4.5）。</summary>
     public string Arguments => ArgumentsBox.Text.Trim();
@@ -207,36 +235,130 @@ public sealed partial class DelayEditorDialog : ContentDialog
         WorkingDirectory = WorkingDirectory,
     };
 
-    /// <summary>四种形态共用的初始化：延时预设、上限、身份提示。</summary>
+    /// <summary>四种形态共用的初始化：延时预设、身份胶囊、输入兜底、拖放接收。</summary>
     /// <param name="presets">延时预设值（秒）。</param>
-    private void InitializeCommon(int[] presets)
+    /// <param name="defaultPreset">默认预设（秒），用于无值时的预选兜底。</param>
+    private void InitializeCommon(int[] presets, int defaultPreset)
     {
-        CustomDelayBox.Maximum = _maxDelaySeconds > 0 ? _maxDelaySeconds : FallbackMaxDelay;
-        FillDelayPresets(presets);
+        CustomDelayBox.Maximum = FallbackMaxDelay;
+        FillDelayPresets(presets, defaultPreset);
+        BuildIdentityPills();
+
+        // 批复 4：拖放走经典 WM_DROPFILES（FileDropReceiver 子类化接收），
+        // 弹窗打开时对弹层 HWND 再补一轮启用；收到文件路径后填进目标程序。
+        Opened += OnDialogOpened;
+        Closed += OnDialogClosed;
+        FileDropReceiver.FilesDropped += OnFilesDropped;
     }
 
-    private void FillDelayPresets(int[] presets)
+    /// <summary>弹窗已打开：此时弹层 HWND 已创建，放行 UIPI 白名单 + 启用经典拖放。</summary>
+    private void OnDialogOpened(ContentDialog sender, ContentDialogOpenedEventArgs args)
     {
-        var usable = presets is { Length: > 0 } ? presets : [0, 10, 30, 60, 120];
-
-        foreach (var preset in usable)
+        if (_handles is not null)
         {
-            DelayChoices.Items.Add(new RadioButton
-            {
-                Content = DisplayText.DelayOf(preset),
-                Tag = preset,
-            });
+            UipiMessageFilter.AllowDragDropForTree(_handles.Handle);
+            FileDropReceiver.EnableTree(_handles.Handle);
         }
     }
 
+    /// <summary>弹窗关闭：退订全局拖放广播，避免残留订阅。</summary>
+    private void OnDialogClosed(ContentDialog sender, ContentDialogClosedEventArgs args)
+    {
+        FileDropReceiver.FilesDropped -= OnFilesDropped;
+    }
+
+    /// <summary>经典拖放收到文件（批复 4）：取第一个受支持的填进目标程序。</summary>
+    private void OnFilesDropped(string[] paths)
+    {
+        // 只读形态（目标程序由系统项绑定）不接受更换 —— 静默忽略。
+        if (!IsPickTarget || paths.Length == 0)
+        {
+            return;
+        }
+
+        var path = Array.Find(paths, static candidate => IsSupportedProgram(candidate));
+        if (string.IsNullOrEmpty(path))
+        {
+            ShowValidation("不支持的文件类型", "只接受 .exe / .lnk / .bat / .cmd / .msi。");
+            return;
+        }
+
+        ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
+    }
+
+    /// <summary>填充延时预设胶囊（一行多个，选中 = 当前延时）。</summary>
+    private void FillDelayPresets(int[] presets, int defaultPreset)
+    {
+        var usable = presets is { Length: > 0 } ? presets : [0, 10, 30, 60, 120];
+        if (!usable.Contains(defaultPreset))
+        {
+            defaultPreset = usable[0];
+        }
+
+        foreach (var preset in usable)
+        {
+            DelayChoices.Items.Add(
+                CreatePill(DisplayText.DelayOf(preset), preset, preset == defaultPreset, OnDelayPillChecked));
+        }
+    }
+
+    /// <summary>填充启动身份胶囊（普通身份 / 管理员，一行两个）。</summary>
+    private void BuildIdentityPills()
+    {
+        IdentityChoices.Children.Add(
+            CreatePill("普通身份", "normal", isChecked: false, OnIdentityNormalChecked));
+        IdentityChoices.Children.Add(
+            CreatePill("管理员", "admin", isChecked: false, OnIdentityAdminChecked));
+    }
+
+    /// <summary>造一个胶囊按钮。</summary>
+    /// <remarks>
+    /// 先设 <c>IsChecked</c> 再订阅 <c>Checked</c>：初始选中态不应触发"用户选择"的逻辑。
+    /// Margin 统一右 8 下 8 —— 与身份胶囊 / 设置页胶囊保持一致的固定间距（二轮 bug 批复 4）。
+    /// </remarks>
+    private static ToggleButton CreatePill(string text, object tag, bool isChecked, RoutedEventHandler onChecked)
+    {
+        var pill = new ToggleButton
+        {
+            Content = text,
+            Tag = tag,
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(14, 6, 14, 6),
+            Margin = new Thickness(0, 0, 8, 8),
+            IsChecked = isChecked,
+        };
+
+        pill.Checked += onChecked;
+        return pill;
+    }
+
+    /// <summary>把 <paramref name="source"/> 以外的胶囊全部弹起（单选语义）。</summary>
+    private void MakeExclusive(System.Collections.IEnumerable pills, ToggleButton source)
+    {
+        _suppressSync = true;
+        foreach (var pill in pills)
+        {
+            if (pill is ToggleButton button && !ReferenceEquals(button, source))
+            {
+                button.IsChecked = false;
+            }
+        }
+
+        _suppressSync = false;
+    }
+
     /// <summary>切到"目标程序只读"形态。</summary>
+    /// <remarks>
+    /// 🔴 工作目录**保持可编辑**（bug#5）：系统项的路径不可改，但"从哪个目录启动"是
+    /// 启动质量的一部分（有些程序依赖工作目录找配置），接管时同样需要能填。
+    /// </remarks>
     private void UseReadOnlyTarget()
     {
         ReadOnlyTargetBorder.Visibility = Visibility.Visible;
         PickEmptyBorder.Visibility = Visibility.Collapsed;
         PickFilledBorder.Visibility = Visibility.Collapsed;
         NameBox.Visibility = Visibility.Collapsed;
-        WorkingDirBox.Visibility = Visibility.Collapsed;
+        WorkingDirBox.Visibility = Visibility.Visible;
 
         // 只读形态下 TargetPath 由系统项决定，不允许用户改。
         _targetPath = TargetPathText.Text;
@@ -279,89 +401,53 @@ public sealed partial class DelayEditorDialog : ContentDialog
         UpdateSummary();
     }
 
-    /// <summary>打开文件选择器选一个程序。</summary>
+    /// <summary>打开文件选择对话框选一个程序。</summary>
     /// <returns>选中的文件路径；用户取消时为 <see langword="null"/>。</returns>
     /// <remarks>
-    /// 🔴 unpackaged 的 WinUI 3 必须 <c>InitializeWithWindow</c>，否则 <c>PickSingleFileAsync</c>
-    /// 直接抛异常。这是「手动添加」的**主路径**，拖放（R10）只是增强 ——
-    /// 按 <c>architecture.md</c> 第九节，这条路径必须 100% 可用。
+    /// 🔴 WinRT 的 <c>FileOpenPicker</c> 在提权进程里打不开（选择器 broker 拒绝高完整性
+    /// 令牌，表现为"点击选择程序没反应"—— 2026-09-19 用户实测）。改用 Win32 的
+    /// <see cref="Win32FilePicker"/>（记事本等系统提权程序用的同一套对话框）。
+    /// 这是「手动添加」的**主路径**，拖放只是增强 —— 按 <c>architecture.md</c> 第九节，
+    /// 这条路径必须 100% 可用。对话框自己泵模态消息循环，同步调用即可。
     /// </remarks>
-    private async Task<string?> PickProgramAsync()
+    private Task<string?> PickProgramAsync()
     {
         if (_handles is null || _handles.Handle == 0)
         {
-            return null;
+            return Task.FromResult<string?>(null);
         }
 
-        var picker = new FileOpenPicker();
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, _handles.Handle);
-
-        picker.ViewMode = PickerViewMode.List;
-        picker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-        foreach (var extension in PickerExtensions)
-        {
-            picker.FileTypeFilter.Add(extension);
-        }
-
-        var file = await picker.PickSingleFileAsync();
-        return file?.Path;
+        return Task.FromResult(Win32FilePicker.PickFile(
+            _handles.Handle,
+            "选择延时启动的程序",
+            PickerExtensions));
     }
 
     private async void OnPickFile(object sender, RoutedEventArgs e)
     {
-        var path = await PickProgramAsync();
-        if (string.IsNullOrEmpty(path))
+        try
         {
-            return;
+            var path = await PickProgramAsync();
+            if (string.IsNullOrEmpty(path))
+            {
+                // 用户取消选择是正常路径；但 Handle 未登记时也走这里 —— 把这种情况
+                // 显式说出来（bug#1：此前"点击没反应"就是它被静默吞掉）。
+                if (_handles is null || _handles.Handle == 0)
+                {
+                    ShowValidation("无法打开文件选择器", "主窗口句柄尚未就绪，请关闭弹窗后重试；或直接把文件拖入本区域。");
+                }
+
+                return;
+            }
+
+            ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
         }
-
-        ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
-    }
-
-    /// <summary>拖放悬停：只接受文件项，并给出"复制"视觉反馈。</summary>
-    /// <remarks>
-    /// R10：主窗口已放行 UIPI 拖放消息（见 <c>UipiMessageFilter</c>），
-    /// 这里的拖放事件在提权窗口里才能真正触发。
-    /// </remarks>
-    private void OnTargetDragOver(object sender, DragEventArgs e)
-    {
-        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        catch (Exception ex)
         {
-            e.AcceptedOperation = DataPackageOperation.None;
-            return;
+            // 文件选择器失败（权限 / COM 状态异常）不再静默：弹窗内直接给出原因，
+            // 拖放路径仍可用 —— 弹窗打开时已对主窗口子树放行 UIPI 拖放消息。
+            ShowValidation("文件选择器打开失败", $"{ex.Message}\n\n也可以直接把文件拖入上方区域。");
         }
-
-        e.AcceptedOperation = DataPackageOperation.Copy;
-        e.DragUIOverride.Caption = "添加为延时启动";
-        e.DragUIOverride.IsCaptionVisible = true;
-        e.DragUIOverride.IsContentVisible = true;
-        e.Handled = true;
-    }
-
-    /// <summary>拖放落下：取第一个受支持的文件当作目标程序。</summary>
-    private async void OnTargetDrop(object sender, DragEventArgs e)
-    {
-        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
-        {
-            return;
-        }
-
-        var items = await e.DataView.GetStorageItemsAsync();
-        var path = items.OfType<StorageFile>().FirstOrDefault()?.Path;
-
-        if (string.IsNullOrEmpty(path))
-        {
-            ShowValidation("拖入的不是文件", "请拖入 .exe / .lnk / .bat / .cmd / .msi 文件。");
-            return;
-        }
-
-        if (!IsSupportedProgram(path))
-        {
-            ShowValidation("不支持的文件类型", "只接受 .exe / .lnk / .bat / .cmd / .msi。");
-            return;
-        }
-
-        ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
     }
 
     private static bool IsSupportedProgram(string path) =>
@@ -375,18 +461,48 @@ public sealed partial class DelayEditorDialog : ContentDialog
         ValidationBar.Title = title;
         ValidationBar.Message = message;
         ValidationBar.IsOpen = true;
+
+        // 提示条在内容区顶部：内容超高时把视口带回顶部，保证看得见（二轮 bug 批复 5）。
+        ValidationBar.StartBringIntoView();
     }
 
-    private void OnDelayPresetChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>某个延时胶囊被选中。</summary>
+    private void OnDelayPillChecked(object sender, RoutedEventArgs e)
     {
-        if (_suppressSync || DelayChoices.SelectedItem is not RadioButton { Tag: int seconds })
+        if (_suppressSync || sender is not ToggleButton { Tag: int seconds } pill)
         {
             return;
         }
 
+        MakeExclusive(DelayChoices.Items, pill);
         SetCustomDelayValue(seconds);
         _delaySeconds = seconds;
+
+        // 选预设不算手动编辑：不需要二次确认。
+        _manualDelayEdit = false;
         UpdateSummary();
+    }
+
+    private void OnIdentityNormalChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSync || sender is not ToggleButton pill)
+        {
+            return;
+        }
+
+        MakeExclusive(IdentityChoices.Children, pill);
+        UpdateIdentityHint();
+    }
+
+    private void OnIdentityAdminChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSync || sender is not ToggleButton pill)
+        {
+            return;
+        }
+
+        MakeExclusive(IdentityChoices.Children, pill);
+        UpdateIdentityHint();
     }
 
     private void OnCustomDelayChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -404,19 +520,23 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         _delaySeconds = (int)Math.Clamp(args.NewValue, 0, CustomDelayBox.Maximum);
 
-        // 自定义值不再等于任何预设 → 取消预设的选中态，避免"选了 30 秒却显示 45"的矛盾。
+        // 自定义值不再等于任何预设 → 弹起全部胶囊，避免"选了 30 秒却显示 45"的矛盾。
         SyncDelayPresetSelection();
+
+        // 用户批复 6：手动编辑自定义延时后提交需要二次确认。
+        _manualDelayEdit = true;
+        _manualDelayConfirmed = false;
 
         UpdateSummary();
     }
 
-    private void OnIdentityChanged(object sender, SelectionChangedEventArgs e) => UpdateIdentityHint();
-
-    /// <summary>把延时设为指定值，同步预设选中态与自定义输入框。</summary>
+    /// <summary>把延时设为指定值，同步胶囊选中态与自定义输入框。</summary>
     /// <param name="seconds">延时秒数。</param>
     private void SetDelay(int seconds)
     {
         _delaySeconds = seconds;
+        _manualDelayEdit = false;
+        _manualDelayConfirmed = false;
         SetCustomDelayValue(seconds);
         SyncDelayPresetSelection();
         UpdateSummary();
@@ -429,21 +549,18 @@ public sealed partial class DelayEditorDialog : ContentDialog
         _suppressSync = false;
     }
 
-    /// <summary>让预设单选组反映当前延时值；无匹配时清空选中。</summary>
+    /// <summary>让延时胶囊组反映当前延时值；无匹配时全部弹起。</summary>
     private void SyncDelayPresetSelection()
     {
-        var index = -1;
-        for (var i = 0; i < DelayChoices.Items.Count; i++)
+        _suppressSync = true;
+        foreach (var item in DelayChoices.Items)
         {
-            if (DelayChoices.Items[i] is RadioButton { Tag: int preset } && preset == _delaySeconds)
+            if (item is ToggleButton { Tag: int preset } pill)
             {
-                index = i;
-                break;
+                pill.IsChecked = preset == _delaySeconds;
             }
         }
 
-        _suppressSync = true;
-        DelayChoices.SelectedIndex = index;
         _suppressSync = false;
     }
 
@@ -451,7 +568,17 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <param name="runAsAdmin">是否以管理员身份启动。</param>
     private void SetIdentity(bool runAsAdmin)
     {
-        IdentityChoices.SelectedIndex = runAsAdmin ? 1 : 0;
+        _suppressSync = true;
+        foreach (var child in IdentityChoices.Children)
+        {
+            if (child is ToggleButton { Tag: string tag } pill)
+            {
+                pill.IsChecked = runAsAdmin ? tag == "admin" : tag == "normal";
+            }
+        }
+
+        _suppressSync = false;
+
         UpdateIdentityHint();
     }
 
@@ -470,6 +597,22 @@ public sealed partial class DelayEditorDialog : ContentDialog
         SummaryText.Text = $"将在 {DisplayText.DelayOf(_delaySeconds)} 以 {DisplayText.IdentityOf(RunAsAdmin)} 身份启动";
     }
 
+    /// <summary>确认面板上的「确认使用」：确认后按已确认收尾。</summary>
+    private void OnConfirmDelayAccepted(object sender, RoutedEventArgs e)
+    {
+        _manualDelayConfirmed = true;
+        ConfirmOverlay.Visibility = Visibility.Collapsed;
+
+        // Hide() 的结果值是 None；调用方用 DelayConfirmed 属性区分"确认提交"与"取消"。
+        Hide();
+    }
+
+    /// <summary>确认面板上的「返回修改」：回到编辑状态。</summary>
+    private void OnConfirmDelayRejected(object sender, RoutedEventArgs e)
+    {
+        ConfirmOverlay.Visibility = Visibility.Collapsed;
+    }
+
     private void OnPrimaryButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
         // 校验是同步的，不需要 GetDeferral —— 取了 deferral 就必须保证每条路径都 Complete，
@@ -484,13 +627,18 @@ public sealed partial class DelayEditorDialog : ContentDialog
             return;
         }
 
-        if (_delaySeconds < 0 || (_maxDelaySeconds > 0 && _delaySeconds > _maxDelaySeconds))
+        if (_delaySeconds < 0)
         {
-            ShowValidation(
-                "延时值不合法",
-                _maxDelaySeconds > 0
-                    ? $"延时必须在 0 到 {_maxDelaySeconds.ToString(CultureInfo.InvariantCulture)} 秒之间（上限可在「设置」里调整）。"
-                    : "延时不能为负数。");
+            ShowValidation("延时值不合法", "延时不能为负数。");
+            args.Cancel = true;
+            return;
+        }
+
+        // 用户批复 6：手动编辑的自定义延时在提交前需要二次确认。
+        if (_manualDelayEdit && !_manualDelayConfirmed)
+        {
+            ConfirmText.Text = $"将使用自定义延时 {DisplayText.DelayOf(_delaySeconds)}（不在预设列表里）。确定采用吗？";
+            ConfirmOverlay.Visibility = Visibility.Visible;
             args.Cancel = true;
         }
     }

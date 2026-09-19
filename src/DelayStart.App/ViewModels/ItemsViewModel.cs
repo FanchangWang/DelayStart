@@ -3,58 +3,62 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
+using DelayStart.App.Services;
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
+using DelayStart.Management.Abstractions;
 using DelayStart.Management.Models;
 using DelayStart.Management.Services;
 
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 「自启动项」页的 ViewModel。
+/// 「自启动项」来源页的 ViewModel（UI v2：四个来源共用本类，由
+/// <see cref="SourceFilter"/> 区分当前页，docs/ui-mockup-v2.html）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 本页只读系统里**已经存在**的自启动项。手动添加的程序属于调度任务而非系统自启动项，
-/// 只出现在「延时启动」页 —— 所以这里没有也不需要"添加"入口（design-spec 页面 2）。
+/// 🔴 **数据读自 <see cref="ScanCacheService"/>，不重复扫描**（bug#7）：管理端启动后
+/// 全量扫过一次，进页面直接出列表；「刷新本页」只重扫当前来源。
 /// </para>
 /// <para>
-/// 扫描放在后台线程（NFR-1.3）：全量扫描要读三个注册表 hive、两个启动文件夹、
-/// 计划任务库与 UWP 的 `SystemAppData`，同步跑会把窗口冻住。
+/// 🔴 **行级局部刷新**（bug#6）：接管 / 移出 / 禁用 / 启用成功后只替换那一行
+/// （<see cref="StartupEntry"/> 是不可变模型，用修改后的标志位重建一条替换之），
+/// 不整表重扫 —— 滚动位置、搜索词、筛选条件全部原样保留。
 /// </para>
 /// </remarks>
 public sealed partial class ItemsViewModel : ObservableObject
 {
-    private readonly ScanService _scanner;
+    private readonly ScanCacheService _cache;
     private readonly TakeoverService _takeover;
-    private readonly IconProvider _icons;
+    private readonly ConfigEditService _editor;
+    private readonly IReadOnlyList<IStartupSource> _sources;
     private readonly IAppConfigStore _configStore;
     private readonly ILogSink _log;
 
-    /// <summary>页头副标题，形如 `共 37 项 · 已接管 0 项 · 已禁用 15 项`。</summary>
+    /// <summary>当前页面对应的来源；<see langword="null"/> 表示全部来源（保留给潜在的全量入口）。</summary>
+    public StartupSource? SourceFilter { get; set; }
+
+    /// <summary>页头副标题，形如 `注册表 · 共 12 项 · 已接管 2 项 · 已禁用 3 项`。</summary>
     [ObservableProperty]
     public partial string Subtitle { get; set; }
 
     /// <summary>搜索词。匹配名称 / 命令行 / 位置三处（大小写不敏感，子串匹配）。</summary>
-    /// <remarks>过滤的是**显示**，不重扫系统；清空搜索词立刻回到全量列表。</remarks>
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
-
-    /// <summary>来源筛选的下拉序号：0 全部 / 1 注册表 / 2 启动文件夹 / 3 计划任务 / 4 UWP。</summary>
-    /// <remarks>用序号而不是枚举值绑定：分页 Tab 与 <c>ComboBox</c> 的索引是它唯一
-    /// 不需要转换器就能 <c>x:Bind</c> 的形态。</remarks>
-    [ObservableProperty]
-    public partial int SourceFilterIndex { get; set; }
 
     /// <summary>状态筛选的序号：0 全部状态 / 1 已启用 / 2 已禁用 / 3 已接管（design-spec 页面 2）。</summary>
     [ObservableProperty]
     public partial int StatusFilterIndex { get; set; }
 
-    /// <summary>排序方式的序号：0 按来源 / 1 按名称 / 2 按状态。</summary>
+    /// <summary>排序方式的序号：0 按名称 / 1 按状态。</summary>
+    /// <remarks>
+    /// 来源页内不再有"按来源"排序（同一页只有一种来源），按名称是自然默认。
+    /// </remarks>
     [ObservableProperty]
     public partial int SortIndex { get; set; }
 
-    /// <summary>是否正在扫描。界面据此禁用刷新按钮并显示进度条。</summary>
+    /// <summary>是否正在扫描（首次进页或手动刷新）。</summary>
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
 
@@ -64,49 +68,43 @@ public sealed partial class ItemsViewModel : ObservableObject
     public partial string? FailureText { get; set; }
 
     /// <summary>是否存在来源级失败。XAML 的 <c>InfoBar.IsOpen</c> 只吃布尔值。</summary>
-    /// <remarks>
-    /// 计算属性而不是独立的可观察字段：它与 <see cref="FailureText"/> 永远同真同假，
-    /// 存两份迟早出现"文案更新了、开关没更新"。改用
-    /// <c>NotifyPropertyChangedFor</c> 把联动交给源生成器。
-    /// </remarks>
     public bool HasFailure => FailureText is not null;
 
-    /// <summary>构造自启动项页 ViewModel。</summary>
-    /// <param name="scanner">全量扫描服务。</param>
-    /// <param name="takeover">接管服务，处理本页的「延时启动」动作。</param>
-    /// <param name="icons">图标提取服务（D30）。提取在同一次后台扫描里顺带完成。</param>
-    /// <param name="configStore">配置读取端，只用于取延时预设值与上限（FR-4.2 / FR-4.3）。</param>
+    /// <summary>构造来源页 ViewModel。</summary>
+    /// <param name="cache">扫描缓存（读列表 + 局部重扫）。</param>
+    /// <param name="takeover">接管 / 释放服务。</param>
+    /// <param name="editor">条目级编辑服务（改已接管项的延时 / 参数 / 工作目录）。</param>
+    /// <param name="sources">全部来源实例（纯禁用 / 启用写 StartupApproved 用）。</param>
+    /// <param name="configStore">配置读取端（预设值、上限、接管判定）。</param>
     /// <param name="log">日志接收端。</param>
     public ItemsViewModel(
-        ScanService scanner,
+        ScanCacheService cache,
         TakeoverService takeover,
-        IconProvider icons,
+        ConfigEditService editor,
+        IEnumerable<IStartupSource> sources,
         IAppConfigStore configStore,
         ILogSink log)
     {
-        ArgumentNullException.ThrowIfNull(scanner);
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(takeover);
-        ArgumentNullException.ThrowIfNull(icons);
+        ArgumentNullException.ThrowIfNull(editor);
+        ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(log);
 
-        _scanner = scanner;
+        _cache = cache;
         _takeover = takeover;
-        _icons = icons;
+        _editor = editor;
+        _sources = [.. sources];
         _configStore = configStore;
         _log = log;
 
-        Subtitle = "正在扫描…";
+        Subtitle = "正在读取…";
         DelayPresets = new Settings().DelayPresets;
-        MaxDelaySeconds = Settings.DefaultMaxDelaySeconds;
+        DefaultPreset = new Settings().DefaultPreset;
     }
 
-    /// <summary>全部条目。已按「来源 → 名称」排序，排序由 <see cref="ScanService"/> 负责。</summary>
-    /// <remarks>
-    /// 筛选数据源与筛选视图分开：<see cref="Rows"/> 永远是全量（页头统计、筛选谓词都吃它），
-    /// <see cref="FilteredRows"/> 才是列表绑定的东西。直接在 <see cref="Rows"/> 上增删
-    /// 会让"当前过滤条件"没有一个可靠的回算来源。
-    /// </remarks>
+    /// <summary>全部条目（当前来源）。缓存快照的投影，进页即出。</summary>
     public ObservableCollection<StartupEntryRow> Rows { get; } = [];
 
     /// <summary>筛选与搜索后的可见条目，列表实际绑定的集合。</summary>
@@ -119,65 +117,32 @@ public sealed partial class ItemsViewModel : ObservableObject
     public bool FilteredEmpty => FilteredRows.Count == 0;
 
     /// <summary>空状态文案：区分"系统里没有"与"被筛选光了"。</summary>
-    /// <remarks>
-    /// 这两句话指向的动作完全不同（重新扫描 vs 放宽条件），合并成一句会让
-    /// 筛光了数据的用户去点刷新 —— 白扫一遍什么也不会变。
-    /// </remarks>
     public string EmptyText => IsEmpty
-        ? "此位置没有自启动项\n点「刷新扫描」重新检查全部来源"
-        : "没有符合当前搜索 / 筛选条件的条目\n试着清空搜索词或选「全部来源」";
+        ? "此位置没有自启动项\n点「刷新本页」重新检查"
+        : "没有符合当前搜索 / 筛选条件的条目\n试着清空搜索词或选「全部状态」";
 
     /// <summary>延时预设值（秒），驱动编辑器的快选按钮（FR-4.2）。</summary>
-    /// <remarks>每次刷新时随配置一起更新，用户在设置页改过的预设值立刻生效。</remarks>
     public int[] DelayPresets { get; private set; }
 
-    /// <summary>单条目延时上限；<c>0</c> 表示不限制（FR-4.3）。</summary>
-    public int MaxDelaySeconds { get; private set; }
+    /// <summary>默认预设（秒）：编辑器打开时预选的延时（2026-09-19 用户批复）。</summary>
+    public int DefaultPreset { get; private set; }
 
-    /// <summary>重新扫描全部来源。</summary>
-    /// <param name="cancellationToken">取消令牌，连续点刷新时取消上一条命令。</param>
-    /// <returns>扫描完成的 <see cref="Task"/>。</returns>
+    /// <summary>加载列表（读缓存，秒回；缓存为空时触发全量扫描一次）。</summary>
+    /// <returns>异步任务。</returns>
     [RelayCommand]
-    private async Task RefreshAsync(CancellationToken cancellationToken)
+    private async Task LoadAsync()
     {
-        if (IsBusy)
-        {
-            return;
-        }
-
         IsBusy = true;
         try
         {
             LoadSettings();
-
-            // 图标提取和扫描放同一个后台任务：提取单个图标 5~15ms，37 项约几百毫秒，
-            // 放 UI 线程会把刷新冻住；单独开任务又多一次线程切换。顺路做完最划算。
-            var scan = await Task.Run(
-                    () =>
-                    {
-                        var result = _scanner.Scan();
-                        var pixels = new Dictionary<StartupEntry, IconPixels?>(capacity: result.Entries.Count);
-                        foreach (var entry in result.Entries)
-                        {
-                            var source = IconSourceOf(entry);
-                            pixels[entry] = source is null ? null : _icons.TryGetIcon(source);
-                        }
-
-                        return (Result: result, Pixels: pixels);
-                    },
-                    cancellationToken)
-                .ConfigureAwait(true);
-
-            Apply(scan.Result, scan.Pixels);
-        }
-        catch (OperationCanceledException)
-        {
-            // 用户连续点刷新造成上一条命令被取消，属正常路径，不记日志也不提示。
+            var snapshot = await _cache.EnsureLoadedAsync().ConfigureAwait(true);
+            Apply(snapshot);
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "自启动项扫描失败");
-            FailureText = $"扫描失败：{ex.Message}";
+            _log.Error(ex, "读取自启动项缓存失败");
+            FailureText = $"读取失败：{ex.Message}";
         }
         finally
         {
@@ -185,35 +150,226 @@ public sealed partial class ItemsViewModel : ObservableObject
         }
     }
 
-    /// <summary>接管一个系统自启动项。</summary>
+    /// <summary>「刷新本页」：只重扫当前来源（bug#7），其余来源沿用缓存。</summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>异步任务。</returns>
+    [RelayCommand]
+    private async Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        IsBusy = true;
+        try
+        {
+            LoadSettings();
+            var snapshot = SourceFilter is { } kind
+                ? await _cache.RefreshSourceAsync(kind, cancellationToken).ConfigureAwait(true)
+                : await _cache.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            Apply(snapshot);
+        }
+        catch (OperationCanceledException)
+        {
+            // 连续点刷新时上一条命令被取消，属正常路径。
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "局部重扫失败");
+            FailureText = $"刷新失败：{ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>接管一个系统自启动项（加入延时启动）。</summary>
     /// <param name="entry">要接管的条目。</param>
     /// <param name="options">用户在编辑器里做的选择。</param>
-    /// <returns>接管结果；失败时 <see cref="TakeoverOutcome.Message"/> 可直接呈现给用户。</returns>
-    /// <remarks>
-    /// 直接调 <see cref="TakeoverService"/> 而不是自己写配置：接管是四步事务
-    /// （记录原件 → 存配置 → 软禁用 → 注册计划任务），任一步失败都要按逆序回滚，
-    /// 界面层复制这套顺序迟早会漏。
-    /// </remarks>
-    public TakeoverOutcome Takeover(StartupEntry entry, TakeoverOptions options)
+    /// <param name="row">列表中对应的行；接管成功后就地替换（bug#6 局部刷新）。</param>
+    /// <returns>接管结果。</returns>
+    public TakeoverOutcome Takeover(StartupEntry entry, TakeoverOptions options, StartupEntryRow row)
     {
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(row);
 
-        return _takeover.Takeover(entry, options);
+        var outcome = _takeover.Takeover(entry, options);
+        if (outcome.Succeeded)
+        {
+            ReplaceRow(row, WithState(entry, isTakenOver: true, isEnabled: false));
+            RefreshSubtitleFromCache();
+        }
+
+        return outcome;
     }
 
-    /// <summary>读取延时预设值与上限；失败时保持上一次的值，不打扰用户。</summary>
-    /// <remarks>
-    /// 这两个值只影响编辑器的可选档位，读不到就用默认值 —— 为它弹错误框属于
-    /// "把内部问题变成用户的问题"。
-    /// </remarks>
+    /// <summary>移出延时启动（bug#4：行上直达入口），系统项恢复接管前状态。</summary>
+    /// <param name="row">要移出的行。</param>
+    /// <returns>操作结果；失败时 <see cref="TakeoverOutcome.Message"/> 可直接呈现。</returns>
+    public TakeoverOutcome Release(StartupEntryRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var item = FindConfigItem(row.Entry.Id);
+        if (item is null)
+        {
+            return TakeoverOutcome.Failure(row.Entry.Id, StartupFailureReason.Unknown, "配置中找不到该条目，请先刷新列表。");
+        }
+
+        var outcome = _takeover.Release(item);
+        if (outcome.Succeeded)
+        {
+            ReplaceRow(row, WithState(row.Entry, isTakenOver: false, isEnabled: item.OriginalState.WasEnabled));
+            RefreshSubtitleFromCache();
+        }
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// 纯禁用 / 启用（D3：与接管共用 StartupApproved 机制，但不写配置 ——
+    /// 接管 = 加延时 + 禁用，禁用 = 纯禁用）。
+    /// </summary>
+    /// <param name="row">目标行。</param>
+    /// <param name="enabled"><see langword="true"/> 启用（删标记）；<see langword="false"/> 禁用（写标记）。</param>
+    /// <returns>成功为 <see langword="true"/>；失败时已写日志。</returns>
+    public bool SetEntryEnabled(StartupEntryRow row, bool enabled)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var source = _sources.FirstOrDefault(candidate =>
+            candidate.Kind == row.Entry.Source && candidate.Scope == row.Entry.Scope);
+        if (source is null)
+        {
+            _log.Error($"找不到来源 ({row.Entry.Source}, {row.Entry.Scope})，无法{(enabled ? "启用" : "禁用")}『{row.Entry.Name}』");
+            return false;
+        }
+
+        try
+        {
+            if (enabled)
+            {
+                source.Enable(row.Entry);
+            }
+            else
+            {
+                source.Disable(row.Entry);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, $"『{row.Entry.Name}』{(enabled ? "启用" : "禁用")}失败");
+            return false;
+        }
+
+        ReplaceRow(row, WithState(row.Entry, isTakenOver: false, isEnabled: enabled));
+        RefreshSubtitleFromCache();
+        return true;
+    }
+
+    /// <summary>取该行对应的配置条目（打开编辑器用）。</summary>
+    /// <param name="row">目标行。</param>
+    /// <returns>配置条目。</returns>
+    /// <exception cref="InvalidOperationException">配置里没有该条目（数据不同步，先刷新）。</exception>
+    public DelayedItem GetItemFor(StartupEntryRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return FindConfigItem(row.Entry.Id)
+            ?? throw new InvalidOperationException($"配置中找不到『{row.Entry.Name}』，请先刷新本页。");
+    }
+
+    /// <summary>保存对已接管项的编辑（延时 / 参数 / 工作目录）。</summary>
+    /// <param name="row">目标行。</param>
+    /// <param name="values">编辑值。</param>
+    /// <returns>成功为 <see langword="true"/>。</returns>
+    public bool ApplyEdit(StartupEntryRow row, DelayItemValues values)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(values);
+
+        var item = FindConfigItem(row.Entry.Id);
+        if (item is null)
+        {
+            return false;
+        }
+
+        _editor.ApplyEdit(item.Id, values);
+        return true;
+    }
+
+    /// <summary>按稳定主键在配置里找条目（接管 / 编辑共用）。</summary>
+    private DelayedItem? FindConfigItem(string id)
+    {
+        try
+        {
+            return _configStore.Load().Items.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "读取配置失败");
+            return null;
+        }
+    }
+
+    /// <summary>用修改后的标志位重建条目（<see cref="StartupEntry"/> 不可变，只能换新实例）。</summary>
+    private static StartupEntry WithState(StartupEntry entry, bool isTakenOver, bool isEnabled) => new()
+    {
+        Id = entry.Id,
+        Name = entry.Name,
+        Path = entry.Path,
+        Arguments = entry.Arguments,
+        Source = entry.Source,
+        Scope = entry.Scope,
+        SourceKey = entry.SourceKey,
+        SourceDetail = entry.SourceDetail,
+        IsEnabled = isEnabled,
+        IsMissing = entry.IsMissing,
+        IsProtected = entry.IsProtected,
+        IsTakenOver = isTakenOver,
+    };
+
+    /// <summary>行级局部刷新：新旧行同图标，就地替换（bug#6）。</summary>
+    private void ReplaceRow(StartupEntryRow oldRow, StartupEntry updated)
+    {
+        var newRow = new StartupEntryRow(updated, oldRow.Pixels);
+        ReplaceIn(Rows, oldRow, newRow);
+        ReplaceIn(FilteredRows, oldRow, newRow);
+        OnPropertyChanged(nameof(IsEmpty));
+
+        // 替换后统一重算筛选：新状态可能让该行在当前筛选条件下出现 / 消失
+        // （例如筛选"已启用"时禁用了唯一一条）。
+        ApplyFilters();
+    }
+
+    /// <summary>在集合中原位替换一行（保持位置与滚动状态）。</summary>
+    private static void ReplaceIn(ObservableCollection<StartupEntryRow> collection, StartupEntryRow oldRow, StartupEntryRow newRow)
+    {
+        var index = collection.IndexOf(oldRow);
+        if (index >= 0)
+        {
+            collection[index] = newRow;
+        }
+    }
+
+    /// <summary>页头副标题按缓存现状重算（不重扫，只数缓存里的数据）。</summary>
+    private void RefreshSubtitleFromCache()
+    {
+        var snapshot = _cache.Current;
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        Subtitle = BuildSubtitle(snapshot, SourceFilter);
+    }
+
+    /// <summary>读取延时预设值与默认预设；失败时保持上一次的值，不打扰用户。</summary>
     private void LoadSettings()
     {
         try
         {
             var settings = _configStore.Load().Settings;
             DelayPresets = settings.DelayPresets;
-            MaxDelaySeconds = settings.MaxDelaySeconds;
+            DefaultPreset = settings.DefaultPreset;
         }
         catch (Exception ex)
         {
@@ -221,27 +377,27 @@ public sealed partial class ItemsViewModel : ObservableObject
         }
     }
 
-    /// <summary>把扫描结果灌进列表与页头。</summary>
-    /// <param name="result">扫描结果。</param>
-    /// <param name="pixels">每个条目的图标像素（后台阶段提取）。</param>
-    private void Apply(ScanResult result, Dictionary<StartupEntry, IconPixels?> pixels)
+    /// <summary>把快照灌进列表（只保留当前来源）。</summary>
+    private void Apply(ScanSnapshot snapshot)
     {
         Rows.Clear();
-        foreach (var entry in result.Entries)
+        foreach (var entry in snapshot.Entries)
         {
-            Rows.Add(new StartupEntryRow(entry, pixels[entry]));
+            if (SourceFilter is not { } kind || entry.Source == kind)
+            {
+                Rows.Add(new StartupEntryRow(entry, snapshot.Pixels.GetValueOrDefault(entry)));
+            }
         }
 
         ApplyFilters();
+        Subtitle = BuildSubtitle(snapshot, SourceFilter);
 
-        Subtitle = BuildSubtitle(result);
-
-        // 来源级失败必须显示成**列表可能不完整**，而不是一句"扫描完成" ——
-        // 否则用户会把缺失的条目当成"系统里没有"，进而以为程序漏扫了某项。
-        if (result.HasFailures)
+        if (snapshot.Failures.Count > 0)
         {
-            var names = string.Join("、", result.Failures.Select(static failure => failure.DisplayName));
-            FailureText = $"以下来源扫描失败，列表可能不完整：{names}。详情见运行日志。";
+            var names = string.Join("、", snapshot.Failures
+                .Where(failure => SourceFilter is not { } kind || failure.Source == kind)
+                .Select(static failure => failure.DisplayName));
+            FailureText = names.Length == 0 ? null : $"以下来源扫描失败，列表可能不完整：{names}。详情见运行日志。";
         }
         else
         {
@@ -252,39 +408,26 @@ public sealed partial class ItemsViewModel : ObservableObject
     }
 
     /// <summary>搜索词变化 → 重算可见列表。</summary>
-    /// <param name="value">新的搜索词。</param>
-    /// <remarks>
-    /// 源生成器（CommunityToolkit.Mvvm）在 <c>SearchText</c> 的 setter 里调用本方法，
-    /// 不必手写订阅 PropertyChanged。
-    /// </remarks>
     partial void OnSearchTextChanged(string value) => ApplyFilters();
 
-    /// <summary>来源筛选变化 → 重算可见列表。</summary>
-    /// <param name="value">新的来源序号。</param>
-    partial void OnSourceFilterIndexChanged(int value) => ApplyFilters();
-
     /// <summary>状态筛选变化 → 重算可见列表。</summary>
-    /// <param name="value">新的状态序号。</param>
     partial void OnStatusFilterIndexChanged(int value) => ApplyFilters();
 
     /// <summary>排序方式变化 → 重算可见列表。</summary>
-    /// <param name="value">新的排序序号。</param>
     partial void OnSortIndexChanged(int value) => ApplyFilters();
 
-    /// <summary>按当前搜索词、来源与状态筛选重建 <see cref="FilteredRows"/>，并按排序方式排列。</summary>
+    /// <summary>按当前搜索词与状态筛选重建 <see cref="FilteredRows"/>。</summary>
     private void ApplyFilters()
     {
         var keyword = SearchText.Trim();
 
         IEnumerable<StartupEntryRow> visible = Rows
-            .Where(row => MatchesSourceFilter(row) && MatchesStatusFilter(row) && MatchesKeyword(row, keyword));
+            .Where(row => MatchesStatusFilter(row) && MatchesKeyword(row, keyword));
 
         visible = SortIndex switch
         {
-            1 => visible.OrderBy(static row => row.Name, StringComparer.CurrentCulture),
-            2 => visible.OrderBy(static row => StatusRank(row)).ThenBy(static row => row.Name, StringComparer.CurrentCulture),
-            _ => visible.OrderBy(static row => SourceRank(row))
-                .ThenBy(static row => row.Name, StringComparer.CurrentCulture),
+            1 => visible.OrderBy(static row => StatusRank(row)).ThenBy(static row => row.Name, StringComparer.CurrentCulture),
+            _ => visible.OrderBy(static row => row.Name, StringComparer.CurrentCulture),
         };
 
         FilteredRows.Clear();
@@ -297,21 +440,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         OnPropertyChanged(nameof(EmptyText));
     }
 
-    /// <summary>「按来源」排序的来源次序（与扫描顺序一致：注册表 → 文件夹 → 计划任务 → UWP）。</summary>
-    /// <param name="row">候选行。</param>
-    /// <returns>排序键。</returns>
-    private static int SourceRank(StartupEntryRow row) => row.Entry.Source switch
-    {
-        StartupSource.Registry => 0,
-        StartupSource.StartupFolder => 1,
-        StartupSource.ScheduledTask => 2,
-        StartupSource.Uwp => 3,
-        _ => 4,
-    };
-
     /// <summary>「按状态」排序的次序：已接管最前，其次已禁用 / 已失效 / 受保护，最后已启用。</summary>
-    /// <param name="row">候选行。</param>
-    /// <returns>排序键。</returns>
     private static int StatusRank(StartupEntryRow row) => row.StatusKind switch
     {
         "taken" => 0,
@@ -322,8 +451,6 @@ public sealed partial class ItemsViewModel : ObservableObject
     };
 
     /// <summary>判断一行是否通过状态筛选。</summary>
-    /// <param name="row">候选行。</param>
-    /// <returns>通过为 <see langword="true"/>。</returns>
     private bool MatchesStatusFilter(StartupEntryRow row) => StatusFilterIndex switch
     {
         1 => row.Entry.IsEnabled && !row.Entry.IsTakenOver,
@@ -332,27 +459,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         _ => true,
     };
 
-    /// <summary>判断一行是否通过来源筛选。</summary>
-    /// <param name="row">候选行。</param>
-    /// <returns>通过为 <see langword="true"/>。</returns>
-    private bool MatchesSourceFilter(StartupEntryRow row) => SourceFilterIndex switch
-    {
-        1 => row.Entry.Source == StartupSource.Registry,
-        2 => row.Entry.Source == StartupSource.StartupFolder,
-        3 => row.Entry.Source == StartupSource.ScheduledTask,
-        4 => row.Entry.Source == StartupSource.Uwp,
-        _ => true,
-    };
-
     /// <summary>判断一行是否命中搜索词。</summary>
-    /// <param name="row">候选行。</param>
-    /// <param name="keyword">已去空白的关键词；空串恒通过。</param>
-    /// <returns>命中为 <see langword="true"/>。</returns>
-    /// <remarks>
-    /// 三个字段全参与匹配：用户记住的可能是程序名（"微信"）、也可能是
-    /// 可执行文件名（"WeChat"）或它藏身的位置（"Run"）—— 只匹配名称会把
-    /// 后两种常见排查路径堵死。
-    /// </remarks>
     private static bool MatchesKeyword(StartupEntryRow row, string keyword)
     {
         if (keyword.Length == 0)
@@ -365,37 +472,18 @@ public sealed partial class ItemsViewModel : ObservableObject
             || row.LocationText.Contains(keyword, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>条目的图标解析名（D30）。</summary>
-    /// <param name="entry">扫描结果中的条目。</param>
-    /// <returns>
-    /// UWP 条目没有文件路径，用 <c>shell:AppsFolder\&lt;AUMID&gt;</c> 解析名 ——
-    /// 与调度端启动 UWP 的路径约定同源（R12：零 COM 的启动方式，图标提取恰好也吃这个名字）。
-    /// 其余条目用路径本身（<c>.lnk</c> 会被 shell 自动解析到目标图标）。
-    /// </returns>
-    private static string? IconSourceOf(StartupEntry entry)
-    {
-        if (entry.Source == StartupSource.Uwp)
-        {
-            return string.IsNullOrWhiteSpace(entry.SourceKey)
-                ? null
-                : $"shell:AppsFolder\\{entry.SourceKey}";
-        }
-
-        return string.IsNullOrWhiteSpace(entry.Path) ? null : entry.Path;
-    }
-
     /// <summary>拼页头副标题。</summary>
-    /// <param name="result">扫描结果。</param>
-    /// <returns>形如 `共 37 项 · 已接管 0 项 · 已禁用 15 项`。</returns>
-    /// <remarks>
-    /// "已禁用"排除已接管的条目：被接管项的禁用状态是**本程序造成的**，
-    /// 把它算进"已禁用"会让用户以为系统里本来就有这么多禁用项。
-    /// </remarks>
-    private static string BuildSubtitle(ScanResult result)
+    private static string BuildSubtitle(ScanSnapshot snapshot, StartupSource? filter)
     {
-        var disabled = result.Entries.Count(
-            static entry => !entry.IsEnabled && !entry.IsTakenOver && !entry.IsMissing);
+        var entries = filter is { } kind
+            ? snapshot.Entries.Where(entry => entry.Source == kind).ToList()
+            : [.. snapshot.Entries];
 
-        return $"共 {result.TotalCount} 项 · 已接管 {result.TakenOverCount} 项 · 已禁用 {disabled} 项";
+        var disabled = entries.Count(
+            static entry => !entry.IsEnabled && !entry.IsTakenOver && !entry.IsMissing);
+        var taken = entries.Count(static entry => entry.IsTakenOver);
+
+        var head = filter is { } source ? DisplayText.SourceOf(source) : "全部来源";
+        return $"{head} · 共 {entries.Count} 项 · 已接管 {taken} 项 · 已禁用 {disabled} 项";
     }
 }

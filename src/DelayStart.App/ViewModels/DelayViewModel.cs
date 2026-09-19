@@ -90,7 +90,7 @@ public sealed partial class DelayViewModel : ObservableObject
 
         Subtitle = "正在读取配置…";
         DelayPresets = new Settings().DelayPresets;
-        MaxDelaySeconds = Settings.DefaultMaxDelaySeconds;
+        DefaultPreset = new Settings().DefaultPreset;
     }
 
     /// <summary>列表内容，按「延时 → 顺序」排序（与调度端的发起顺序一致）。</summary>
@@ -102,8 +102,8 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <summary>延时预设值（秒），驱动编辑器的快选按钮（FR-4.2）。</summary>
     public int[] DelayPresets { get; private set; }
 
-    /// <summary>单条目延时上限；<c>0</c> 表示不限制（FR-4.3）。</summary>
-    public int MaxDelaySeconds { get; private set; }
+    /// <summary>默认预设（秒）：编辑器打开时预选的延时（2026-09-19 用户批复）。</summary>
+    public int DefaultPreset { get; private set; }
 
     /// <summary>读取配置并刷新列表。</summary>
     /// <param name="cancellationToken">取消令牌。</param>
@@ -306,12 +306,12 @@ public sealed partial class DelayViewModel : ObservableObject
         return string.IsNullOrWhiteSpace(item.Path) ? null : item.Path;
     }
 
-    /// <summary>同步延时预设值与上限。</summary>
+    /// <summary>同步延时预设值与默认预设。</summary>
     /// <param name="settings">配置里的设置段。</param>
     private void ApplySettings(Settings settings)
     {
         DelayPresets = settings.DelayPresets;
-        MaxDelaySeconds = settings.MaxDelaySeconds;
+        DefaultPreset = settings.DefaultPreset;
     }
 
     /// <summary>拼页头副标题。</summary>

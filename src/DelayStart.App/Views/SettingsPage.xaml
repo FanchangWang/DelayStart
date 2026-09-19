@@ -5,9 +5,31 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:stc="using:CommunityToolkit.WinUI.Controls"
+    xmlns:ctl="using:DelayStart.App.Controls"
+    xmlns:vm="using:DelayStart.App.ViewModels"
     mc:Ignorable="d">
 
-    <!-- 「设置」页（FR-9）：改动即时落盘，校验失败整体不保存 -->
+    <Page.Resources>
+        <!-- 分节标题（批复 3：参考 PowerToys 子标题字号，SubtitleTextBlockStyle 的 20px 太大） -->
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </Page.Resources>
+
+    <!--
+        「设置」页（FR-9，UI v2.2 重做）：
+        ① 没有「保存」按钮 —— 所有操作立即落盘生效；
+        ② 降权 / 托盘设置已移除（语义固定，不再可配）；
+        ③ 新增主题设置（跟随系统 / 浅色 / 深色）；
+        ④ 预设延时为胶囊快选：胶囊选中即默认 —— 接管条目时自动填入；胶囊内的 ✕ 删除。
+        ⑤ 卡片用 PowerToys 同款 SettingsCard（D1 批复 A）；
+        ⑥ 2026-09-20 批复修订：
+           - 限宽回 1000 并居中 —— 已核实 PowerToys 源码（Settings.UI/SettingsXAML/App.xaml）：
+             <x:Double x:Key="PageMaxWidth">1000</x:Double>，PageStyle 把它挂在内容容器上；
+           - 预设延时两个边框：第一个左描述右（输入框 + 添加按钮），第二个胶囊一行多个。
+    -->
     <Grid Padding="32,20,32,24" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -15,91 +37,158 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 页头 -->
+        <!-- 页头（Round I 批复 5：标题在居中后的内容区域内左对齐，不额外居中） -->
         <StackPanel Grid.Row="0" Spacing="4">
             <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="设置" />
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
-                Text="改动保存后即时生效，下次登录调度时按新值执行。" />
+                Text="所有改动即时生效并写入配置，下次登录调度时按新值执行。" />
         </StackPanel>
 
         <ScrollView Grid.Row="1">
-            <StackPanel MaxWidth="720" HorizontalAlignment="Left" Spacing="4">
+            <!-- Round H 批复 5：Stretch + MaxWidth —— 内容少也撑满 1000，窗口不足 1000 自动收缩
+                 （HorizontalAlignment=Center 会收缩到内容宽度，导致各页宽窄不一，已改） -->
+            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1000" Spacing="4">
 
-                <TextBlock Margin="0,12,0,4" Style="{StaticResource SubtitleTextBlockStyle}" Text="延时" />
-
-                <!-- FR-9.2 延时预设 -->
-                <TextBlock Text="延时预设值（逗号分隔，驱动编辑器快选按钮）" />
-                <TextBox
-                    PlaceholderText="0, 10, 30, 60, 120"
-                    Text="{x:Bind ViewModel.DelayPresetsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <!-- ── 预设延时 ── -->
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
                 <TextBlock
-                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="留空则不显示快选按钮；保存时自动升序去重。" />
+                    Margin="0,0,0,8"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="编辑器快选按钮用的延时列表。选中（高亮）的胶囊是默认值 —— 接管条目时自动填入；胶囊右侧 ✕ 删除。" />
 
-                <!-- FR-9.3 上限 -->
-                <TextBlock Margin="0,12,0,0" Text="单条目延时上限（秒，0 = 不限制，仅做输入校验）" />
-                <TextBox Text="{x:Bind ViewModel.MaxDelayText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <!-- 边框一：左描述 + 右（输入框 + 添加按钮），仿 PowerToys「颜色格式」卡片 -->
+                <Border
+                    Padding="16,14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="7">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="添加预设延时" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                Text="单位为秒；已有相同值时不重复添加，添加后出现在下方列表。" />
+                        </StackPanel>
+                        <StackPanel
+                            Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center">
+                            <NumberBox
+                                Header=""
+                                Minimum="0"
+                                Width="140"
+                                SpinButtonPlacementMode="Compact"
+                                Value="{x:Bind ViewModel.NewPresetValue, Mode=TwoWay}" />
+                            <Button
+                                VerticalAlignment="Center"
+                                Click="OnPresetAdd"
+                                Content="添加" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
 
-                <TextBlock Margin="0,24,0,4" Style="{StaticResource SubtitleTextBlockStyle}" Text="调度" />
+                <!-- 边框二：胶囊一行多个（2026-09-20 批复 6：恢复横排）。
+                     🔴 不用 GridView / WrapGrid：两者按统一单元格布局，长文本被截断。
+                     单选互斥在 code-behind（OnPresetChecked）里做。 -->
+                <Border
+                    Margin="0,8,0,0"
+                    Padding="12,10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="7">
+                    <ItemsControl
+                        x:Name="PresetPills"
+                        ItemsSource="{x:Bind ViewModel.Presets, Mode=OneTime}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <!-- Round H 批复 7：超宽自动换行（自绘 WrapPanel，宽度仍按内容自适应） -->
+                                <ctl:WrapPanel Spacing="8" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PresetRow">
+                                <ToggleButton
+                                    Checked="OnPresetChecked"
+                                    CornerRadius="14"
+                                    IsChecked="{x:Bind IsDefault, Mode=OneWay}"
+                                    Padding="10,5"
+                                    Unchecked="OnPresetUnchecked">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            Text="{x:Bind Display}" />
+                                        <Button
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Click="OnPresetDelete"
+                                            Content="&#xE74D;"
+                                            FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                            FontSize="12"
+                                            IsEnabled="{x:Bind CanDelete, Mode=OneWay}"
+                                            Padding="4,2"
+                                            ToolTipService.ToolTip="删除这个预设" />
+                                    </StackPanel>
+                                </ToggleButton>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
 
-                <!-- FR-9.6 重试 -->
-                <TextBlock Text="同一次运行内的重试次数（0–5）" />
-                <TextBox Text="{x:Bind ViewModel.RetryCountText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <!-- ── 调度 ── -->
+                <TextBlock Margin="0,28,0,4" Style="{StaticResource SectionHeaderStyle}" Text="调度" />
 
-                <!-- FR-9.7 通知策略 -->
-                <TextBlock Margin="0,12,0,0" Text="全部启动完成后的通知" />
-                <ComboBox
-                    MinWidth="220"
-                    HorizontalAlignment="Left"
-                    ItemsSource="{x:Bind ViewModel.NotifyModes}"
-                    SelectedIndex="{x:Bind ViewModel.NotifyModeIndex, Mode=TwoWay}" />
+                <StackPanel Spacing="2">
+                    <stc:SettingsCard Description="全部启动完成后的通知方式" Header="通知策略">
+                        <ComboBox
+                            MinWidth="160"
+                            ItemsSource="{x:Bind ViewModel.NotifyModes}"
+                            SelectedIndex="{x:Bind ViewModel.NotifyModeIndex, Mode=TwoWay}"
+                            SelectionChanged="OnNotifyModeChanged" />
+                    </stc:SettingsCard>
+                    <stc:SettingsCard Description="同一次运行内的重试次数（0–5）" Header="重试次数">
+                        <NumberBox
+                            MinWidth="120"
+                            Maximum="5"
+                            Minimum="0"
+                            SpinButtonPlacementMode="Compact"
+                            ValueChanged="OnRetryChanged"
+                            Value="{x:Bind ViewModel.RetryCount, Mode=TwoWay}" />
+                    </stc:SettingsCard>
+                </StackPanel>
 
-                <!-- FR-9.9 降权 -->
-                <CheckBox
-                    Margin="0,12,0,0"
-                    Content="普通用户条目优先降权启动（以普通用户身份运行，而非管理员）"
-                    IsChecked="{x:Bind ViewModel.PreferDeElevatedLaunch, Mode=TwoWay}" />
-                <CheckBox
-                    Margin="16,0,0,0"
-                    Content="降权失败时回退为直接启动（关闭则判为失败）"
-                    IsChecked="{x:Bind ViewModel.FallbackOnDeElevationFailure, Mode=TwoWay}" />
+                <!-- ── 外观 ── -->
+                <TextBlock Margin="0,28,0,4" Style="{StaticResource SectionHeaderStyle}" Text="外观" />
 
-                <TextBlock Margin="0,24,0,4" Style="{StaticResource SubtitleTextBlockStyle}" Text="托盘" />
-
-                <!-- FR-9.8 托盘开关 -->
-                <CheckBox
-                    Content="登录后显示调度进度托盘图标（关闭后调度端完全无形）"
-                    IsChecked="{x:Bind ViewModel.ShowTrayIcon, Mode=TwoWay}" />
-
-                <!-- FR-9.5 保留秒数 -->
-                <TextBlock Text="全部启动完成后托盘图标保留的秒数（0–3600）" />
-                <TextBox Text="{x:Bind ViewModel.TrayKeepText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <StackPanel Spacing="2">
+                    <stc:SettingsCard Description="切换立即生效，跟随系统时随 Windows 深浅色变化" Header="主题">
+                        <ComboBox
+                            MinWidth="160"
+                            ItemsSource="{x:Bind ViewModel.ThemeOptions}"
+                            SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}"
+                            SelectionChanged="OnThemeChanged" />
+                    </stc:SettingsCard>
+                </StackPanel>
             </StackPanel>
         </ScrollView>
 
-        <!-- 保存 / 状态条 -->
-        <Grid Grid.Row="2" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <InfoBar
-                Grid.Column="0"
-                IsClosable="False"
-                IsOpen="{x:Bind ViewModel.HasStatus, Mode=OneWay}"
-                Message="{x:Bind ViewModel.StatusText, Mode=OneWay}"
-                Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}" />
-
-            <Button
-                Grid.Column="1"
-                VerticalAlignment="Center"
-                Click="OnSave"
-                Content="保存设置"
-                Style="{StaticResource AccentButtonStyle}" />
-        </Grid>
+        <!-- 状态条：只报错（改动即时落盘，没有「已保存」提示） -->
+        <InfoBar
+            Grid.Row="2"
+            IsClosable="False"
+            IsOpen="{x:Bind ViewModel.HasStatus, Mode=OneWay}"
+            Message="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+            Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}" />
     </Grid>
 </Page>

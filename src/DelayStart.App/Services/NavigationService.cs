@@ -34,14 +34,38 @@ public sealed class NavigationService
     /// <summary>「总览」模块的导航标签。</summary>
     public const string OverviewTag = "overview";
 
-    /// <summary>「自启动项」模块的导航标签。</summary>
-    public const string ItemsTag = "items";
-
     /// <summary>「延时启动」模块的导航标签。</summary>
     public const string DelayTag = "delay";
 
-    /// <summary>「系统启动项」模块的导航标签（只读，FR-7）。</summary>
+    /// <summary>「自启动项」父级菜单的导航标签（点父项 = 全部来源视图）。</summary>
+    public const string ItemsTag = "items";
+
+    /// <summary>「系统启动项」父级菜单的导航标签（点父项 = 服务分区）。</summary>
     public const string SystemTag = "system";
+
+    /// <summary>「自启动项 · 注册表」的导航标签（UI v2：来源即入口）。</summary>
+    public const string ItemsRegistryTag = "items-registry";
+
+    /// <summary>「自启动项 · 启动文件夹」的导航标签。</summary>
+    public const string ItemsFolderTag = "items-folder";
+
+    /// <summary>「自启动项 · 计划任务」的导航标签。</summary>
+    public const string ItemsTaskTag = "items-task";
+
+    /// <summary>「自启动项 · UWP Apps」的导航标签。</summary>
+    public const string ItemsUwpTag = "items-uwp";
+
+    /// <summary>「系统启动项 · 服务」的导航标签。</summary>
+    public const string SysServicesTag = "sys-services";
+
+    /// <summary>「系统启动项 · 驱动」的导航标签。</summary>
+    public const string SysDriversTag = "sys-drivers";
+
+    /// <summary>「系统启动项 · Winlogon」的导航标签。</summary>
+    public const string SysWinlogonTag = "sys-winlogon";
+
+    /// <summary>「系统启动项 · 组策略」的导航标签（D2：替换原「登录脚本」分区）。</summary>
+    public const string SysGpoTag = "sys-gpo";
 
     /// <summary>「运行日志」模块的导航标签（FR-8）。</summary>
     public const string RunsTag = "runs";
@@ -62,9 +86,17 @@ public sealed class NavigationService
         _pages = new Dictionary<string, Type>(StringComparer.Ordinal)
         {
             [OverviewTag] = typeof(Views.OverviewPage),
-            [ItemsTag] = typeof(Views.ItemsPage),
             [DelayTag] = typeof(Views.DelayPage),
+            [ItemsTag] = typeof(Views.ItemsPage),
+            [ItemsRegistryTag] = typeof(Views.ItemsPage),
+            [ItemsFolderTag] = typeof(Views.ItemsPage),
+            [ItemsTaskTag] = typeof(Views.ItemsPage),
+            [ItemsUwpTag] = typeof(Views.ItemsPage),
             [SystemTag] = typeof(Views.SystemPage),
+            [SysServicesTag] = typeof(Views.SystemPage),
+            [SysDriversTag] = typeof(Views.SystemPage),
+            [SysWinlogonTag] = typeof(Views.SystemPage),
+            [SysGpoTag] = typeof(Views.SystemPage),
             [RunsTag] = typeof(Views.RunsPage),
             [SettingsTag] = typeof(Views.SettingsPage),
         };
@@ -79,8 +111,15 @@ public sealed class NavigationService
     /// <param name="frame">承载页面的框架。</param>
     /// <param name="tag">导航标签；未知标签或 <see langword="null"/> 时不做任何事。</param>
     /// <remarks>
+    /// <para>
     /// 未知标签**静默返回**而不是抛异常：导航标签来自 XAML，属于"配置写错"，
     /// 让程序在切换菜单时崩溃的代价远大于少显示一个页面。
+    /// </para>
+    /// <para>
+    /// 同类型页面的去重靠 <see cref="INavigationTarget.NavigationTag"/>：四个来源共用
+    /// <see cref="Views.ItemsPage"/>、四个分区共用 <see cref="Views.SystemPage"/>，
+    /// 只比较类型会把「注册表 → 计划任务」的切换吞掉。
+    /// </para>
     /// </remarks>
     public void Navigate(Frame frame, string? tag)
     {
@@ -91,12 +130,27 @@ public sealed class NavigationService
             return;
         }
 
-        // 同一个页面重复点选时不要重建：重建会丢掉页内滚动位置，而用户只是想"回到这一页"。
-        if (frame.Content?.GetType() == pageType)
+        if (frame.Content?.GetType() == pageType
+            && !typeof(INavigationTarget).IsAssignableFrom(pageType))
         {
+            // 同一个页面重复点选时不要重建：重建会丢掉页内滚动位置。
             return;
         }
 
-        frame.Content = _services.GetRequiredService(pageType);
+        if (frame.Content?.GetType() == pageType
+            && frame.Content is INavigationTarget current
+            && current.NavigationTag == tag)
+        {
+            // 带参数页面的"同入口重复点选"，同样不重建。
+            return;
+        }
+
+        var page = _services.GetRequiredService(pageType);
+        if (page is INavigationTarget target)
+        {
+            target.NavigationTag = tag;
+        }
+
+        frame.Content = page;
     }
 }

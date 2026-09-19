@@ -12,124 +12,260 @@
     <Page.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
         <conv:BoolToBrushConverter x:Key="BoolToBrush" />
+
+        <!-- 分节标题（批复 3：参考 PowerToys 子标题字号，SubtitleTextBlockStyle 的 20px 太大） -->
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <!-- 计数 chip：两排统一最小宽度（批复 6） -->
+        <Style x:Key="CountChipStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="MinWidth" Value="130" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <!-- chip 内容（数字 + 文字）整体居中（Round H 批复 6） -->
+        <Style x:Key="ChipContentStyle" TargetType="StackPanel">
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
     </Page.Resources>
 
-    <!-- 「总览」页（design-spec 页面 1）：统计 + 上次运行横幅 + 最近一次调度 + 模拟调度（D37 进度列表） -->
-    <Grid Padding="32,20,32,24" RowSpacing="16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
+    <!--
+        「总览」页 UI v2.2（PowerToys 分节卡片化，docs/ui-mockup-v2.html）。
+        2026-09-20 Round H 批复：
+        5 —— 根容器改 Stretch + MaxWidth=1000：内容少也撑满 1000，窗口不足 1000 自动收缩
+             （HorizontalAlignment=Center 会收缩到内容宽度，各页宽窄不一，已修正；
+             PowerToys 同款做法：PageStyle 的 MaxWidth=1000 挂在 Stretch 容器上）；
+        6 —— chip 内两行文字各自 TextAlignment=Center（此前只居中整个内容块，
+             数字与文字宽度不同时窄的一行仍贴左，看起来没变）；
+        8 —— 页头标题居中。
+    -->
+    <ScrollView>
+        <StackPanel Padding="32,8,32,40" HorizontalAlignment="Stretch" MaxWidth="1000">
 
-        <!-- 页头 -->
-        <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="总览" />
+            <!-- 页头（Round I 批复 5：标题在居中后的内容区域内左对齐） -->
+            <StackPanel Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="总览" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="延时启动的整体状态：条目分布、最大延时、调度任务开关与最近一次运行结果。" />
+            </StackPanel>
+
+            <!-- 上次运行结果横幅（FR-6.7）：只在有失败时出现 -->
+            <InfoBar
+                Margin="0,16,0,0"
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
+                Message="{x:Bind ViewModel.LastRunBanner, Mode=OneWay}"
+                Severity="Warning"
+                Title="上次运行有失败" />
+
+            <!-- ── 延时启动 ── -->
+            <TextBlock
+                Margin="0,28,0,2"
+                Style="{StaticResource SectionHeaderStyle}"
+                Text="延时启动" />
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
-                Text="接管了多少、调度是否正常，一眼看全。" />
-        </StackPanel>
+                Text="当前已接管的条目，按来源分布。点击进入延时启动页。" />
 
-        <!-- 上次运行结果横幅（FR-6.7）：只在有失败时出现，全部成功不打扰 -->
-        <InfoBar
-            Grid.Row="1"
-            IsClosable="False"
-            IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
-            Message="{x:Bind ViewModel.LastRunBanner, Mode=OneWay}"
-            Severity="Warning"
-            Title="上次运行有失败" />
+            <!-- 延时区的 5 个 chip 都跳「延时启动」页 -->
+            <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10">
+                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedRegistry, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="注册表" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedFolder, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="启动文件夹" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedTask, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="计划任务" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedUwp, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="UWP Apps" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedManual, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="手动添加" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
 
-        <!-- 统计卡片（D5）：与 HTML 原型对齐的四卡 —— 扫描数 / 接管数 / 加载窗口 / 调度任务 -->
-        <Grid Grid.Row="2" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-
+            <!-- ── 最大延时 ── -->
+            <TextBlock
+                Margin="0,32,0,2"
+                Style="{StaticResource SectionHeaderStyle}"
+                Text="最大延时" />
             <Border
-                Grid.Column="0"
+                Margin="0,10,0,0"
                 Padding="16,12"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
+                CornerRadius="7">
                 <StackPanel Spacing="2">
-                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="系统自启动项" />
-                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="{x:Bind ViewModel.TotalEntries, Mode=OneWay}" />
-                </StackPanel>
-            </Border>
-
-            <Border
-                Grid.Column="1"
-                Padding="16,12"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-                <StackPanel Spacing="2">
-                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="已接管延时启动" />
-                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="{x:Bind ViewModel.TakenOverEntries, Mode=OneWay}" />
-                </StackPanel>
-            </Border>
-
-            <Border
-                Grid.Column="2"
-                Padding="16,12"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-                <StackPanel Spacing="2">
-                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="开机加载窗口" />
+                    <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.MaxDelayText, Mode=OneWay}" />
                     <TextBlock
-                        FontSize="18"
-                        FontWeight="SemiBold"
-                        Style="{StaticResource BodyTextBlockStyle}"
-                        Text="{x:Bind ViewModel.BootWindowText, Mode=OneWay}"
-                        TextTrimming="CharacterEllipsis" />
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextWrapping="Wrap"
+                        Text="当前最长条目延时 —— 登录后最晚这个时刻，全部条目启动完毕。" />
                 </StackPanel>
             </Border>
 
+            <!-- ── 开机调度任务 ── -->
+            <TextBlock
+                Margin="0,32,0,2"
+                Style="{StaticResource SectionHeaderStyle}"
+                Text="开机调度任务" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="登录时由计划任务拉起调度器，逐条按延时启动上方条目。关闭后延时启动不再生效。" />
             <Border
-                Grid.Column="3"
+                Margin="0,10,0,0"
                 Padding="16,12"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-                <StackPanel Spacing="2">
-                    <TextBlock Style="{StaticResource CaptionTextBlockStyle}" Text="开机调度任务" />
-                    <TextBlock
-                        Foreground="{x:Bind ViewModel.IsTaskMissing, Converter={StaticResource BoolToBrush}, Mode=OneWay}"
-                        FontSize="18"
-                        FontWeight="SemiBold"
-                        Style="{StaticResource BodyTextBlockStyle}"
-                        Text="{x:Bind ViewModel.TaskReadyText, Mode=OneWay}" />
-                </StackPanel>
+                CornerRadius="7">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="2">
+                        <TextBlock Text="登录时自动执行延时启动" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{x:Bind ViewModel.TaskStatusText, Mode=OneWay}" />
+                    </StackPanel>
+                    <!-- Round I 批复 6：ToggleSwitch 默认模板即使 On/OffContent 为空也保留内容区
+                         最小宽度，右侧留白 —— MinWidth=0 让开关贴右 -->
+                    <ToggleSwitch
+                        Grid.Column="1"
+                        HorizontalAlignment="Right"
+                        IsOn="{x:Bind ViewModel.IsTaskRegistered, Mode=OneWay}"
+                        MinWidth="0"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnTaskToggled" />
+                </Grid>
             </Border>
-        </Grid>
 
-        <!-- 最近一次开机调度（D5）：上次运行的逐条结果，全部成功时不打扰（横幅只在有失败时出现） -->
-        <Border
-            Grid.Row="3"
-            Padding="16,12"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="{StaticResource ControlCornerRadius}">
-            <StackPanel Spacing="8">
-                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.RecentRunTitle, Mode=OneWay}" />
-                <ListView ItemsSource="{x:Bind ViewModel.RecentRunRows}" SelectionMode="None">
+            <!-- ── 系统自启动项 ── -->
+            <TextBlock
+                Margin="0,32,0,2"
+                Style="{StaticResource SectionHeaderStyle}"
+                Text="系统自启动项" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="全盘扫描到的自启动条目（含未接管），点击跳转查看。" />
+
+            <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10">
+                <Button Click="OnGoRegistry" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedRegistry, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="注册表" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoFolder" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedFolder, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="启动文件夹" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoTask" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedTask, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="计划任务" />
+                    </StackPanel>
+                </Button>
+                <Button Click="OnGoUwp" Style="{StaticResource CountChipStyle}">
+                    <StackPanel Style="{StaticResource ChipContentStyle}">
+                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedUwp, Mode=OneWay}" />
+                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="UWP Apps" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- ── 开机调度日志 ── -->
+            <TextBlock
+                Margin="0,32,0,2"
+                Style="{StaticResource SectionHeaderStyle}"
+                Text="{x:Bind ViewModel.RecentRunTitle, Mode=OneWay}" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="{x:Bind ViewModel.RecentRunSummary, Mode=OneWay}" />
+
+            <Border
+                Margin="0,10,0,0"
+                Padding="16,6"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="7">
+                <StackPanel>
+                    <!-- 最近调度小表也带表头（自查补齐，列宽与行一致：110/*/90/70） -->
+                    <Grid Padding="4,6,4,4" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="70" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="时间" />
+                        <TextBlock
+                            Grid.Column="1"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="程序" />
+                        <TextBlock
+                            Grid.Column="2"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="延时" />
+                        <TextBlock
+                            Grid.Column="3"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="结果" />
+                    </Grid>
+
+                    <ListView
+                        ItemsSource="{x:Bind ViewModel.RecentRunRows}"
+                        SelectionMode="None">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunItemRow">
-                            <Grid Padding="4,2" ColumnSpacing="16">
+                            <Grid Padding="4,3" ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="90" />
+                                    <ColumnDefinition Width="110" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="90" />
                                     <ColumnDefinition Width="70" />
@@ -157,66 +293,15 @@
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
-                <TextBlock
-                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="还没有调度记录 —— 接管条目并重启后，每次登录的启动结果会显示在这里"
-                    Visibility="{x:Bind ViewModel.RecentRunEmpty, Converter={StaticResource BoolToVisibility}}" />
-            </StackPanel>
-        </Border>
+                </StackPanel>
+            </Border>
 
-        <!-- 模拟调度（D37：时间轴砍掉，改为进度列表 + 10 倍速时钟） -->
-        <StackPanel Grid.Row="4" Spacing="8">
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <TextBlock
-                    Grid.Column="0"
-                    VerticalAlignment="Center"
-                    Style="{StaticResource SubtitleTextBlockStyle}"
-                    Text="{x:Bind ViewModel.SimulationTitle, Mode=OneWay}" />
-
-                <Button
-                    Grid.Column="1"
-                    Command="{x:Bind ViewModel.ToggleSimulationCommand}"
-                    Content="{x:Bind ViewModel.SimulateButtonText, Mode=OneWay}" />
-            </Grid>
-
-            <ListView ItemsSource="{x:Bind ViewModel.SimulationRows}" SelectionMode="None">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="vm:SimulationRow">
-                        <Grid Padding="12,6" ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="120" />
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock
-                                Grid.Column="0"
-                                VerticalAlignment="Center"
-                                Text="{x:Bind Name}"
-                                TextTrimming="CharacterEllipsis" />
-
-                            <TextBlock
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind DelayText}" />
-
-                            <TextBlock
-                                Grid.Column="2"
-                                VerticalAlignment="Center"
-                                HorizontalTextAlignment="Right"
-                                Text="{x:Bind StatusText, Mode=OneWay}" />
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
+            <TextBlock
+                Margin="0,8,0,0"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="完整历史在「运行日志」页，保留最近 30 次。"
+                Visibility="{x:Bind ViewModel.RecentRunEmpty, Converter={StaticResource BoolToVisibility}, Mode=OneWay}" />
         </StackPanel>
-    </Grid>
+    </ScrollView>
 </Page>

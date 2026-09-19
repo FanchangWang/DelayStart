@@ -25,6 +25,17 @@ public sealed class StartupEntry
     /// <summary>目标路径。启动文件夹的 <c>.lnk</c> 已解析为真实目标（FR-1.7）；UWP 为 AUMID。</summary>
     public string Path { get; init; } = string.Empty;
 
+    /// <summary>
+    /// 实际承载图标的应用程序路径；空串表示回退用 <see cref="Path"/>。
+    /// </summary>
+    /// <remarks>
+    /// 计划任务的动作经常是 <c>cmd.exe /c start "" "C:\app\x.exe" …</c> 这类包装形态
+    /// —— <see cref="Path"/> 指向的是包装器，图标会是 cmd 的方框。来源扫描时把真正
+    /// 的 exe 解析出来放这里（2026-09-19 用户批复 9），只用于**展示**；
+    /// 接管 / 启动语义仍以 <see cref="Path"/> + <see cref="Arguments"/> 为准。
+    /// </remarks>
+    public string ExecutablePath { get; init; } = string.Empty;
+
     /// <summary>启动参数。</summary>
     public string Arguments { get; init; } = string.Empty;
 

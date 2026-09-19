@@ -194,16 +194,15 @@ public sealed class ConfigServiceTests : IDisposable
     }
 
     [Fact]
-    public void Load_NegativeSettingsValues_AreClampedToZero()
+    public void Load_NegativeRetryCount_IsClampedToZero()
     {
-        WriteConfigFile(
-            """{ "version": 2, "items": [], "settings": { "maxDelaySeconds": -1, "retryCount": -5, "trayKeepSeconds": -3 } }""");
+        // 2026-09-19 批复后设置只剩 retryCount 一个数值项需要收敛；
+        // maxDelay / trayKeep 等字段已随设置精简移除。
+        WriteConfigFile("""{ "version": 2, "items": [], "settings": { "retryCount": -5 } }""");
 
         var config = _service.Load();
 
-        Assert.Equal(0, config.Settings.MaxDelaySeconds);
         Assert.Equal(0, config.Settings.RetryCount);
-        Assert.Equal(0, config.Settings.TrayKeepSeconds);
     }
 
     [Fact]
@@ -228,6 +227,18 @@ public sealed class ConfigServiceTests : IDisposable
 
         int[] expected = [0, 10, 30, 60, 120];
         Assert.Equal(expected, config.Settings.DelayPresets);
+    }
+
+    [Fact]
+    public void Load_DefaultPresetNotInList_FallsBackToFirstPreset()
+    {
+        // 默认预设必须是列表成员：手改配置删掉它时兜底到第一项
+        WriteConfigFile(
+            """{ "version": 2, "items": [], "settings": { "delayPresets": [30, 60], "defaultPreset": 90 } }""");
+
+        var config = _service.Load();
+
+        Assert.Equal(30, config.Settings.DefaultPreset);
     }
 
     [Fact]
@@ -298,11 +309,9 @@ public sealed class ConfigServiceTests : IDisposable
         });
         config.Settings.NotifyMode = NotifyMode.Never;
         config.Settings.RetryCount = 2;
-        config.Settings.TrayKeepSeconds = 10;
-        config.Settings.ShowTrayIcon = false;
-        config.Settings.PreferDeElevatedLaunch = false;
-        config.Settings.FallbackOnDeElevationFailure = false;
-        config.Settings.MaxDelaySeconds = 3600;
+        config.Settings.DelayPresets = [0, 15, 45];
+        config.Settings.DefaultPreset = 15;
+        config.Settings.Theme = ThemePreference.Dark;
         config.Settings.LastRunId = "20260919-084112";
 
         // Act
@@ -328,11 +337,11 @@ public sealed class ConfigServiceTests : IDisposable
 
         Assert.Equal(NotifyMode.Never, loaded.Settings.NotifyMode);
         Assert.Equal(2, loaded.Settings.RetryCount);
-        Assert.Equal(10, loaded.Settings.TrayKeepSeconds);
-        Assert.False(loaded.Settings.ShowTrayIcon);
-        Assert.False(loaded.Settings.PreferDeElevatedLaunch);
-        Assert.False(loaded.Settings.FallbackOnDeElevationFailure);
-        Assert.Equal(3600, loaded.Settings.MaxDelaySeconds);
+
+        int[] expectedPresets = [0, 15, 45];
+        Assert.Equal(expectedPresets, loaded.Settings.DelayPresets);
+        Assert.Equal(15, loaded.Settings.DefaultPreset);
+        Assert.Equal(ThemePreference.Dark, loaded.Settings.Theme);
         Assert.Equal("20260919-084112", loaded.Settings.LastRunId);
     }
 

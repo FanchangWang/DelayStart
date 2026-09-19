@@ -299,19 +299,21 @@ public sealed class ConfigService : IAppConfigStore
     {
         settings.DelayPresets = NormalizePresets(settings.DelayPresets);
 
-        if (settings.MaxDelaySeconds < 0)
-        {
-            settings.MaxDelaySeconds = 0;
-        }
-
         if (settings.RetryCount < 0)
         {
             settings.RetryCount = 0;
         }
 
-        if (settings.TrayKeepSeconds < 0)
+        // 默认预设必须真的是列表成员：手改配置删掉它时兜底到第一项。
+        if (!settings.DelayPresets.Contains(settings.DefaultPreset))
         {
-            settings.TrayKeepSeconds = 0;
+            settings.DefaultPreset = settings.DelayPresets[0];
+        }
+
+        // 手改配置出现未知枚举值时回跟随系统（枚举强转不抛异常，只能显式校验）。
+        if (settings.Theme is not (ThemePreference.FollowSystem or ThemePreference.Light or ThemePreference.Dark))
+        {
+            settings.Theme = ThemePreference.FollowSystem;
         }
     }
 

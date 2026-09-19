@@ -12,14 +12,16 @@ namespace DelayStart.Core.Interop;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 三条启动路径，按条目配置分流：
+/// 三条启动路径，按条目配置分流（2026-09-19 用户批复收紧）：
 /// </para>
 /// <list type="number">
 /// <item><description>UWP 条目（路径形如 <c>shell:AppsFolder\&lt;AUMID&gt;</c>）→ 经
 /// <c>explorer.exe</c> 激活（D28=A），零 COM；拿不到目标 PID（R12），复查降级为乐观。</description></item>
 /// <item><description>管理员条目（<see cref="DelayedItem.RunAsAdmin"/>）→ 继承调度端提升令牌直接启动。</description></item>
-/// <item><description>普通条目 → <c>WTSQueryUserToken</c> 降权启动；失败时按设置回退直接启动（E6 / FR-5.7），
-/// 回退在结果里标记，让用户知情。</description></item>
+/// <item><description>普通条目 → **一律降权**：<c>.exe</c> 等可执行文件走
+/// <c>CreateProcessAsUser</c>（交互用户令牌）；<c>.lnk</c> 无法被 <c>CreateProcessAsUser</c> 接受，
+/// 经 <c>explorer.exe</c> 委托打开 —— 由以普通用户身份运行的外壳拉起，同样不提权。
+/// 降权失败**没有回退**：直接判失败进日志，绝不允许以管理员身份启动普通用户级应用。</description></item>
 /// </list>
 /// <para>
 /// 🔴 本类**不做成败判定**（那是 <c>LaunchResultEvaluator</c> 的职责），也**不抛异常**：
@@ -31,20 +33,14 @@ public sealed partial class ProcessLauncher : IProcessLauncher
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint NormalPriorityClass = 0x00000020;
 
-    private readonly bool _preferDeElevated;
-    private readonly bool _fallbackOnDeElevationFailure;
     private readonly ILogSink _log;
 
     /// <summary>构造进程启动器。</summary>
-    /// <param name="preferDeElevatedLaunch">普通条目是否优先降权启动（FR-9.9）。</param>
-    /// <param name="fallbackOnDeElevationFailure">降权失败是否回退直接启动（FR-5.7）；关闭则判为失败。</param>
     /// <param name="log">日志接收端。</param>
-    public ProcessLauncher(bool preferDeElevatedLaunch, bool fallbackOnDeElevationFailure, ILogSink log)
+    public ProcessLauncher(ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(log);
 
-        _preferDeElevated = preferDeElevatedLaunch;
-        _fallbackOnDeElevationFailure = fallbackOnDeElevationFailure;
         _log = log;
     }
 
@@ -60,35 +56,29 @@ public sealed partial class ProcessLauncher : IProcessLauncher
 
         if (item.Path.StartsWith(UwpParsingPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            return LaunchUwp(item);
+            return LaunchViaExplorer(item, item.Path);
         }
 
-        if (item.RunAsAdmin || !_preferDeElevated)
+        if (item.RunAsAdmin)
         {
             return LaunchDirect(item);
         }
 
-        var (outcome, deElevated) = TryLaunchDeElevated(item);
-        if (deElevated || !_fallbackOnDeElevationFailure)
+        // 普通条目：一律降权，失败不回退（用户批复 2026-09-19）。
+        if (item.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
         {
-            return outcome;
+            return LaunchViaExplorer(item, item.Path);
         }
 
-        var direct = LaunchDirect(item);
-        if (direct.Created)
-        {
-            return LaunchOutcome.Success(direct.ProcessId, deElevationFellBack: true);
-        }
-
-        return LaunchOutcome.Failure(
-            $"降权启动失败（{outcome.FailureMessage}），回退直接启动也失败：{direct.FailureMessage}");
+        return TryLaunchDeElevated(item);
     }
 
     /// <summary>UWP 条目的解析名前缀（机制 4 / D28=A）。</summary>
     public const string UwpParsingPrefix = "shell:AppsFolder\\";
 
-    /// <summary>经 <c>explorer.exe</c> 激活 UWP 应用 —— 提权进程里唯一可靠的 UWP 启动方式（R12）。</summary>
-    private LaunchOutcome LaunchUwp(DelayedItem item)
+    /// <summary>经 <c>explorer.exe</c> 委托打开 —— UWP 激活与 <c>.lnk</c> 降权共用的一条路：
+    /// 提权进程只负责转交，真正的宿主是以普通用户身份运行的外壳，因此**不提权**（R12 / 用户批复）。</summary>
+    private LaunchOutcome LaunchViaExplorer(DelayedItem item, string target)
     {
         try
         {
@@ -99,7 +89,7 @@ public sealed partial class ProcessLauncher : IProcessLauncher
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = explorer,
-                Arguments = $"\"{item.Path}\"",
+                Arguments = $"\"{target}\"",
                 UseShellExecute = false,
             });
 
@@ -107,8 +97,8 @@ public sealed partial class ProcessLauncher : IProcessLauncher
         }
         catch (Exception ex)
         {
-            _log.Warn(ex, $"经 explorer.exe 激活 UWP 失败：{item.Path}");
-            return LaunchOutcome.Failure($"通过资源管理器激活失败：{ex.Message}");
+            _log.Warn(ex, $"经 explorer.exe 委托打开失败：{target}");
+            return LaunchOutcome.Failure($"通过资源管理器委托打开失败：{ex.Message}");
         }
     }
 
@@ -153,19 +143,13 @@ public sealed partial class ProcessLauncher : IProcessLauncher
         }
     }
 
-    /// <summary>降权启动。返回值第二项表示**是否真的以降权方式创建**（区分失败与回退）。</summary>
-    private unsafe (LaunchOutcome Outcome, bool DeElevated) TryLaunchDeElevated(DelayedItem item)
+    /// <summary>降权启动可执行文件（交互用户令牌）。</summary>
+    private unsafe LaunchOutcome TryLaunchDeElevated(DelayedItem item)
     {
-        // CreateProcessAsUser 吃不了快捷方式；.lnk 条目只能回退直接启动。
-        if (item.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
-        {
-            return (LaunchOutcome.Failure("快捷方式条目不支持降权启动。"), DeElevated: false);
-        }
-
         using var context = TokenHelper.AcquireInteractiveUserToken();
         if (!context.IsValid)
         {
-            return (LaunchOutcome.Failure("无法取得当前登录用户的令牌（会话未激活或已锁定）。"), DeElevated: false);
+            return LaunchOutcome.Failure("无法取得当前登录用户的令牌（会话未激活或已锁定）。");
         }
 
         var commandLine = $"\"{item.Path}\"";
@@ -205,13 +189,13 @@ public sealed partial class ProcessLauncher : IProcessLauncher
         if (!created)
         {
             var error = Marshal.GetLastWin32Error();
-            return (LaunchOutcome.Failure($"降权创建进程失败（Win32 错误码 {error}）。"), DeElevated: false);
+            return LaunchOutcome.Failure($"降权创建进程失败（Win32 错误码 {error}）。");
         }
 
         _ = TokenHelper.CloseHandle(processInformation.ProcessHandle);
         _ = TokenHelper.CloseHandle(processInformation.ThreadHandle);
 
-        return (LaunchOutcome.Success((int)processInformation.ProcessId), DeElevated: true);
+        return LaunchOutcome.Success((int)processInformation.ProcessId);
     }
 
     private static string ResolveWorkingDirectory(DelayedItem item)

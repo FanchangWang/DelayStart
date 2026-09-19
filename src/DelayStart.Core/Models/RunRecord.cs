@@ -9,8 +9,9 @@ namespace DelayStart.Core.Models;
 /// 调度端每有状态变化就原子重写一次，因此管理端**不需要任何 IPC** 就能读到进度（D19）。
 /// </para>
 /// <para>
-/// 连续失败次数**不存在这里**，由 Management 层的 <c>FailureStreakService</c> 扫最近若干份
-/// 归档现算。存计数会在"用户手动移出条目"和"归档被清理"时产生不一致。
+/// 连续失败次数**不存在这里**，由 <c>FailureStreakService</c> 扫最近若干份归档**现算**。
+/// 存计数会在"用户手动移出条目"和"归档被清理"时产生不一致。
+/// 该服务位于 **Core 层**（D31），因为调度端也要用它决定托盘角标，而调度端只引用 Core。
 /// </para>
 /// </remarks>
 public sealed class RunRecord

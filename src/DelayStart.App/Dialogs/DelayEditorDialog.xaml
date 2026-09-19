@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentDialog
+    x:Class="DelayStart.App.Dialogs.DelayEditorDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    CloseButtonText="取消"
+    DefaultButton="Primary"
+    PrimaryButtonClick="OnPrimaryButtonClick">
+
+    <!--
+        延时配置编辑器（docs/design-spec.md 三之二）。
+        4 个编号步骤块 + 底部活摘要。本批落地「加入系统项」形态（目标程序只读）；
+        「手动添加 / 编辑手动条目」形态（目标程序可更换）在下一批补，
+        两块共用同一套 ②③④ 与摘要。
+    -->
+    <ScrollViewer
+        MaxHeight="520"
+        HorizontalScrollMode="Disabled"
+        VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="14" Width="560">
+
+            <TextBlock
+                x:Name="SubtitleText"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                TextWrapping="Wrap" />
+
+            <!-- ① 目标程序 -->
+            <StackPanel Spacing="6">
+                <TextBlock FontWeight="SemiBold" Text="① 目标程序" />
+                <TextBlock
+                    x:Name="TargetHintText"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}" />
+
+                <Border
+                    Padding="12,10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource ControlCornerRadius}">
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="TargetNameText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock
+                            x:Name="TargetPathText"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="Wrap" />
+                        <TextBlock
+                            x:Name="TargetSourceText"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}" />
+                    </StackPanel>
+                </Border>
+
+                <TextBox
+                    x:Name="ArgumentsBox"
+                    Header="命令行参数 — 可选"
+                    PlaceholderText="留空则不附加参数" />
+            </StackPanel>
+
+            <!-- ② 延时时间 -->
+            <StackPanel Spacing="6">
+                <TextBlock FontWeight="SemiBold" Text="② 延时时间" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="相对登录时刻的时间点" />
+
+                <RadioButtons x:Name="DelayChoices" SelectionChanged="OnDelayPresetChanged" />
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <NumberBox
+                        x:Name="CustomDelayBox"
+                        Width="140"
+                        Header="自定义（秒）"
+                        Minimum="0"
+                        SpinButtonPlacementMode="Compact"
+                        ValueChanged="OnCustomDelayChanged" />
+                    <TextBlock
+                        VerticalAlignment="Bottom"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="预设值可在「设置」里改" />
+                </StackPanel>
+
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="延时是相对登录时刻的绝对时间点，不是累加。同一时间点的多个程序会几乎同时启动。"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <!-- ③ 启动身份 -->
+            <StackPanel Spacing="6">
+                <TextBlock FontWeight="SemiBold" Text="③ 启动身份" />
+                <RadioButtons x:Name="IdentityChoices" SelectionChanged="OnIdentityChanged">
+                    <RadioButton Content="普通用户（推荐）" />
+                    <RadioButton Content="管理员" />
+                </RadioButtons>
+                <TextBlock
+                    x:Name="IdentityHintText"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <!-- ④ 接管对象 / 系统影响 -->
+            <StackPanel Spacing="6">
+                <TextBlock x:Name="ImpactHeaderText" FontWeight="SemiBold" Text="④ 接管对象" />
+                <Border
+                    Padding="12,10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource ControlCornerRadius}">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock
+                            Grid.Row="0"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="条目类型" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="InfoTypeText" TextWrapping="Wrap" />
+
+                        <TextBlock
+                            Grid.Row="1"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="写入位置" />
+                        <TextBlock
+                            Grid.Row="1"
+                            Grid.Column="1"
+                            x:Name="InfoWriteText"
+                            TextWrapping="Wrap" />
+
+                        <TextBlock
+                            Grid.Row="2"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="系统影响" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="InfoImpactText" TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+
+            <!-- 底部活摘要（设计稿要求：随延时 / 身份选择实时更新） -->
+            <TextBlock
+                x:Name="SummaryText"
+                FontWeight="SemiBold"
+                TextWrapping="Wrap" />
+
+            <!-- 校验提示 -->
+            <InfoBar
+                x:Name="ValidationBar"
+                IsClosable="False"
+                IsOpen="False"
+                Severity="Error"
+                Title="延时值不合法" />
+
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

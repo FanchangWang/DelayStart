@@ -947,5 +947,39 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | ⚠️ 本机坑（新增） | ① XML 注释里出现 `--`（如 `--exact-match`）是**非法 XML**，会让整个 `Directory.Packages.props` 静默失效 → 报 **NU1015**（全部包"未指定版本"）。② 被 XAML / 容器解析的类型必须 **public**（CS0051）。③ `ContentDialog.ShowAsync` 返回 `IAsyncOperation<T>`，**没有 `ConfigureAwait`**（CS1929），直接 await 即可。④ `x:Bind` 不做 `bool → Visibility` 隐式转换，需 `IValueConverter` |
 | ✅ **R7（DPI）** | **2026-09-19 用户实测通过**：100% / 150% / 200% 三档下界面不糊、列表行与卡片不错位 |
 | ✅ **出口条件（白名单四项）** | **2026-09-19 用户实测通过**：真机走通「扫描 → 接管 → 移出」闭环，白名单四项行为符合 9.3。**Phase 3 出口达成** |
-| ⏳ **仍待人工** | **R10**（提权窗口接收拖放 —— 「手动添加」入口已就绪，待用户实测）与任务管理器 / MSCONFIG 的显示核对 —— 可留 Phase 6 |
+| ⏳ **仍待人工** | **R10 复测**（修复已落地，见 10.5）与任务管理器 / MSCONFIG 的显示核对 —— 可留 Phase 6 |
+
+### 10.5 R10 修复 + Phase 4 调度端执行记录（2026-09-19）
+
+**R10 修复（用户实测"拖进去鼠标变禁止"后落地）**：根因是 **UIPI** —— 中等完整性的 Explorer 向提权（`requireAdministrator`）窗口投递拖放消息被系统静默拦截。修复：新增 `App/Interop/UipiMessageFilter.cs`，在 `MainWindow` 构造期对主窗口句柄调 `ChangeWindowMessageFilterEx` 放行三条消息（`WM_DROPFILES 0x233` / `WM_COPYDATA 0x4A` / `WM_COPYGLOBALDATA 0x49`）；编辑器目标选择区恢复设计稿"拖入文件或点击选择"文案，实现 `DragOver` / `Drop`（接受 `.exe/.lnk/.bat/.cmd/.msi`，落 `ApplyPickedFile` 同一入口）。
+
+**Phase 4（调度端，纯 Win32 + NativeAOT）**：
+
+| 项 | 结论 |
+|---|---|
+| Core 启动器（D27=A） | ✅ `Core/Interop/TokenHelper.cs`（`WTSGetActiveConsoleSessionToken` → `DuplicateTokenEx` 取交互用户主令牌 + `CreateEnvironmentBlock`）+ `Interop/ProcessLauncher.cs`（降权走 `CreateProcessAsUserW`；`.lnk` 与令牌不可得时回退直接启动；回退语义由 `Settings.PreferDeElevatedLaunch` / `FallbackOnDeElevationFailure` 驱动）。`Core.csproj` 补 `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`（`[LibraryImport]` + 固定缓冲需要） |
+| 调度端骨架 | ✅ `Scheduler/NativeMethods.cs`（消息循环 / 窗口类 / GDI 文本 / `SetTimer`；`GetMessageW` 返回 -1 视为致命，0 退出，>0 派发）/ `TrayIconHost.cs`（`Shell_NotifyIconW`，隐藏消息窗承载回调）/ `PanelWindow.cs`（失焦即关：`WM_ACTIVATEAPP` / `WM_KILLFOCUS`；`WM_DPICHANGED` 重排）/ `IconResources.cs`（嵌入的两枚 ICO 运行期载入） |
+| 调度引擎 | ✅ `SchedulerEngine.cs`：按 `StartupSortComparer` 排序 → `SetTimer` 逐条绝对时刻点火 → `IRunStateStore.WriteCurrent` 逐条落盘（管理端总览可见进度）→ 失败按 D17（保持接管 + 下次登录原延时重试，无自动处置）→ `FailureStreakService` 连击计数随归档写入。托盘 tooltip 与面板实时显示"第 x/n 项 · 剩余 y 秒" |
+| 入口 | ✅ `Program.cs`：手动构造（无 DI 容器，AOT 保持零反射）；`OutputType=WinExe`（无控制台闪烁） |
+| 图标资源 | ✅ `Assets/Scheduler.ico` + `SchedulerWarning.ico`（脚本生成，嵌入资源） |
+| 🔴 AOT 链接坑 | `dotnet publish` 报 **LNK1181 找不到 `advapi32.lib`**：本机 VS 2026 的 vcvarsall 未自动带出 Windows SDK 的 `um/ucrt` 库路径。修复：`DelayStart.Scheduler.csproj` 显式 `<AdditionalNativeLibraryDirectories>` 注入 `C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\{um,ucrt}\x64`（硬编码本机唯一 SDK 版本，换机需改） |
+| ✅ 产物 | **AOT 单文件 3.4 MB**（目标 ≤ 6 MB，NFR 达标），`0 警告 0 错误` |
+
+### 10.6 Phase 5 执行记录（2026-09-19）
+
+| 项 | 结论 |
+|---|---|
+| 服务 / 驱动查询 | ✅ Management `ServiceQueryService`（`OpenSCManager` + `EnumServicesStatusExW`，**零 COM**，AOT 友好）+ `Models/ServiceInfo.cs`；启动类型文案与"延迟自动启动"标注来自注册表 `Start` / `DelayedAutoStart` |
+| Winlogon / 登录脚本 | ✅ Management `SystemStartupInspector`（**全静态只读**；Shell/Userinit/VMApplet 三处劫持高发点 + 组策略登录脚本 HKLM/HKCU 两侧；权限不足按"无条目"降级）+ `Models/ReadOnlyEntry.cs`（顶层 record —— 曾是嵌套类型，XAML `x:DataType` 引用嵌套类型麻烦，提出） |
+| 四个页面 | ✅ `OverviewPage`（统计卡 + FR-6.7 横幅矩阵 + **D37 模拟调度进度列表**：10 倍速 `DispatcherTimer`，行状态 等待中→已启动）/ `SystemPage`（四个 Expander 分区只读展示）/ `RunsPage`（FR-8 按次分组，失败项标红 + 失败原因）/ `SettingsPage`（FR-9 全项：预设解析升序去重、上限、重试 0–5、通知策略、托盘、降权两开关；**校验失败整体不落盘**） |
+| 🔴 本机坑（Phase 5） | ⑧ **`Page` 不是 `ObservableObject`** —— 页面自身属性（如 `SimulateButtonText`）不能 `Mode=OneWay`（WMC1506），这类"页面派生文案"一律放 ViewModel；⑨ **x:Bind 表达式里写不了字符串字面量三元式**（`{x:Bind Flag ? '是' : '否'}`）—— pass-1 `XamlCompiler.exe` **直接崩溃退出码 1 且不落任何错误详情**（output.json 停在旧时间戳），换计算属性解决；⑩ 行模型是不可变普通类时行级绑定用 **OneTime**（默认省略 Mode），写 `Mode=OneWay` 会批量触发 WMC1506，在 `TreatWarningsAsErrors` 下即编译失败 |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**208 用例全绿** |
+
+### 10.7 Phase 6 执行记录（2026-09-19，代码完成）
+
+| 项 | 结论 |
+|---|---|
+| Inno Setup | ✅ `installer/DelayStart.iss` + `installer/README.md`：固定路径 `{localappdata}\Programs\DelayStart`（`PrivilegesRequired=lowest` + `DisableDirPage`）、`InitializeUninstall` 同步跑 `--restore-all` + `ewWaitUntilTerminated` + 非 0 **中止卸载**（🈲 `[UninstallRun]` 读不到退出码）、默认保留配置与日志（无 `[UninstallDelete]`，完成页提示目录）。本机未装 Inno Setup，**编译与安装/卸载链路留用户验收** |
+| 管理端导航收口 | ✅ 六模块全接入（总览 / 自启动项 / 延时启动 / 系统启动项 / 运行日志 / 设置），`NavigationService` 六标签齐全，`MainWindow` 菜单不再有"分阶段增长"注释前置条件 |
+| ⏳ 待人工验收 | ① R10 拖放复测；② Inno 安装 → 升级 → 卸载链路（`--restore-all` 拦截路径）；③ 模拟调度与运行日志页真机核对；④ MSCONFIG / 任务管理器显示核对 |
 

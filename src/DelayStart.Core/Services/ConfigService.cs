@@ -288,6 +288,7 @@ public sealed class ConfigService : IAppConfigStore
             item.Name ??= string.Empty;
             item.Path ??= string.Empty;
             item.Arguments ??= string.Empty;
+            item.WorkingDirectory ??= string.Empty;
             item.SourceKey ??= string.Empty;
             item.SourceDetail ??= string.Empty;
             item.OriginalState ??= new OriginalState();

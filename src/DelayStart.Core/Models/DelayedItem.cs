@@ -33,6 +33,17 @@ public sealed class DelayedItem
     public string Arguments { get; set; } = string.Empty;
 
     /// <summary>
+    /// 启动时的当前工作目录。留空则使用程序所在目录（设计稿三之二「工作目录 — 可选」）。
+    /// </summary>
+    /// <remarks>
+    /// 只有**手动添加**的条目用得上它：系统自启动项的工作目录由系统决定
+    /// （注册表项没有工作目录这一说，快捷方式自带一份），接管时不该改。
+    /// 字段放在 <see cref="DelayedItem"/> 而不是单独一张"手动条目表"，是因为除了来源以外
+    /// 两类条目的行为完全一致，分表会让调度端出现两套启动逻辑。
+    /// </remarks>
+    public string WorkingDirectory { get; set; } = string.Empty;
+
+    /// <summary>
     /// 相对**登录时刻**的绝对秒数，不是"上一个启动后再等 N 秒"（机制 5 / FR-5.3）。
     /// </summary>
     public int DelaySeconds { get; set; } = DefaultDelaySeconds;

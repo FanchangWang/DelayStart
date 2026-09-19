@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="DelayStart.App.Views.DelayPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:DelayStart.App.ViewModels"
+    mc:Ignorable="d">
+
+    <!--
+        「延时启动」页（docs/design-spec.md 页面 3）。
+        ⚠️ 本页**只有列表**一种视图 —— 时间轴视图已按 D37 = B 整体删除。
+        本批落地「页头 + 常驻提示条 + 列表 + 两种空状态」，
+        上下调序 / 内联改延时 / 编辑与移除 / 手动添加 / 导出导入在后续批次补。
+    -->
+    <Page.Resources>
+        <Style x:Key="DelayRowStyle" TargetType="ListViewItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="32,20,32,24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="延时启动" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
+        </StackPanel>
+
+        <!-- 常驻提示条：延时是"相对登录时刻的时间点"这件事必须一直可见（坑 7） -->
+        <InfoBar
+            Grid.Row="1"
+            IsClosable="False"
+            IsOpen="True"
+            Message="延时时间是相对登录时刻的时间点，不是累加。同一时间点的程序按列表顺序依次发起启动。如果 B 依赖 A 先启动，请给 B 设置更大的延时值 —— 只保证发起顺序，不保证 A 已完成初始化。"
+            Severity="Informational"
+            Title="延时不是累加" />
+
+        <!-- 配置不可用 / 扫描失败 -->
+        <InfoBar
+            Grid.Row="2"
+            IsClosable="False"
+            IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
+            Message="{x:Bind ViewModel.ErrorText, Mode=OneWay}"
+            Severity="Warning"
+            Title="提示" />
+
+        <!-- 工具栏（本批只有刷新；上下调序 / 模拟调度 / 导出导入 / 手动添加随后补） -->
+        <Grid Grid.Row="3" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ProgressBar
+                Grid.Column="0"
+                IsIndeterminate="True"
+                VerticalAlignment="Center"
+                Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+
+            <Button
+                Grid.Column="1"
+                Command="{x:Bind ViewModel.RefreshCommand}"
+                Content="刷新" />
+        </Grid>
+
+        <!-- 列表：按「延时 → 顺序」排序，与调度端的发起顺序一致 -->
+        <ListView
+            Grid.Row="4"
+            ItemContainerStyle="{StaticResource DelayRowStyle}"
+            ItemsSource="{x:Bind ViewModel.Rows}"
+            SelectionMode="None">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="vm:DelayRow">
+                    <Grid Padding="12,10" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock
+                                FontWeight="SemiBold"
+                                Text="{x:Bind Name}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind CommandLine}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind SourceText}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+
+                        <StackPanel
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Spacing="2">
+                            <TextBlock
+                                HorizontalAlignment="Right"
+                                Text="{x:Bind DelayText}" />
+                            <TextBlock
+                                HorizontalAlignment="Right"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind IdentityText}" />
+                        </StackPanel>
+
+                        <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
+                        <Button
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            Click="OnRemoveRequested"
+                            Content="移出延时" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- 空状态（design-spec 页面 3） -->
+        <StackPanel
+            Grid.Row="4"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="6"
+            Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay}">
+            <TextBlock
+                HorizontalAlignment="Center"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                Text="还没有延时启动项" />
+            <TextBlock
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="到「自启动项」页找到想延后的程序，点击「延时启动」；或者直接手动添加一个程序。" />
+        </StackPanel>
+    </Grid>
+</Page>

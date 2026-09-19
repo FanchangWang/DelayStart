@@ -40,7 +40,25 @@
         由 Inno 安装器代部署 Windows App Runtime。见 docs/architecture.md 第九节 R9。）
     -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+
+    <!--
+      ★ D32：接管 WinUI 自动生成的 Main。
+      XamlCompiler 默认生成一个 Program.Main（[STAThread] + ComWrappers 初始化 + Application.Start）。
+      我们需要在初始化 XAML **之前**先判命令行：命中 headless 子命令就直接执行完退出，
+      不创建窗口、不初始化 WinUI。关闭生成后由 Program.cs 提供语义等价的入口。
+    -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
+    <!-- [LibraryImport] 的硬要求（build-and-test.md 坑 9），当前只有 AttachConsole 一处用到。 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 依赖方向：App → Management → Core（architecture.md 1.2）。
+         Scheduler 绝不出现于此，硬边界。 -->
+    <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+    <ProjectReference Include="..\DelayStart.Management\DelayStart.Management.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="Assets\AppIcon.ico" />

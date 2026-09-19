@@ -18,6 +18,18 @@
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7705" />
   </ItemGroup>
 
+  <ItemGroup Label="计划任务（Management 层，FR-11）">
+    <!--
+      ⚠️ 包 id 是 `TaskScheduler`，**不是** `Microsoft.Win32.TaskScheduler`。
+      后者是 2016 年留下的同名旧包（最新 2.2.0.3，只带 .NET Framework 4.0 程序集），
+      对 .NET 10 完全不可用。前者的 nuspec 标题写明它是
+      "the original Microsoft.Win32.TaskScheduler"，命名空间仍是
+      `Microsoft.Win32.TaskScheduler`，故代码里的 using 不受影响。
+      详见 api-analysis.md 1.4 的勘误注。
+    -->
+    <PackageVersion Include="TaskScheduler" Version="2.12.2" />
+  </ItemGroup>
+
   <ItemGroup Label="单元测试（D21：xUnit v3 / Microsoft.Testing.Platform v2）">
     <PackageVersion Include="xunit.v3.mtp-v2" Version="4.0.1" />
   </ItemGroup>

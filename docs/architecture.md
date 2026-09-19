@@ -390,7 +390,7 @@ DelayStart.Management/
 │  ├─ IStartupSource.cs            # 扫描 + 禁用/启用 的统一接口
 │  ├─ IShellLinkResolver.cs
 │  ├─ IScheduledTaskGateway.cs     # 计划任务访问抽象 —— 接管编排靠它注入假实现（D33）
-│  └─ IIconProvider.cs             # ⏳ Phase 3（D30）
+│  └─ （IIconProvider 不设抽象 —— 图标提取没有第二实现，组合根直接注册具体类 IconProvider）
 ├─ Sources/
 │  ├─ RegistryStartupSource.cs     # HKCU / HKLM / HKLM-WOW64 三个实例
 │  ├─ StartupFolderSource.cs       # 用户 / 系统 两个实例
@@ -401,7 +401,7 @@ DelayStart.Management/
 │  ├─ TakeoverService.cs           # 接管 / 移除（失败逆序回滚，FR-3.1）
 │  ├─ TaskRegistrationService.cs   # DelayStartScheduler 的创建/更新/删除（FR-11）
 │  ├─ ShellLinkResolver.cs         # IShellLinkW 解析目标与参数（FR-1.7）
-│  ├─ IconProvider.cs              # ⏳ Phase 3（D30）：IShellItemImageFactory
+│  ├─ IconProvider.cs              # ✅ Phase 3（D30）：IShellItemImageFactory，内存缓存 / 失败返 null
 │  ├─ ServiceQueryService.cs       # ⏳ Phase 3/5（D30）：服务查询 + delayed-auto
 │  └─ SystemStartupInspector.cs    # ⏳ Phase 5（D30）：驱动 / Winlogon / 登录脚本
 ├─ Interop/
@@ -454,9 +454,16 @@ public interface IStartupSource
 
 `Remove(item)` 反向执行：恢复系统项 → 删配置 → 若已无条目则删除计划任务。
 
-### 3.4 图标提取（⏳ Phase 3，D30）
+### 3.4 图标提取（✅ Phase 3 已实现，D30）
 
-> 本节记录设计意图，**Phase 2 不实现** —— 图标是纯 UI 依赖，本期没有消费者。
+> **Phase 3 落地补充**（与设计意图的差异）：提取结果不返回 `HBITMAP` 也不编码 PNG ——
+> 返回 `IconPixels`（32bpp BGRA 裸像素，自上而下行序，经 `GetDIBits` 负高度读出，
+> 避免 `Bitmap.FromHbitmap` 丢 alpha 的经典坑）。App 侧经 `IconRenderer` 一次性灌进
+> `WriteableBitmap.PixelBuffer`（同步、无 UI 线程亲和的字节），行与图标同帧出现；
+> `SoftwareBitmapSource.SetBitmapAsync` 的逐行 await 闪变被这样消掉。
+> UWP 条目直接用 `shell:AppsFolder\<AUMID>` 解析名提取（与 R12 的零 COM 启动约定同源）。
+> 提取失败一律返回 `null`（列表以「已失效」标注原因），**不抛异常、不记日志**
+> —— `LogLevel` 刻意只有三档，装帧的失败撑不起 Warn。
 
 `SHGetFileInfo` 只能给 32×32 或 16×16，在高 DPI 的 64px 列表行里会糊。改用 `IShellItemImageFactory`：
 
@@ -929,12 +936,16 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | **D35（DI 容器）** | ✅ **A：`Microsoft.Extensions.DependencyInjection` 10.0.12**。组合根 `Services/ServiceRegistration.cs`，**CLI 与 GUI 共用一个容器** —— 两个 `FileLogger` 打开同一个 `manager.log` 会共享冲突，两个 `ConfigService` 会让两处看到的配置不一致。`CliComposition` 退化为解析薄壳 |
 | **D36（本期范围）** | ✅ **A：导出 / 导入、预设延时值编辑都不做**，留 Phase 5 与设置页一起做 |
 | 已落地（3a 外壳） | ✅ `ServiceRegistration` / `NavigationService`（**public**，否则 `MainWindow` 构造函数报 CS0051）/ `MainWindow`（NavigationView + TitleBar + Frame）/ `ShellViewModel` / `App` 与 `Program` 改为收 `IServiceProvider`。构建 **0 警告 0 错误**，`--scan` 回归退出码 0 |
-| 已落地（3b 自启动项页） | ✅ `ItemsPage` + `ItemsViewModel`（异步扫描、来源级失败提示、空状态）+ `StartupEntryRow` + `Converters/BoolToVisibilityConverter`。**IconProvider 仍推后（D30）**，本期列表无图标 |
-| 已落地（3c 延时编辑器） | ✅ `Dialogs/DelayEditorDialog`（①目标程序只读 ②延时预设+自定义 ③身份 ④接管对象 + 底部活摘要 + 上限校验）。**「加入系统项」形态完成**；手动添加 / 编辑形态待补 |
-| 已落地（3d 延时启动页） | ✅ `DelayPage` + `DelayViewModel`（失效判定、两种空状态）+ 行内「移出延时」（两种变体文案，取自 `ui-mockup.html` 的 `unlink()`）。**上下调序 / 编辑 / 手动添加 / 模拟调度待补** |
-| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**208 个用例全绿**（Core 与 Management 本轮未改动） |
+| 已落地（3b 自启动项页） | ✅ `ItemsPage` + `ItemsViewModel`（异步扫描、来源级失败提示、空状态）+ `StartupEntryRow` + `Converters/BoolToVisibilityConverter` |
+| 已落地（3c 延时编辑器） | ✅ `Dialogs/DelayEditorDialog`（①目标程序 ②延时预设+自定义 ③身份 ④接管对象 + 底部活摘要 + 上限校验），**三种形态齐备**：「加入系统项」/「编辑已有条目」（手动项可改名称与路径，系统项锁定目标）/「手动添加」（`[浏览…]` 文件选择器经 `WindowHandleProvider` 句柄挂载） |
+| 已落地（3d 延时启动页） | ✅ `DelayPage` + `DelayViewModel`（失效判定、两种空状态）+ 行内「移出延时」（两种变体文案，取自 `ui-mockup.html` 的 `unlink()`） |
+| 已落地（3e 编辑与调序） | ✅ Management 新增 `ConfigEditService`（`ApplyEdit` / `SetEnabled` / `Move` / `AddManual`，全部原子保存）与 `DelayItemValues`（哪些字段生效由条目来源决定：系统项只改延时 / 身份 / 参数）。`Move` 在同延时组内先重编号再交换（历史配置全 0 时交换才会真的动）；`AddManual` 计划任务注册失败时**回滚**新条目。行内 ↑↓（FR-4.7，仅同延时组内有效）、条目级开关（FR-4.6，回灌二次触发用"开关值 == 配置值"判据挡掉） |
+| 已落地（3f 图标，D30） | ✅ Management `IconProvider` + `Interop/ShellItemImageFactory.cs`（`SHCreateItemFromParsingName` 一个入口吃路径 / `.lnk` / `shell:AppsFolder\<AUMID>` 三种解析名；`GetDIBits` 负高度读 32bpp 保 alpha；HBITMAP 与 COM 指针 finally 逐层释放）。App 侧 `IconRenderer` 同步灌 `WriteableBitmap`，两页行模板 32 DIP 图标位 + `FontIcon` 占位。成功才缓存，失败返 null 不重试打扰 |
+| 已落地（3g 搜索与筛选） | ✅ `ItemsViewModel` 增加 `SearchText`（名称 / 命令行 / 位置子串匹配）+ `SourceFilterIndex`（全部 / 注册表 / 启动文件夹 / 计划任务 / UWP），`Rows` 全量与 `FilteredRows` 视图分离，空状态区分"系统里没有"与"被筛光了" |
+| ⚠️ 本机坑（新增，3e–3f 批次） | ⑤ `WriteableBitmap.PixelBuffer` 的 `CopyTo` 走 CsWinRT 的 `WindowsRuntimeBufferExtensions`（`System.Runtime.InteropServices.WindowsRuntime` 命名空间在 .NET Core 由 WinRT.Runtime 提供）；⑥ `x:Bind` 的 `TextBox.Text` 双向绑定需 `UpdateSourceTrigger=PropertyChanged` 才能逐键过滤；⑦ 取反布尔不能在 `x:Bind` 里写表达式，行对象补 `HasNoIcon` 这类镜像属性 |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**208 个用例全绿**（3e–3f 批次后复核） |
 | ⚠️ 本机坑（新增） | ① XML 注释里出现 `--`（如 `--exact-match`）是**非法 XML**，会让整个 `Directory.Packages.props` 静默失效 → 报 **NU1015**（全部包"未指定版本"）。② 被 XAML / 容器解析的类型必须 **public**（CS0051）。③ `ContentDialog.ShowAsync` 返回 `IAsyncOperation<T>`，**没有 `ConfigureAwait`**（CS1929），直接 await 即可。④ `x:Bind` 不做 `bool → Visibility` 隐式转换，需 `IValueConverter` |
 | ✅ **R7（DPI）** | **2026-09-19 用户实测通过**：100% / 150% / 200% 三档下界面不糊、列表行与卡片不错位 |
 | ✅ **出口条件（白名单四项）** | **2026-09-19 用户实测通过**：真机走通「扫描 → 接管 → 移出」闭环，白名单四项行为符合 9.3。**Phase 3 出口达成** |
-| ⏳ **仍待人工** | **R10**（提权窗口接收拖放，随「手动添加」一起验）与任务管理器 / MSCONFIG 的显示核对 —— 可留 Phase 6 |
+| ⏳ **仍待人工** | **R10**（提权窗口接收拖放 —— 「手动添加」入口已就绪，待用户实测）与任务管理器 / MSCONFIG 的显示核对 —— 可留 Phase 6 |
 

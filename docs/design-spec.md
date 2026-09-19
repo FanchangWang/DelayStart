@@ -453,7 +453,7 @@
 | 圆角 | 卡片 8px，控件 4px，窗口 8px |
 | 字体 | 标题 `Segoe UI Variable Display Semibold`，正文 `Segoe UI Variable Text`（中文回退 `Microsoft YaHei UI`） |
 | 字号 | 页面标题 28 / 卡片标题 14 半粗 / 正文 14 / 辅助文字 12 |
-| 图标 | `Segoe Fluent Icons`；列表行使用真实程序图标（`SHGetFileInfo` / `ExtractIconEx`） |
+| 图标 | `Segoe Fluent Icons`；列表行使用真实程序图标（`IShellItemImageFactory`，按 D30 与 `architecture.md` 3.4；`SHGetFileInfo` 只能给 16/32px 高 DPI 会糊，已否决） |
 | 间距 | 页面边距 32；卡片内边距 16；列表行高 64（两行式） |
 | 状态色 | 已启用 `#8A8A8A` / 已禁用 `#FCE100`（暗）`#9D5D00`（亮） / 已接管 = Accent / 已失效 `#FF99A4` / 受保护 灰+锁 |
 

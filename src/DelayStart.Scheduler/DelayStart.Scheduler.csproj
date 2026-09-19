@@ -15,6 +15,9 @@
     <SelfContained>true</SelfContained>
     <StripSymbols>true</StripSymbols>
 
+    <!-- LibraryImport 源生成器 + 固定指针（ICO 解析 / 窗口过程桥接）需要不安全代码 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
     <!--
       ★ D24 批复 B（2026-09-19）：调度端 UI 走**纯 Win32**，不引用任何 UI 框架。
 
@@ -34,6 +37,24 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      ★ 托盘图标以普通嵌入资源进程序集（scheduler-design.md 六：禁 .resx，AOT 下加载必失败）。
+      运行时手工解析 ICO 容器 + CreateIconFromResourceEx 生成 HICON，零反射。
+    -->
+    <EmbeddedResource Include="Assets\Scheduler.ico" />
+    <EmbeddedResource Include="Assets\SchedulerWarning.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      ★ 本机 VS 2026 的 vcvarsall 未自动带出 Windows SDK 的 um/ucrt 库路径
+        （LNK1181: advapi32.lib），这里显式补上（10.0.26100.0，本机唯一已装 SDK）。
+    -->
+    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64" />
+    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64" />
   </ItemGroup>
 
 </Project>

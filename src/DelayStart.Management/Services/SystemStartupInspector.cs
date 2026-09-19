@@ -90,6 +90,89 @@ public static class SystemStartupInspector
         return entries;
     }
 
+    /// <summary>读取组策略启动项（D2 = A：Policies\Explorer\Run + GPO 脚本，替换原「登录脚本」分区）。</summary>
+    /// <returns>只读条目列表。</returns>
+    public static IReadOnlyList<ReadOnlyEntry> ReadGroupPolicy()
+    {
+        var entries = new List<ReadOnlyEntry>();
+
+        // ── 策略 Run 键（HKLM + HKCU）：组策略下发的自启动 ───────────────────
+        foreach (var (root, label) in new (Microsoft.Win32.RegistryKey, string)[]
+                 {
+                     (Microsoft.Win32.Registry.LocalMachine, @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run"),
+                     (Microsoft.Win32.Registry.CurrentUser, @"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run"),
+                 })
+        {
+            try
+            {
+                using var key = root.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run");
+                if (key is null)
+                {
+                    continue;
+                }
+
+                foreach (var valueName in key.GetValueNames())
+                {
+                    if (key.GetValue(valueName)?.ToString() is { Length: > 0 } value)
+                    {
+                        entries.Add(new ReadOnlyEntry(label, valueName, value));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException or System.IO.IOException)
+            {
+                // 只读降级：策略键被保护时按"无条目"处理。
+            }
+        }
+
+        // ── GPO 启动 / 登录脚本（机器侧 + 用户侧的组策略脚本注册点）────────
+        entries.AddRange(ReadLogonScripts());
+        entries.AddRange(ReadGpoScripts());
+
+        return entries;
+    }
+
+    /// <summary>读取 GPO 脚本目录下的脚本文件（机器 + 用户，Logon / Startup）。</summary>
+    /// <returns>只读条目列表。</returns>
+    private static List<ReadOnlyEntry> ReadGpoScripts()
+    {
+        var entries = new List<ReadOnlyEntry>();
+
+        var roots = new (string Folder, string Label)[]
+        {
+            (
+                System.IO.Path.Combine(Environment.SystemDirectory, "GroupPolicy", "Machine", "Scripts", "Startup"),
+                @"组策略脚本 · 机器 · Startup"
+            ),
+            (
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "GroupPolicy", "User", "Scripts", "Logon"),
+                @"组策略脚本 · 用户 · Logon"
+            ),
+        };
+
+        foreach (var (folder, label) in roots)
+        {
+            try
+            {
+                if (!Directory.Exists(folder))
+                {
+                    continue;
+                }
+
+                foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+                {
+                    entries.Add(new ReadOnlyEntry(label, System.IO.Path.GetFileName(file), file));
+                }
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException or System.IO.IOException or UnauthorizedAccessException)
+            {
+                // 只读降级。
+            }
+        }
+
+        return entries;
+    }
+
     /// <summary>统计自启动位置里的内核驱动数量（只读展示用）。</summary>
     /// <returns>驱动数量。</returns>
     public static int CountKernelDrivers()

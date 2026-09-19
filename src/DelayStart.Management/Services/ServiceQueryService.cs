@@ -126,15 +126,20 @@ public sealed partial class ServiceQueryService
         var results = new List<ServiceInfo>(names.Count);
         foreach (var name in names)
         {
-            var (displayName, startType, delayedAuto, binaryPath) = ReadRegistryInfo(name);
+            var (displayName, description, startType, delayedAuto, binaryPath) = ReadRegistryInfo(name);
+            var state = states.GetValueOrDefault(name);
+
             results.Add(new ServiceInfo(
                 name,
                 string.IsNullOrWhiteSpace(displayName) ? name : displayName,
+                description,
                 startType,
-                DescribeStatus(states.GetValueOrDefault(name)),
+                DescribeStatus(state),
+                state == ServiceRunning,
                 delayedAuto,
                 isDriver,
-                binaryPath));
+                binaryPath,
+                ServiceInfo.ComputeIsBuiltin(binaryPath)));
         }
 
         return results
@@ -142,7 +147,7 @@ public sealed partial class ServiceQueryService
             .ToList();
     }
 
-    private static (string DisplayName, string StartType, bool DelayedAuto, string BinaryPath) ReadRegistryInfo(string serviceName)
+    private static (string DisplayName, string Description, string StartType, bool DelayedAuto, string BinaryPath) ReadRegistryInfo(string serviceName)
     {
         try
         {
@@ -150,10 +155,14 @@ public sealed partial class ServiceQueryService
                 $@"SYSTEM\CurrentControlSet\Services\{serviceName}");
             if (key is null)
             {
-                return (string.Empty, "未知", false, string.Empty);
+                return (string.Empty, string.Empty, "未知", false, string.Empty);
             }
 
-            var displayName = key.GetValue("DisplayName") as string ?? string.Empty;
+            // 批复 11：DisplayName / Description 大多是 MUI 间接字符串
+            // （@%SystemRoot%\System32\xxx.dll,-nnn），直接显示就是一串 @% 开头的乱码。
+            // SHLoadIndirectString 一个 API 同时解析 "@路径,-资源ID" 与 "@{包?资源}" 两种格式。
+            var displayName = ResolveMuiString(key.GetValue("DisplayName") as string);
+            var description = ResolveMuiString(key.GetValue("Description") as string);
             var start = key.GetValue("Start") is int value ? value : -1;
             var delayed = key.GetValue("DelayedAutostart") is int flag && flag == 1;
             var binaryPath = ExpandImagePath(key.GetValue(
@@ -171,17 +180,37 @@ public sealed partial class ServiceQueryService
                 _ => "未知",
             };
 
-            return (displayName, startType, delayed && start == 2, binaryPath);
+            return (displayName, description, startType, delayed && start == 2, binaryPath);
         }
         catch (Exception ex) when (ex is System.Security.SecurityException or System.IO.IOException)
         {
-            return (string.Empty, "未知", false, string.Empty);
+            return (string.Empty, string.Empty, "未知", false, string.Empty);
         }
     }
+
+    /// <summary>把 MUI 间接字符串解析成可读文本；不是间接引用或解析失败时原样返回。</summary>
+    /// <remarks>
+    /// 2026-09-20 批复 1：解析管道搬进 <see cref="Interop.MuiString"/> ——
+    /// SH 直解 → 环境变量展开重试（%ProgramFiles% 等 SH 不认）→ LoadLibraryEx+LoadString
+    /// 直读 → INF 分号回退。此前残留 <c>@%</c> 开头的正是前一类。
+    /// </remarks>
+    private static string ResolveMuiString(string? raw) => Interop.MuiString.Resolve(raw);
 
     /// <summary>把 <c>ImagePath</c> 规整成"去引号的映像路径"（展开环境变量、剥掉参数）。</summary>
     /// <param name="raw">注册表原值（可能是 <c>REG_EXPAND_SZ</c>、带引号、带参数）。</param>
     /// <returns>形如 <c>C:\Windows\system32\svchost.exe</c> 的路径；不可解析为空串。</returns>
+    /// <remarks>
+    /// <para>
+    /// 2026-09-20 批复 5：驱动的 ImagePath 是内核写法，<see cref="Environment.ExpandEnvironmentVariables"/>
+    /// 展不开 —— <c>\SystemRoot\System32\drivers\x.sys</c>（= %SystemRoot%\…）、
+    /// <c>\??\C:\…</c>（NT 对象管理器前缀）、相对路径 <c>System32\drivers\x.sys</c>。
+    /// </para>
+    /// <para>
+    /// 2026-09-20 批复 1：先剥引号 / 按扩展名截参数、**再**做前缀归一化 —— 此前顺序反了，
+    /// 带引号的全路径 <c>"C:\Program Files\x.exe" -k</c> 被当相对路径，错误拼上 C:\Windows\ 前缀。
+    /// 无引号带空格的路径靠扩展名（.exe/.sys/.dll）截参数，不再被第一个空格切碎。
+    /// </para>
+    /// </remarks>
     private static string ExpandImagePath(object? raw)
     {
         if (raw is not string value || value.Trim().Length == 0)
@@ -190,17 +219,70 @@ public sealed partial class ServiceQueryService
         }
 
         var expanded = Environment.ExpandEnvironmentVariables(value).Trim();
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
 
-        // ImagePath 常见三种形态："C:\x\y.exe" -arg / C:\x\y.exe / C:\x\y.exe -arg。
-        // 有引号按引号取；没引号取第一个空白前段（目录含空格的服务几乎必带引号）。
+        // ① 先取"纯路径段"：带引号按引号取；无引号按扩展名截参数。
+        string segment;
         if (expanded.StartsWith('"'))
         {
             var end = expanded.IndexOf('"', 1);
-            return end > 0 ? expanded[1..end] : expanded.Trim('"');
+            segment = end > 0 ? expanded[1..end] : expanded.Trim('"');
+        }
+        else if (FindImageExtension(expanded) is { } extension)
+        {
+            segment = expanded[..(extension + 4)];
+        }
+        else
+        {
+            var space = expanded.IndexOf(' ');
+            segment = space > 0 ? expanded[..space] : expanded;
         }
 
-        var space = expanded.IndexOf(' ');
-        return space > 0 ? expanded[..space] : expanded;
+        // ② 再归一化内核路径写法（\SystemRoot / \??\ / 相对路径）。
+        if (segment.StartsWith(@"\SystemRoot\", StringComparison.OrdinalIgnoreCase))
+        {
+            segment = windows + segment[@"\SystemRoot".Length..];
+        }
+        else if (segment.StartsWith(@"\??\", StringComparison.OrdinalIgnoreCase))
+        {
+            segment = segment[4..];
+        }
+        else if (segment.StartsWith(@"\?", StringComparison.OrdinalIgnoreCase))
+        {
+            segment = segment[3..];
+        }
+        else if (windows.Length > 0 && !Path.IsPathRooted(segment))
+        {
+            segment = Path.Combine(windows, segment);
+        }
+
+        return segment;
+    }
+
+    /// <summary>在路径里找映像扩展名（.exe / .sys / .dll），返回扩展名起点；找不到为 <see langword="null"/>。</summary>
+    private static int? FindImageExtension(string path)
+    {
+        int? found = null;
+
+        var index = path.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        if (index > 0)
+        {
+            found = index;
+        }
+
+        index = path.IndexOf(".sys", StringComparison.OrdinalIgnoreCase);
+        if (index > 0 && (found is null || index < found))
+        {
+            found = index;
+        }
+
+        index = path.IndexOf(".dll", StringComparison.OrdinalIgnoreCase);
+        if (index > 0 && (found is null || index < found))
+        {
+            found = index;
+        }
+
+        return found;
     }
 
     private static string DescribeStatus(uint state) => state switch

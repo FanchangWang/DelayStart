@@ -163,12 +163,16 @@ public sealed class ScheduledTaskSource : IStartupSource
         }
 
         var id = ItemKeyBuilder.Build(Kind, Scope, path);
+        var actionPath = action.Path ?? string.Empty;
 
         return new StartupEntry
         {
             Id = id,
             Name = string.IsNullOrWhiteSpace(task.Name) ? path : task.Name!,
-            Path = action.Path ?? string.Empty,
+            Path = actionPath,
+            // 批复 9：动作常是 cmd.exe /c start "" "C:\app\x.exe" 这类包装 —— 把真正的
+            // exe 解析出来供图标展示；启动语义不动（Path + Arguments 原样保留）。
+            ExecutablePath = ResolveExecutable(actionPath, action.Arguments ?? string.Empty),
             Arguments = action.Arguments ?? string.Empty,
             Source = Kind,
             Scope = Scope,
@@ -184,6 +188,103 @@ public sealed class ScheduledTaskSource : IStartupSource
             IsProtected = false,
             IsTakenOver = takenOverKeys.Contains(id),
         };
+    }
+
+    /// <summary>常见的"包装器"可执行文件名（小写）—— 它们只是拉起真正程序的跳板。</summary>
+    private static readonly HashSet<string> WrapperNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cmd.exe",
+        "conhost.exe",
+        "cmd",
+        "powershell.exe",
+        "pwsh.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "mshta.exe",
+        "rundll32.exe",
+    };
+
+    /// <summary>
+    /// 从任务动作里解析出实际的应用程序路径（批复 9）。
+    /// </summary>
+    /// <remarks>
+    /// 优先 <paramref name="actionPath"/> 本身；它缺失、不是 .exe、或是 cmd / powershell
+    /// 等包装器时，从 <paramref name="arguments"/> 里取第一个带引号（或空白分隔）的
+    /// token 再判一次。两步都失败返回空串 —— 图标退回占位符，不影响任何功能。
+    /// </remarks>
+    internal static string ResolveExecutable(string actionPath, string arguments)
+    {
+        var direct = NormalizeExe(actionPath);
+        if (direct is not null && !WrapperNames.Contains(Path.GetFileName(direct)))
+        {
+            return direct;
+        }
+
+        foreach (var token in SplitArguments(arguments))
+        {
+            var candidate = NormalizeExe(token);
+            if (candidate is not null)
+            {
+                return candidate;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>展开环境变量后判定是否像可执行文件；不像返回 <see langword="null"/>。</summary>
+    private static string? NormalizeExe(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var expanded = Environment.ExpandEnvironmentVariables(raw.Trim());
+        if (expanded.StartsWith('"'))
+        {
+            var end = expanded.IndexOf('"', 1);
+            if (end <= 1)
+            {
+                return null;
+            }
+
+            expanded = expanded[1..end];
+        }
+
+        if (!expanded.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            || !Path.IsPathFullyQualified(expanded))
+        {
+            return null;
+        }
+
+        return expanded;
+    }
+
+    /// <summary>把参数串拆成候选 token：先取带引号的，再取空白分隔的。</summary>
+    private static IEnumerable<string> SplitArguments(string arguments)
+    {
+        if (string.IsNullOrWhiteSpace(arguments))
+        {
+            yield break;
+        }
+
+        var rest = arguments.Trim();
+        if (rest.StartsWith('"'))
+        {
+            var end = rest.IndexOf('"', 1);
+            if (end > 1)
+            {
+                yield return rest[1..end];
+                rest = rest[(end + 1)..].TrimStart();
+            }
+        }
+
+        if (rest.Length > 0)
+        {
+            var space = rest.IndexOf(' ');
+            yield return space > 0 ? rest[..space] : rest;
+        }
     }
 
     /// <summary>取触发时机的展示文案；不是登录/启动触发时返回 <see langword="null"/>。</summary>

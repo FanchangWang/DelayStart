@@ -23,10 +23,8 @@ namespace DelayStart.Management.Sources;
 /// <c>State = 2</c> 为启用、<c>0</c> 为禁用，两个值之外按启用处理（不猜未知语义）。
 /// </para>
 /// <para>
-/// 🔴 关于 FR-1.8 的显示名解析，本实现覆盖其中的**第 1、2、4 步**（读
-/// <c>SplashScreen\&lt;AUMID&gt;\AppName</c> → <c>SHLoadIndirectString</c> → 回退为
-/// PackageFamilyName 下划线前的部分），**第 3 步（MrtCache 反查 PackageFullName）未实现**。
-/// 理由见 <see cref="ResolveDisplayName"/> 的注释。
+/// 关于 FR-1.8 的显示名解析（2026-09-19 批复 10 补全）：SplashScreen AppName →
+/// <c>SHLoadIndirectString</c> → Repository\Packages 反查 DisplayName → PFN 前缀兜底。
 /// </para>
 /// </remarks>
 public sealed class UwpStartupSource : IStartupSource
@@ -157,30 +155,67 @@ public sealed class UwpStartupSource : IStartupSource
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 实现第 1、2、4 步：读 <c>SplashScreen\&lt;AUMID&gt;\AppName</c> →
-    /// <c>SHLoadIndirectString</c> → 回退为 PackageFamilyName 下划线前的部分。
+    /// 解析顺序（2026-09-20 批复 2 再补全）：
     /// </para>
-    /// <para>
-    /// ⏳ **第 3 步（解析失败时去 MrtCache 反查 PackageFullName，拼成
-    /// <c>@{PackageFullName?ms-resource://...}</c> 再解析）未实现**，属已知偏差。
-    /// 判断依据：它需要额外解码 <c>resources.pri</c> 或改 TFM 引入 WinRT 的
-    /// <c>PackageManager</c>，代码量与风险都明显高于收益，而第 4 步已给出可读兜底
-    /// （用户看到的是 <c>Microsoft.WindowsCalculator</c> 这类包名前缀，而非乱码）。
-    /// 该偏差已记入 <c>docs/build-and-test.md</c> 的 Phase 2 记录。
-    /// </para>
+    /// <list type="number">
+    /// <item><description><c>SplashScreen\&lt;AUMID&gt;\AppName</c> → <c>SHLoadIndirectString</c>。</description></item>
+    /// <item><description><c>AppModel\Repository\Packages\&lt;PackageFullName&gt;</c> 的
+    /// <c>DisplayName</c>。可能是纯文本、<c>@{包?资源}</c>、或**裸 <c>ms-resource:</c> 引用**
+    /// （实测 DevHome / Terminal / CommandPalette 是裸引用）—— 裸引用先用包全名补上
+    /// <c>@{…}</c> 包装再交给 <c>SHLoadIndirectString</c>。</description></item>
+    /// <item><description>PFN 下划线前缀兜底。到这一步仍解析不出的（系统拆分包，
+    /// 资源在 MRT Core 语言包里）由 App 层的 WinRT 兜底接管。</description></item>
+    /// </list>
     /// </remarks>
     private static string ResolveDisplayName(RegistryKey root, string packageFamilyName, string aumid)
     {
-        var indirect = ReadAppName(root, packageFamilyName, aumid);
-        if (Shlwapi.TryLoadIndirectString(indirect, out var resolved))
+        var resolved = ResolveCandidate(ReadAppName(root, packageFamilyName, aumid));
+        if (resolved.Length > 0)
         {
             return resolved;
         }
 
-        // 第 4 步兜底：PFN 形如 `Microsoft.WindowsCalculator_11.0.0.0_x64__8wekyb3d8bbwe`，
+        resolved = ResolveCandidate(ReadRepositoryDisplayName(packageFamilyName));
+        if (resolved.Length > 0)
+        {
+            return resolved;
+        }
+
+        // 兜底：PFN 形如 `Microsoft.WindowsCalculator_8wekyb3d8bbwe`，
         // 下划线前那一段才是人类能读的部分。
         var underscore = packageFamilyName.IndexOf('_', StringComparison.Ordinal);
         return underscore > 0 ? packageFamilyName[..underscore] : packageFamilyName;
+    }
+
+    /// <summary>
+    /// 把一个"显示名候选"归一成可读文本；解析不出返回空串（继续走下一个候选）。
+    /// </summary>
+    /// <remarks>
+    /// 解析结果仍以 <c>ms-resource:</c> 开头的（资源真的不在当前包的 PRI 里）也判为失败，
+    /// 不能把 "ms-resource:AppName" 这种半成品显示给用户。
+    /// </remarks>
+    private static string ResolveCandidate(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return string.Empty;
+        }
+
+        // 裸 ms-resource 引用没有包名上下文，无法补包装 —— 本分支直接判失败。
+        if (candidate.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        if (candidate[0] != '@')
+        {
+            return candidate; // 纯文本，本身就是可读名。
+        }
+
+        return Shlwapi.TryLoadIndirectString(candidate, out var resolved)
+            && !resolved.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase)
+                ? resolved
+                : string.Empty;
     }
 
     private static string ReadAppName(RegistryKey root, string packageFamilyName, string aumid)
@@ -195,6 +230,76 @@ public sealed class UwpStartupSource : IStartupSource
             return string.Empty;
         }
     }
+
+    /// <summary>Repository\Packages 键路径（HKCU 下，与 SystemAppData 同一体系）。</summary>
+    private const string RepositoryPackagesSubKey =
+        @"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
+
+    /// <summary>
+    /// 从 <c>Repository\Packages</c> 反查包显示名。
+    /// </summary>
+    /// <remarks>
+    /// PackageFamilyName 只含名字与发布商哈希，而 Repository 的键是 **PackageFullName**
+    /// （名字_版本_架构_资源ID_哈希）。用"名字前缀"匹配：PFN 去掉末段哈希后，
+    /// FullName 一定以 <c>名字_</c> 开头 —— 命中任意一个已注册版本即可读 DisplayName。
+    /// </remarks>
+    private static string ReadRepositoryDisplayName(string packageFamilyName)
+    {
+        try
+        {
+            var hashIndex = packageFamilyName.LastIndexOf('_');
+            if (hashIndex <= 0)
+            {
+                return string.Empty;
+            }
+
+            var prefix = packageFamilyName[..(hashIndex + 1)]; // "名字_"
+
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+            using var packages = baseKey.OpenSubKey(RepositoryPackagesSubKey, writable: false);
+            if (packages is null)
+            {
+                return string.Empty;
+            }
+
+            foreach (var fullName in packages.GetSubKeyNames())
+            {
+                if (!fullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                using var packageKey = packages.OpenSubKey(fullName, writable: false);
+                var displayName = packageKey?.GetValue("DisplayName")?.ToString();
+                if (!string.IsNullOrWhiteSpace(displayName))
+                {
+                    // 批复 2：裸 ms-resource 引用（实测 DevHome / Terminal / CommandPalette）
+                    // 缺少 SHLoadIndirectString 要求的 @{包全名?资源} 包装，这里补上。
+                    return NormalizeRepositoryName(displayName, fullName);
+                }
+
+                // 部分应用把可读名放在 App\Capabilities 的 ApplicationName（社区验证过的备选位）。
+                using var capabilities = packageKey?.OpenSubKey(@"App\Capabilities", writable: false);
+                var appName = capabilities?.GetValue("ApplicationName")?.ToString();
+                if (!string.IsNullOrWhiteSpace(appName))
+                {
+                    return appName;
+                }
+            }
+
+            return string.Empty;
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Repository 里的裸 ms-resource 引用补上 @{包全名?…} 包装；其余原样返回。</summary>
+    private static string NormalizeRepositoryName(string value, string packageFullName)
+        => value.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase)
+            ? $"@{{{packageFullName}?{value}}}"
+            : value;
 
     private static void WriteState(StartupEntry entry, int state)
     {

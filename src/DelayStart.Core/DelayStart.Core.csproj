@@ -11,6 +11,12 @@
       这类代码属于 DelayStart.Management。
     -->
     <IsAotCompatible>true</IsAotCompatible>
+
+    <!--
+      ★ LibraryImport 源生成器生成不安全代码（坑 2，本机实测）。
+      Phase 4 加入 P/Invoke 启动器（D27=A）后必须开启。
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>

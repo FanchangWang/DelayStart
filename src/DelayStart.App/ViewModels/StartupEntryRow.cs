@@ -88,6 +88,23 @@ public sealed class StartupEntryRow
     public string StatusText => DisplayText.StatusOf(Entry);
 
     /// <summary>
+    /// 状态徽标的种类（配色用），与 <see cref="DisplayText.StatusOf"/> 同序判断。
+    /// </summary>
+    /// <remarks>
+    /// 判断顺序**必须**与 <c>StatusOf</c> 完全一致（受保护 → 已失效 → 已接管 → 启用/禁用），
+    /// 否则徽标颜色与文案会错配。这里是纯字符串（"protected"/"missing"/"taken"/"enabled"/"disabled"），
+    /// 配色交给 <c>StatusKindToBrushConverter</c> —— 行对象不持有 <see cref="Brush"/>，
+    /// 免得行构造期就得碰 UI 资源。
+    /// </remarks>
+    public string StatusKind => Entry.IsProtected
+        ? "protected"
+        : Entry.IsMissing
+            ? "missing"
+            : Entry.IsTakenOver
+                ? "taken"
+                : Entry.IsEnabled ? "enabled" : "disabled";
+
+    /// <summary>
     /// 该行是否可执行「延时启动」。
     /// </summary>
     /// <remarks>

@@ -16,11 +16,20 @@
     -->
     <Page.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <conv:StatusKindToBrushConverter x:Key="StatusBrush" />
 
         <Style x:Key="ItemRowStyle" TargetType="ListViewItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Padding" Value="8,0" />
             <Setter Property="MinHeight" Value="0" />
+        </Style>
+
+        <!-- 来源分段 Tab 的药丸按钮（D1）：选中态由 code-behind 维护互斥 -->
+        <Style x:Key="SourceTabStyle" TargetType="ToggleButton">
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="FontSize" Value="12.5" />
         </Style>
     </Page.Resources>
 
@@ -60,45 +69,86 @@
             Severity="Warning"
             Title="部分来源扫描失败" />
 
-        <!-- 工具栏：搜索 + 来源筛选 + 刷新（搜索 / 筛选只过滤显示，不触发重扫） -->
-        <Grid Grid.Row="3" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+        <!-- 工具栏：来源分段 Tab + 状态筛选 + 排序 + 搜索 + 刷新（筛选只过滤显示，不触发重扫） -->
+        <StackPanel Grid.Row="3" Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <ToggleButton
+                    Click="OnSourceTabClicked"
+                    Content="全部"
+                    IsChecked="True"
+                    Style="{StaticResource SourceTabStyle}"
+                    Tag="0" />
+                <ToggleButton
+                    Click="OnSourceTabClicked"
+                    Content="注册表"
+                    Style="{StaticResource SourceTabStyle}"
+                    Tag="1" />
+                <ToggleButton
+                    Click="OnSourceTabClicked"
+                    Content="启动文件夹"
+                    Style="{StaticResource SourceTabStyle}"
+                    Tag="2" />
+                <ToggleButton
+                    Click="OnSourceTabClicked"
+                    Content="计划任务"
+                    Style="{StaticResource SourceTabStyle}"
+                    Tag="3" />
+                <ToggleButton
+                    Click="OnSourceTabClicked"
+                    Content="UWP"
+                    Style="{StaticResource SourceTabStyle}"
+                    Tag="4" />
+            </StackPanel>
 
-            <ProgressBar
-                Grid.Column="0"
-                IsIndeterminate="True"
-                VerticalAlignment="Center"
-                Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-            <TextBox
-                Grid.Column="1"
-                MinWidth="220"
-                VerticalAlignment="Center"
-                PlaceholderText="搜索名称、命令或位置"
-                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <ProgressBar
+                    Grid.Column="2"
+                    IsIndeterminate="True"
+                    VerticalAlignment="Center"
+                    Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
 
-            <ComboBox
-                Grid.Column="2"
-                MinWidth="130"
-                VerticalAlignment="Center"
-                SelectedIndex="{x:Bind ViewModel.SourceFilterIndex, Mode=TwoWay}">
-                <ComboBoxItem Content="全部来源" />
-                <ComboBoxItem Content="注册表" />
-                <ComboBoxItem Content="启动文件夹" />
-                <ComboBoxItem Content="计划任务" />
-                <ComboBoxItem Content="UWP" />
-            </ComboBox>
+                <ComboBox
+                    Grid.Column="0"
+                    MinWidth="120"
+                    VerticalAlignment="Center"
+                    SelectedIndex="{x:Bind ViewModel.StatusFilterIndex, Mode=TwoWay}">
+                    <ComboBoxItem Content="全部状态" />
+                    <ComboBoxItem Content="已启用" />
+                    <ComboBoxItem Content="已禁用" />
+                    <ComboBoxItem Content="已接管" />
+                </ComboBox>
 
-            <Button
-                Grid.Column="3"
-                Command="{x:Bind ViewModel.RefreshCommand}"
-                Content="刷新扫描" />
-        </Grid>
+                <ComboBox
+                    Grid.Column="1"
+                    MinWidth="110"
+                    VerticalAlignment="Center"
+                    SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}">
+                    <ComboBoxItem Content="按来源" />
+                    <ComboBoxItem Content="按名称" />
+                    <ComboBoxItem Content="按状态" />
+                </ComboBox>
+
+                <TextBox
+                    Grid.Column="3"
+                    MinWidth="220"
+                    VerticalAlignment="Center"
+                    PlaceholderText="搜索名称、命令或位置"
+                    Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                <Button
+                    Grid.Column="4"
+                    Command="{x:Bind ViewModel.RefreshCommand}"
+                    Content="刷新扫描" />
+            </Grid>
+        </StackPanel>
 
         <!-- 列表：绑定筛选后的可见集合 -->
         <ListView
@@ -122,15 +172,16 @@
                             Width="32"
                             Height="32"
                             VerticalAlignment="Center">
+                            <!-- 行对象不可变，图标在构造时定型：OneTime 即可（OneWay 在非 INPC 行上是编译错误 WMC1506） -->
                             <Image
-                                Source="{x:Bind Icon, Mode=OneWay}"
+                                Source="{x:Bind Icon}"
                                 Stretch="Uniform"
-                                Visibility="{x:Bind HasIcon, Mode=OneWay}" />
+                                Visibility="{x:Bind HasIcon}" />
                             <FontIcon
                                 FontSize="20"
                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                 Glyph="&#xE7C3;"
-                                Visibility="{x:Bind HasNoIcon, Mode=OneWay}" />
+                                Visibility="{x:Bind HasNoIcon}" />
                         </Grid>
 
                         <StackPanel Grid.Column="1" Spacing="2">
@@ -150,11 +201,18 @@
                                 TextTrimming="CharacterEllipsis" />
                         </StackPanel>
 
-                        <TextBlock
+                        <!-- 状态徽标（D1）：药丸样式，配色经 StatusBrush 转换器按 StatusKind 分档 -->
+                        <Border
                             Grid.Column="2"
                             VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="{x:Bind StatusText}" />
+                            Background="{x:Bind StatusKind, Converter={StaticResource StatusBrush}, ConverterParameter=bg, Mode=OneTime}"
+                            CornerRadius="4"
+                            Padding="8,3">
+                            <TextBlock
+                                Foreground="{x:Bind StatusKind, Converter={StaticResource StatusBrush}, ConverterParameter=fg, Mode=OneTime}"
+                                FontSize="12"
+                                Text="{x:Bind StatusText, Mode=OneTime}" />
+                        </Border>
 
                         <!--
                             「延时启动」入口只在可接管时可见（受保护 / 已失效 / 已接管的条目不显示），

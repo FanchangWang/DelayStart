@@ -5,6 +5,7 @@ using DelayStart.Management.Models;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace DelayStart.App.Views;
 
@@ -30,6 +31,33 @@ public sealed partial class ItemsPage : Page
 
     /// <summary>本页的 ViewModel，供 <c>x:Bind</c> 使用。</summary>
     public ItemsViewModel ViewModel { get; }
+
+    /// <summary>来源分段 Tab 点击（D1）：维护互斥选中并同步 ViewModel 的筛选序号。</summary>
+    /// <param name="sender">被点的 <see cref="ToggleButton"/>，<see cref="FrameworkElement.Tag"/> 是来源序号。</param>
+    /// <param name="e">事件参数。</param>
+    /// <remarks>
+    /// 放 code-behind 而不是 ViewModel：互斥选中是**视图状态**（五个按钮的 IsChecked），
+    /// ViewModel 只认序号 —— 把按钮状态塞进 ViewModel 会让它背上视图的债。
+    /// ToggleButton 点击后已自动翻转自己的 IsChecked，这里负责"把别人翻回去"。
+    /// </remarks>
+    private void OnSourceTabClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton clicked || clicked.Tag is not string tagText
+            || !int.TryParse(tagText, out var index))
+        {
+            return;
+        }
+
+        ViewModel.SourceFilterIndex = index;
+
+        foreach (var element in ((StackPanel)clicked.Parent).Children)
+        {
+            if (element is ToggleButton button)
+            {
+                button.IsChecked = ReferenceEquals(button, clicked);
+            }
+        }
+    }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {

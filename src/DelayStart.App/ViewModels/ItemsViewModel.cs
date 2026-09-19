@@ -41,10 +41,18 @@ public sealed partial class ItemsViewModel : ObservableObject
     public partial string SearchText { get; set; } = string.Empty;
 
     /// <summary>来源筛选的下拉序号：0 全部 / 1 注册表 / 2 启动文件夹 / 3 计划任务 / 4 UWP。</summary>
-    /// <remarks>用序号而不是枚举值绑定：ComboBox 的 <c>SelectedIndex</c> 是它唯一
+    /// <remarks>用序号而不是枚举值绑定：分页 Tab 与 <c>ComboBox</c> 的索引是它唯一
     /// 不需要转换器就能 <c>x:Bind</c> 的形态。</remarks>
     [ObservableProperty]
     public partial int SourceFilterIndex { get; set; }
+
+    /// <summary>状态筛选的序号：0 全部状态 / 1 已启用 / 2 已禁用 / 3 已接管（design-spec 页面 2）。</summary>
+    [ObservableProperty]
+    public partial int StatusFilterIndex { get; set; }
+
+    /// <summary>排序方式的序号：0 按来源 / 1 按名称 / 2 按状态。</summary>
+    [ObservableProperty]
+    public partial int SortIndex { get; set; }
 
     /// <summary>是否正在扫描。界面据此禁用刷新按钮并显示进度条。</summary>
     [ObservableProperty]
@@ -252,26 +260,77 @@ public sealed partial class ItemsViewModel : ObservableObject
     partial void OnSearchTextChanged(string value) => ApplyFilters();
 
     /// <summary>来源筛选变化 → 重算可见列表。</summary>
-    /// <param name="value">新的下拉序号。</param>
+    /// <param name="value">新的来源序号。</param>
     partial void OnSourceFilterIndexChanged(int value) => ApplyFilters();
 
-    /// <summary>按当前搜索词与来源筛选重建 <see cref="FilteredRows"/>。</summary>
+    /// <summary>状态筛选变化 → 重算可见列表。</summary>
+    /// <param name="value">新的状态序号。</param>
+    partial void OnStatusFilterIndexChanged(int value) => ApplyFilters();
+
+    /// <summary>排序方式变化 → 重算可见列表。</summary>
+    /// <param name="value">新的排序序号。</param>
+    partial void OnSortIndexChanged(int value) => ApplyFilters();
+
+    /// <summary>按当前搜索词、来源与状态筛选重建 <see cref="FilteredRows"/>，并按排序方式排列。</summary>
     private void ApplyFilters()
     {
         var keyword = SearchText.Trim();
 
-        FilteredRows.Clear();
-        foreach (var row in Rows)
+        IEnumerable<StartupEntryRow> visible = Rows
+            .Where(row => MatchesSourceFilter(row) && MatchesStatusFilter(row) && MatchesKeyword(row, keyword));
+
+        visible = SortIndex switch
         {
-            if (MatchesSourceFilter(row) && MatchesKeyword(row, keyword))
-            {
-                FilteredRows.Add(row);
-            }
+            1 => visible.OrderBy(static row => row.Name, StringComparer.CurrentCulture),
+            2 => visible.OrderBy(static row => StatusRank(row)).ThenBy(static row => row.Name, StringComparer.CurrentCulture),
+            _ => visible.OrderBy(static row => SourceRank(row))
+                .ThenBy(static row => row.Name, StringComparer.CurrentCulture),
+        };
+
+        FilteredRows.Clear();
+        foreach (var row in visible)
+        {
+            FilteredRows.Add(row);
         }
 
         OnPropertyChanged(nameof(FilteredEmpty));
         OnPropertyChanged(nameof(EmptyText));
     }
+
+    /// <summary>「按来源」排序的来源次序（与扫描顺序一致：注册表 → 文件夹 → 计划任务 → UWP）。</summary>
+    /// <param name="row">候选行。</param>
+    /// <returns>排序键。</returns>
+    private static int SourceRank(StartupEntryRow row) => row.Entry.Source switch
+    {
+        StartupSource.Registry => 0,
+        StartupSource.StartupFolder => 1,
+        StartupSource.ScheduledTask => 2,
+        StartupSource.Uwp => 3,
+        _ => 4,
+    };
+
+    /// <summary>「按状态」排序的次序：已接管最前，其次已禁用 / 已失效 / 受保护，最后已启用。</summary>
+    /// <param name="row">候选行。</param>
+    /// <returns>排序键。</returns>
+    private static int StatusRank(StartupEntryRow row) => row.StatusKind switch
+    {
+        "taken" => 0,
+        "disabled" => 1,
+        "missing" => 2,
+        "protected" => 3,
+        _ => 4,
+    };
+
+    /// <summary>判断一行是否通过状态筛选。</summary>
+    /// <param name="row">候选行。</param>
+    /// <returns>通过为 <see langword="true"/>。</returns>
+    private bool MatchesStatusFilter(StartupEntryRow row) => StatusFilterIndex switch
+    {
+        1 => row.Entry.IsEnabled && !row.Entry.IsTakenOver,
+        2 => !row.Entry.IsEnabled && !row.Entry.IsTakenOver,
+        3 => row.Entry.IsTakenOver,
+        _ => true,
+    };
 
     /// <summary>判断一行是否通过来源筛选。</summary>
     /// <param name="row">候选行。</param>

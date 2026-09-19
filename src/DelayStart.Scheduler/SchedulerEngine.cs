@@ -26,6 +26,10 @@ internal sealed class SchedulerEngine
 {
     private const uint TimerIntervalMilliseconds = 250;
 
+    /// <summary>完成通知气泡的近似存活时长。Win32 气泡的显示时长由系统控制拿不到确切值，
+    /// 托盘「通知消失后退出」只能取这个近似（用户批复 2026-09-19）。</summary>
+    private static readonly TimeSpan NotificationLifetime = TimeSpan.FromSeconds(10);
+
     private readonly IAppConfigStore _configStore;
     private readonly IRunStateStore _runState;
     private readonly IProcessLauncher _launcher;
@@ -152,13 +156,10 @@ internal sealed class SchedulerEngine
 
     private TrayIconHost? CreateTrayHost(IconResources? icons)
     {
-        var delays = _items.Select(static runtime => runtime.Item.DelaySeconds);
-        var withIcon = _settings.ShowTrayIcon
-            && DelayCalculator.ShouldShowTrayIcon(delays, _settings.TrayKeepSeconds)
-            && icons is not null;
-
+        // 托盘只属调度端、恒显示（用户批复 2026-09-19：托盘设置已移除，
+        // 生命周期 = 调度期间显示 → 最后一条通知消失后退出）。
         var host = new TrayIconHost(icons, BuildPanelSnapshot, OpenRunLog);
-        if (!host.TryCreate(BuildTooltip(), withIcon))
+        if (!host.TryCreate(BuildTooltip(), withIcon: icons is not null))
         {
             host.Dispose();
             return null;
@@ -325,9 +326,11 @@ internal sealed class SchedulerEngine
             _tray?.ShowBalloon(title, text);
         }
 
-        // 全部成功后短驻留即退（FR-9.5）；有失败时同样按保留时长退出，
-        // 失败信息由「归档 + 管理端横幅」持续承载（D17 = D）。
-        _quitAt = _stopwatch.Elapsed + TimeSpan.FromSeconds(Math.Max(_settings.TrayKeepSeconds, 1));
+        // 托盘生命周期跟随通知（用户批复 2026-09-19）：弹了通知就等气泡消失后再退
+        // （Win32 气泡时长由系统控制，取约 10 秒的近似值）；没有通知则下一拍直接退出。
+        _quitAt = ShouldNotify(failedCount)
+            ? _stopwatch.Elapsed + NotificationLifetime
+            : _stopwatch.Elapsed;
     }
 
     private bool ShouldNotify(int failedCount) => _settings.NotifyMode switch

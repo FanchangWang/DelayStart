@@ -1,0 +1,79 @@
+using DelayStart.Core.Models;
+
+namespace DelayStart.App.ViewModels;
+
+/// <summary>
+/// 「自启动项」页一行。<see cref="StartupEntry"/> 的只读展示包装。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 为什么不让页面直接绑 <see cref="StartupEntry"/>：行里要显示"状态文案""命令行""位置"
+/// 这三样在模型里都不存在 —— 模型只有 <c>IsEnabled</c> / <c>Path</c> + <c>Arguments</c> /
+/// <c>Source</c> + <c>Scope</c> + <c>SourceKey</c> 这些原始字段。
+/// 把拼装逻辑放在这里，XAML 里就只剩 <c>x:Bind</c>，一旦文案要改只动一处。
+/// </para>
+/// <para>
+/// 刻意**不带任何可变状态**：本页的筛选、搜索、选中都在 ViewModel 上，
+/// 行对象只回答"这一行长什么样"。加了可变状态就会出现"行对象与 ViewModel 谁说了算"的问题。
+/// </para>
+/// </remarks>
+public sealed class StartupEntryRow
+{
+    /// <summary>构造行。</summary>
+    /// <param name="entry">扫描结果中的条目。</param>
+    public StartupEntryRow(StartupEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        Entry = entry;
+    }
+
+    /// <summary>原始条目，供后续操作（接管 / 禁用 / 打开文件位置）取用。</summary>
+    public StartupEntry Entry { get; }
+
+    /// <summary>显示名。</summary>
+    public string Name => Entry.Name;
+
+    /// <summary>路径 + 参数拼成的命令行；路径为空（UWP）时退回 AUMID。</summary>
+    public string CommandLine => string.IsNullOrWhiteSpace(Entry.Arguments)
+        ? Entry.Path
+        : $"{Entry.Path}  {Entry.Arguments}";
+
+    /// <summary>
+    /// 位置描述：来源类型 · 具体位置 · 来源内的原始键。
+    /// </summary>
+    /// <remarks>
+    /// 三段拼接而不是只显示 <c>SourceDetail</c>：<c>SourceDetail</c> 只回答"在哪儿"
+    /// （如 <c>用户启动文件夹</c>），而用户排查时还需要知道"叫什么名字"
+    /// （值名 / 文件名 / 任务路径），否则同名不同来源的两条根本分不出来。
+    /// </remarks>
+    public string LocationText
+    {
+        get
+        {
+            var kind = DisplayText.SourceOf(Entry.Source);
+            var scope = Entry.Scope == StartupScope.None ? null : DisplayText.ScopeOf(Entry.Scope);
+
+            var head = scope is null ? kind : $"{kind} · {scope}";
+            var detail = string.IsNullOrWhiteSpace(Entry.SourceDetail) ? null : Entry.SourceDetail;
+
+            // SourceDetail 有时与 scope 文案重复（如「用户启动文件夹」），去重后再拼。
+            var middle = detail is null || detail == scope ? null : detail;
+
+            return middle is null
+                ? $"{head} · {Entry.SourceKey}"
+                : $"{head} · {middle} · {Entry.SourceKey}";
+        }
+    }
+
+    /// <summary>状态徽标文案。</summary>
+    public string StatusText => DisplayText.StatusOf(Entry);
+
+    /// <summary>
+    /// 该行是否可执行「延时启动」。
+    /// </summary>
+    /// <remarks>
+    /// 直接透传 <see cref="StartupEntry.CanTakeOver"/>，不在界面层复制一份判据 ——
+    /// "能不能接管"是模型的语义，界面只负责把它显示成按钮的可用性。
+    /// </remarks>
+    public bool CanTakeOver => Entry.CanTakeOver;
+}

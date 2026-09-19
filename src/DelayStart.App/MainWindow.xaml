@@ -16,6 +16,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <TitleBar
@@ -31,24 +32,50 @@
         </TitleBar>
 
         <!--
-          导航结构与页面清单见 docs/architecture.md 1.4 与 docs/design-spec.md：
-          6 个顶层模块（总览 / 自启动项 / 延时启动 / 系统启动项 / 运行日志 / 设置），
+          导航结构与页面清单见 docs/architecture.md 5.1 与 docs/design-spec.md 第二节：
+          最终是 6 个顶层模块（总览 / 自启动项 / 延时启动 / 系统启动项 / 运行日志 / 设置），
           其中「自启动项」下再按来源分子项。
 
-          Phase 0 此处**刻意留空**：
-            · 模板自带的 Home / About 与预定页集不符，已随 Pages/ 一并删除（D25 = A）
-            · 不预置占位导航项 —— 点了没反应的死链比没有导航更糟
-            · IsSettingsVisible=False 是有意的：本产品的「设置」是 6 个顶层模块之一，
-              不用 NavigationView 内置的那个设置项
-          导航项与页面在 Phase 3 落地。
+          ⚠️ 这里**故意只挂已经实现的模块**。D25 = A 定下的原则是"不预置死链"——
+          点了没反应的导航项比没有导航更糟。总览 / 系统启动项 / 运行日志 / 设置四个模块
+          随各自的页面（Phase 5）一起加进来，所以这里的 MenuItems 会分阶段增长，
+          这是刻意的，不是遗漏。导航映射表在 Services/NavigationService.cs。
         -->
         <NavigationView
             x:Name="NavView"
             Grid.Row="1"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
-            IsSettingsVisible="False">
+            IsSettingsVisible="False"
+            SelectionChanged="NavView_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="自启动项" Tag="items">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8FD;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="延时启动" Tag="delay">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE916;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
             <Frame x:Name="NavFrame" />
         </NavigationView>
+
+        <!--
+          底部状态条（design-spec 第二节）。调度任务不存在时延时启动根本不生效，
+          而用户看不到任何别的迹象 —— 所以这一行必须在窗口里常驻。
+        -->
+        <Border
+            Grid.Row="2"
+            Padding="16,6"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0">
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="{x:Bind ViewModel.TaskStatusText, Mode=OneWay}" />
+        </Border>
     </Grid>
 </Window>

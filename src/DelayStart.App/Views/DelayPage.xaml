@@ -121,15 +121,16 @@
                             Width="32"
                             Height="32"
                             VerticalAlignment="Center">
+                            <!-- 行对象不可变，图标在构造时定型：OneTime 即可（OneWay 在非 INPC 行上是编译错误 WMC1506） -->
                             <Image
-                                Source="{x:Bind Icon, Mode=OneWay}"
+                                Source="{x:Bind Icon}"
                                 Stretch="Uniform"
-                                Visibility="{x:Bind HasIcon, Mode=OneWay}" />
+                                Visibility="{x:Bind HasIcon}" />
                             <FontIcon
                                 FontSize="20"
                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                 Glyph="&#xE7C3;"
-                                Visibility="{x:Bind HasNoIcon, Mode=OneWay}" />
+                                Visibility="{x:Bind HasNoIcon}" />
                         </Grid>
 
                         <StackPanel Grid.Column="2" Spacing="2">
@@ -167,7 +168,7 @@
                         <ToggleSwitch
                             Grid.Column="4"
                             VerticalAlignment="Center"
-                            IsOn="{x:Bind IsEnabled, Mode=OneWay}"
+                            IsOn="{x:Bind IsEnabled}"
                             Toggled="OnEnabledToggled" />
 
                         <!-- ↑↓：仅在同延时组内有效（FR-4.7），端点由服务层返回 false 时无效果 -->

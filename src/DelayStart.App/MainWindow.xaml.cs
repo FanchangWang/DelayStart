@@ -22,10 +22,12 @@ public sealed partial class MainWindow : Window
     /// <summary>构造主窗口。</summary>
     /// <param name="viewModel">外壳 ViewModel，由容器注入。</param>
     /// <param name="navigation">导航服务，由容器注入。</param>
-    public MainWindow(ShellViewModel viewModel, NavigationService navigation)
+    /// <param name="handles">窗口句柄提供者。文件选择器 / 拖放等 WinRT 互操作要它。</param>
+    public MainWindow(ShellViewModel viewModel, NavigationService navigation, WindowHandleProvider handles)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(navigation);
+        ArgumentNullException.ThrowIfNull(handles);
 
         ViewModel = viewModel;
         _navigation = navigation;
@@ -36,6 +38,10 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
         AppWindow.SetIcon("Assets/AppIcon.ico");
+
+        // 登记主窗口句柄：unpackaged 的文件选择器必须经 InitializeWithWindow 挂到这个
+        // 句柄上，否则 PickSingleFileAsync 在运行时直接抛异常。此刻 AppWindow 已可用。
+        handles.Set(WinRT.Interop.WindowNative.GetWindowHandle(this));
 
         ViewModel.RefreshTaskStatus();
 

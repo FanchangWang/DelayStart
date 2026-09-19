@@ -29,7 +29,18 @@ public sealed partial class DelayViewModel : ObservableObject
     private readonly IAppConfigStore _configStore;
     private readonly ScanService _scanner;
     private readonly TakeoverService _takeover;
+    private readonly ConfigEditService _editor;
+    private readonly IconProvider _icons;
     private readonly ILogSink _log;
+
+    /// <summary>最近一次后台刷新提取到的图标像素，键为条目引用。</summary>
+    /// <remarks>
+    /// <see cref="Load"/> 在 UI 线程同步构建行，等不起逐条提取 ——
+    /// 图标像素由 <see cref="RefreshAsync"/> 的后台任务预先备好；
+    /// 缓存未命中（手动添加 / 编辑后的局部刷新）才在 UI 线程回退单条提取，
+    /// 而那一条通常已被 <see cref="IconProvider"/> 缓存，代价接近零。
+    /// </remarks>
+    private Dictionary<DelayedItem, IconPixels?> _pendingPixels = [];
 
     /// <summary>页头副标题，形如 `共 5 项（含手动添加 1 项）· 最后一个在登录后 1 分 00 秒启动`。</summary>
     [ObservableProperty]
@@ -52,24 +63,34 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <param name="configStore">配置读写端。</param>
     /// <param name="scanner">扫描服务，仅用于判断条目是否已失效（E3）。</param>
     /// <param name="takeover">接管 / 释放服务。</param>
+    /// <param name="editor">条目级编辑服务（改延时 / 切开关 / 调顺序 / 手动添加）。</param>
+    /// <param name="icons">图标提取服务（D30）。</param>
     /// <param name="log">日志接收端。</param>
     public DelayViewModel(
         IAppConfigStore configStore,
         ScanService scanner,
         TakeoverService takeover,
+        ConfigEditService editor,
+        IconProvider icons,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(scanner);
         ArgumentNullException.ThrowIfNull(takeover);
+        ArgumentNullException.ThrowIfNull(editor);
+        ArgumentNullException.ThrowIfNull(icons);
         ArgumentNullException.ThrowIfNull(log);
 
         _configStore = configStore;
         _scanner = scanner;
         _takeover = takeover;
+        _editor = editor;
+        _icons = icons;
         _log = log;
 
         Subtitle = "正在读取配置…";
+        DelayPresets = new Settings().DelayPresets;
+        MaxDelaySeconds = Settings.DefaultMaxDelaySeconds;
     }
 
     /// <summary>列表内容，按「延时 → 顺序」排序（与调度端的发起顺序一致）。</summary>
@@ -77,6 +98,12 @@ public sealed partial class DelayViewModel : ObservableObject
 
     /// <summary>列表是否为空（用于区分两种空状态）。</summary>
     public bool IsEmpty => Rows.Count == 0;
+
+    /// <summary>延时预设值（秒），驱动编辑器的快选按钮（FR-4.2）。</summary>
+    public int[] DelayPresets { get; private set; }
+
+    /// <summary>单条目延时上限；<c>0</c> 表示不限制（FR-4.3）。</summary>
+    public int MaxDelaySeconds { get; private set; }
 
     /// <summary>读取配置并刷新列表。</summary>
     /// <param name="cancellationToken">取消令牌。</param>
@@ -92,7 +119,31 @@ public sealed partial class DelayViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            await Task.Run(() => _scanner.Scan(), cancellationToken).ConfigureAwait(true);
+            // 失效判定与图标提取共用这次扫描 —— 原实现 Load() 里还会再扫一遍，
+            // 改成快照后一次后台扫描同时喂两处。
+            await Task.Run(
+                    () =>
+                    {
+                        var scan = _scanner.Scan();
+                        _canJudgeStaleness = !scan.HasFailures;
+                        _knownKeys = new HashSet<string>(
+                            scan.Entries.Select(static entry => entry.Id),
+                            StringComparer.Ordinal);
+
+                        // 图标提取在同一个后台任务里顺带完成：单张 5~15ms，
+                        // 放 UI 线程会把刷新冻住；单独开任务又多一次线程切换。
+                        var pixels = new Dictionary<DelayedItem, IconPixels?>();
+                        foreach (var item in _configStore.Load().Items)
+                        {
+                            var source = IconSourceOf(item);
+                            pixels[item] = source is null ? null : _icons.TryGetIcon(source);
+                        }
+
+                        _pendingPixels = pixels;
+                    },
+                    cancellationToken)
+                .ConfigureAwait(true);
+
             Load();
         }
         catch (OperationCanceledException)
@@ -108,6 +159,12 @@ public sealed partial class DelayViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    /// <summary>最近一次后台扫描中仍然存在的条目标识（E3 失效判定的依据）。</summary>
+    private HashSet<string> _knownKeys = new(StringComparer.Ordinal);
+
+    /// <summary>当前 <see cref="_knownKeys"/> 是否完整到可以下"失效"结论。</summary>
+    private bool _canJudgeStaleness;
 
     /// <summary>同步读取配置并刷新列表。页面首次进入时调用。</summary>
     public void Load()
@@ -129,15 +186,21 @@ public sealed partial class DelayViewModel : ObservableObject
             return;
         }
 
-        // 失效判定需要"系统里还有没有这一项"。扫描整体失败时无法判断，
-        // 此时**一律不标失效** —— 误标会让用户把好条目删掉，代价远大于漏标。
-        var known = LoadKnownKeys(out var canJudgeStaleness);
+        // 预设值与上限随配置一起刷新：用户在设置页改过之后，编辑器立刻用新值。
+        ApplySettings(config.Settings);
+
+        // 失效判定需要"系统里还有没有这一项"（来自 RefreshAsync 的后台扫描快照）。
+        // 扫描整体失败时无法判断，此时**一律不标失效** —— 误标会让用户把好条目删掉，
+        // 代价远大于漏标。页面尚未刷新过时同样不判（快照为空且不可判定）。
+        var canJudgeStaleness = _canJudgeStaleness;
 
         Rows.Clear();
+        var order = 0;
         foreach (var item in config.Items.OrderBy(static item => item, StartupSortComparer.Instance))
         {
-            var stale = canJudgeStaleness && !item.IsManual && !known.Contains(item.Id);
-            Rows.Add(new DelayRow(item, stale));
+            var stale = canJudgeStaleness && !item.IsManual && !_knownKeys.Contains(item.Id);
+            var pixels = _pendingPixels.GetValueOrDefault(item) ?? _icons.TryGetIcon(IconSourceOf(item) ?? string.Empty);
+            Rows.Add(new DelayRow(item, stale, pixels) { Order = ++order });
         }
 
         Subtitle = BuildSubtitle(config.Items);
@@ -167,23 +230,88 @@ public sealed partial class DelayViewModel : ObservableObject
         return outcome;
     }
 
-    /// <summary>扫描一次系统，取出仍然存在的条目标识。</summary>
-    /// <param name="canJudgeStaleness">扫描是否成功到可以下"失效"结论。</param>
-    /// <returns>系统里存在的条目稳定主键集合。</returns>
-    private HashSet<string> LoadKnownKeys(out bool canJudgeStaleness)
+    /// <summary>保存一次编辑（改延时 / 身份 / 参数，手动条目还可改名称与路径）。</summary>
+    /// <param name="row">被编辑的行。</param>
+    /// <param name="values">编辑器收集到的值。</param>
+    /// <remarks>
+    /// 失败时抛出 <see cref="StartupOperationException"/>，由页面弹窗告知用户 ——
+    /// 编辑失败只有一种后果（配置没改），重试即可，不需要复杂的结果类型。
+    /// </remarks>
+    public void ApplyEdit(DelayRow row, DelayItemValues values)
     {
-        try
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(values);
+
+        _editor.ApplyEdit(row.Item.Id, values);
+        Load();
+    }
+
+    /// <summary>切换条目级开关（FR-4.6）。关闭后本次登录不启动，系统侧状态不变。</summary>
+    /// <param name="row">目标行。</param>
+    /// <param name="enabled">是否启用。</param>
+    public void SetEnabled(DelayRow row, bool enabled)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        _editor.SetEnabled(row.Item.Id, enabled);
+        Load();
+    }
+
+    /// <summary>在同一延时的组内上移 / 下移一位（FR-4.7）。</summary>
+    /// <param name="row">目标行。</param>
+    /// <param name="delta">位移量：<c>-1</c> 上移、<c>+1</c> 下移。</param>
+    /// <returns>顺序是否真的变了（已在组内端点时为 <see langword="false"/>）。</returns>
+    public bool Move(DelayRow row, int delta)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var moved = _editor.Move(row.Item.Id, delta);
+        if (moved)
         {
-            var scan = _scanner.Scan();
-            canJudgeStaleness = !scan.HasFailures;
-            return new HashSet<string>(scan.Entries.Select(static entry => entry.Id), StringComparer.Ordinal);
+            Load();
         }
-        catch (Exception ex)
+
+        return moved;
+    }
+
+    /// <summary>手动添加一个条目（FR-3.4：不动系统任何设置）。</summary>
+    /// <param name="values">编辑器收集到的值。</param>
+    /// <remarks>
+    /// 与「接管」的区别必须让用户看得见：接管会把系统自启动项软禁用，
+    /// 手动添加只往 <c>config.json</c> 里加一条记录。第 ④ 块文案已经在编辑器里说清了这件事。
+    /// </remarks>
+    public void AddManual(DelayItemValues values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        _editor.AddManual(values);
+        Load();
+    }
+
+    /// <summary>条目的图标解析名（D30）。</summary>
+    /// <param name="item">配置里的延时条目。</param>
+    /// <returns>
+    /// UWP 条目用 <c>shell:AppsFolder\&lt;AUMID&gt;</c>，其余用路径本身；
+    /// 手动条目恒为路径。没有可解析的名字时为 <see langword="null"/>。
+    /// </returns>
+    private static string? IconSourceOf(DelayedItem item)
+    {
+        if (item.Source == StartupSource.Uwp)
         {
-            _log.Warn(ex, "扫描失败，本次不判断条目是否失效");
-            canJudgeStaleness = false;
-            return new HashSet<string>(StringComparer.Ordinal);
+            return string.IsNullOrWhiteSpace(item.SourceKey)
+                ? null
+                : $"shell:AppsFolder\\{item.SourceKey}";
         }
+
+        return string.IsNullOrWhiteSpace(item.Path) ? null : item.Path;
+    }
+
+    /// <summary>同步延时预设值与上限。</summary>
+    /// <param name="settings">配置里的设置段。</param>
+    private void ApplySettings(Settings settings)
+    {
+        DelayPresets = settings.DelayPresets;
+        MaxDelaySeconds = settings.MaxDelaySeconds;
     }
 
     /// <summary>拼页头副标题。</summary>

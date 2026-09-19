@@ -72,6 +72,17 @@ internal static class ServiceRegistration
         services.AddSingleton<ScanService>();
         services.AddSingleton<TakeoverService>();
 
+        // 图标提取（D30）。带内存缓存，必须单例 —— 每页各一份等于缓存失效。
+        services.AddSingleton<IconProvider>();
+
+        // 条目级编辑（改延时 / 切开关 / 调顺序 / 手动添加）。它要注册计划任务，
+        // 因此属 Management 层而不是 Core —— 与 TakeoverService 同理。
+        services.AddSingleton<ConfigEditService>();
+
+        // 主窗口句柄。unpackaged 的文件选择器必须知道自己的宿主窗口，
+        // 否则 PickSingleFileAsync 直接抛异常。
+        services.AddSingleton<WindowHandleProvider>();
+
         // ── ViewModel（瞬态）────────────────────────────────────────────────
         services.AddTransient<ShellViewModel>();
         services.AddTransient<ItemsViewModel>();

@@ -1,4 +1,8 @@
+using DelayStart.App.Services;
 using DelayStart.Core.Models;
+using DelayStart.Management.Models;
+
+using Microsoft.UI.Xaml.Media;
 
 namespace DelayStart.App.ViewModels;
 
@@ -21,14 +25,29 @@ public sealed class StartupEntryRow
 {
     /// <summary>构造行。</summary>
     /// <param name="entry">扫描结果中的条目。</param>
-    public StartupEntryRow(StartupEntry entry)
+    /// <param name="iconPixels">该条目的图标像素；提取失败为 <see langword="null"/>（显示占位符）。</param>
+    public StartupEntryRow(StartupEntry entry, IconPixels? iconPixels)
     {
         ArgumentNullException.ThrowIfNull(entry);
         Entry = entry;
+        Icon = IconRenderer.ToImageSource(iconPixels);
     }
 
     /// <summary>原始条目，供后续操作（接管 / 禁用 / 打开文件位置）取用。</summary>
     public StartupEntry Entry { get; }
+
+    /// <summary>条目图标；提取失败为 <see langword="null"/>，XAML 用占位符代替。</summary>
+    /// <remarks>
+    /// 在构造时由 <see cref="IconRenderer"/> 同步转换（UI 线程）—— 行对象保持
+    /// "不可变"的设计（见类注释），图标不作为可变状态事后补挂。
+    /// </remarks>
+    public ImageSource? Icon { get; }
+
+    /// <summary>是否拿到了图标。XAML 据此在「真图标」与「占位符」间切换。</summary>
+    public bool HasIcon => Icon is not null;
+
+    /// <summary><see cref="HasIcon"/> 的反面。<c>x:Bind</c> 不支持取反表达式。</summary>
+    public bool HasNoIcon => Icon is null;
 
     /// <summary>显示名。</summary>
     public string Name => Entry.Name;

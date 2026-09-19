@@ -11,14 +11,19 @@
     <!--
         「延时启动」页（docs/design-spec.md 页面 3）。
         ⚠️ 本页**只有列表**一种视图 —— 时间轴视图已按 D37 = B 整体删除。
-        本批落地「页头 + 常驻提示条 + 列表 + 两种空状态」，
-        上下调序 / 内联改延时 / 编辑与移除 / 手动添加 / 导出导入在后续批次补。
+        列表列：顺序 / 名称+命令+来源 / 延时+身份 / 开关 / ↑↓ / 编辑 / 移出。
+        搜索框、模拟调度（Phase 6）、导出导入（Phase 5）不在本期。
     -->
     <Page.Resources>
         <Style x:Key="DelayRowStyle" TargetType="ListViewItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Padding" Value="8,0" />
             <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style x:Key="RowButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="FontSize" Value="12" />
         </Style>
     </Page.Resources>
 
@@ -58,10 +63,11 @@
             Severity="Warning"
             Title="提示" />
 
-        <!-- 工具栏（本批只有刷新；上下调序 / 模拟调度 / 导出导入 / 手动添加随后补） -->
+        <!-- 工具栏（本批：刷新 + 手动添加；搜索 / 模拟调度 / 导出导入在各自阶段补） -->
         <Grid Grid.Row="3" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
@@ -73,6 +79,11 @@
 
             <Button
                 Grid.Column="1"
+                Click="OnAddManualRequested"
+                Content="手动添加" />
+
+            <Button
+                Grid.Column="2"
                 Command="{x:Bind ViewModel.RefreshCommand}"
                 Content="刷新" />
         </Grid>
@@ -85,14 +96,43 @@
             SelectionMode="None">
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="vm:DelayRow">
-                    <Grid Padding="12,10" ColumnSpacing="12">
+                    <Grid Padding="12,10" ColumnSpacing="10">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <StackPanel Grid.Column="0" Spacing="2">
+                        <!-- 顺序：与调度端的发起顺序一致 -->
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{x:Bind OrderText}" />
+
+                        <!-- 图标（D30）：64px 源显示为 32 DIP，200% DPI 下不糊；取不到时显示占位符 -->
+                        <Grid
+                            Grid.Column="1"
+                            Width="32"
+                            Height="32"
+                            VerticalAlignment="Center">
+                            <Image
+                                Source="{x:Bind Icon, Mode=OneWay}"
+                                Stretch="Uniform"
+                                Visibility="{x:Bind HasIcon, Mode=OneWay}" />
+                            <FontIcon
+                                FontSize="20"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Glyph="&#xE7C3;"
+                                Visibility="{x:Bind HasNoIcon, Mode=OneWay}" />
+                        </Grid>
+
+                        <StackPanel Grid.Column="2" Spacing="2">
                             <TextBlock
                                 FontWeight="SemiBold"
                                 Text="{x:Bind Name}"
@@ -110,7 +150,7 @@
                         </StackPanel>
 
                         <StackPanel
-                            Grid.Column="1"
+                            Grid.Column="3"
                             VerticalAlignment="Center"
                             Spacing="2">
                             <TextBlock
@@ -123,12 +163,44 @@
                                 Text="{x:Bind IdentityText}" />
                         </StackPanel>
 
-                        <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
-                        <Button
-                            Grid.Column="2"
+                        <!-- 条目级开关（FR-4.6）：只影响本次登录是否启动它，不动系统 -->
+                        <ToggleSwitch
+                            Grid.Column="4"
                             VerticalAlignment="Center"
-                            Click="OnRemoveRequested"
-                            Content="移出延时" />
+                            IsOn="{x:Bind IsEnabled, Mode=OneWay}"
+                            Toggled="OnEnabledToggled" />
+
+                        <!-- ↑↓：仅在同延时组内有效（FR-4.7），端点由服务层返回 false 时无效果 -->
+                        <StackPanel
+                            Grid.Column="5"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="4">
+                            <Button
+                                Click="OnMoveUp"
+                                Content="↑"
+                                Style="{StaticResource RowButtonStyle}"
+                                ToolTipService.ToolTip="上移（同一延时内）" />
+                            <Button
+                                Click="OnMoveDown"
+                                Content="↓"
+                                Style="{StaticResource RowButtonStyle}"
+                                ToolTipService.ToolTip="下移（同一延时内）" />
+                        </StackPanel>
+
+                        <StackPanel
+                            Grid.Column="6"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="6">
+                            <Button
+                                Click="OnEditRequested"
+                                Content="编辑"
+                                Style="{StaticResource RowButtonStyle}" />
+
+                            <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
+                            <Button Click="OnRemoveRequested" Content="移出延时" />
+                        </StackPanel>
                     </Grid>
                 </DataTemplate>
             </ListView.ItemTemplate>

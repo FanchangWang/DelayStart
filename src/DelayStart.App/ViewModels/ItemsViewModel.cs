@@ -27,12 +27,24 @@ public sealed partial class ItemsViewModel : ObservableObject
 {
     private readonly ScanService _scanner;
     private readonly TakeoverService _takeover;
+    private readonly IconProvider _icons;
     private readonly IAppConfigStore _configStore;
     private readonly ILogSink _log;
 
     /// <summary>页头副标题，形如 `共 37 项 · 已接管 0 项 · 已禁用 15 项`。</summary>
     [ObservableProperty]
     public partial string Subtitle { get; set; }
+
+    /// <summary>搜索词。匹配名称 / 命令行 / 位置三处（大小写不敏感，子串匹配）。</summary>
+    /// <remarks>过滤的是**显示**，不重扫系统；清空搜索词立刻回到全量列表。</remarks>
+    [ObservableProperty]
+    public partial string SearchText { get; set; } = string.Empty;
+
+    /// <summary>来源筛选的下拉序号：0 全部 / 1 注册表 / 2 启动文件夹 / 3 计划任务 / 4 UWP。</summary>
+    /// <remarks>用序号而不是枚举值绑定：ComboBox 的 <c>SelectedIndex</c> 是它唯一
+    /// 不需要转换器就能 <c>x:Bind</c> 的形态。</remarks>
+    [ObservableProperty]
+    public partial int SourceFilterIndex { get; set; }
 
     /// <summary>是否正在扫描。界面据此禁用刷新按钮并显示进度条。</summary>
     [ObservableProperty]
@@ -54,21 +66,25 @@ public sealed partial class ItemsViewModel : ObservableObject
     /// <summary>构造自启动项页 ViewModel。</summary>
     /// <param name="scanner">全量扫描服务。</param>
     /// <param name="takeover">接管服务，处理本页的「延时启动」动作。</param>
+    /// <param name="icons">图标提取服务（D30）。提取在同一次后台扫描里顺带完成。</param>
     /// <param name="configStore">配置读取端，只用于取延时预设值与上限（FR-4.2 / FR-4.3）。</param>
     /// <param name="log">日志接收端。</param>
     public ItemsViewModel(
         ScanService scanner,
         TakeoverService takeover,
+        IconProvider icons,
         IAppConfigStore configStore,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(scanner);
         ArgumentNullException.ThrowIfNull(takeover);
+        ArgumentNullException.ThrowIfNull(icons);
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(log);
 
         _scanner = scanner;
         _takeover = takeover;
+        _icons = icons;
         _configStore = configStore;
         _log = log;
 
@@ -77,11 +93,31 @@ public sealed partial class ItemsViewModel : ObservableObject
         MaxDelaySeconds = Settings.DefaultMaxDelaySeconds;
     }
 
-    /// <summary>列表内容。已按「来源 → 名称」排序，排序由 <see cref="ScanService"/> 负责。</summary>
+    /// <summary>全部条目。已按「来源 → 名称」排序，排序由 <see cref="ScanService"/> 负责。</summary>
+    /// <remarks>
+    /// 筛选数据源与筛选视图分开：<see cref="Rows"/> 永远是全量（页头统计、筛选谓词都吃它），
+    /// <see cref="FilteredRows"/> 才是列表绑定的东西。直接在 <see cref="Rows"/> 上增删
+    /// 会让"当前过滤条件"没有一个可靠的回算来源。
+    /// </remarks>
     public ObservableCollection<StartupEntryRow> Rows { get; } = [];
 
-    /// <summary>列表是否为空（用于区分空状态与正常状态）。</summary>
+    /// <summary>筛选与搜索后的可见条目，列表实际绑定的集合。</summary>
+    public ObservableCollection<StartupEntryRow> FilteredRows { get; } = [];
+
+    /// <summary>全部条目是否为空（真正"一个都没有"，而不是被筛光了）。</summary>
     public bool IsEmpty => Rows.Count == 0;
+
+    /// <summary>可见列表是否为空。空状态提示的显隐吃这个值。</summary>
+    public bool FilteredEmpty => FilteredRows.Count == 0;
+
+    /// <summary>空状态文案：区分"系统里没有"与"被筛选光了"。</summary>
+    /// <remarks>
+    /// 这两句话指向的动作完全不同（重新扫描 vs 放宽条件），合并成一句会让
+    /// 筛光了数据的用户去点刷新 —— 白扫一遍什么也不会变。
+    /// </remarks>
+    public string EmptyText => IsEmpty
+        ? "此位置没有自启动项\n点「刷新扫描」重新检查全部来源"
+        : "没有符合当前搜索 / 筛选条件的条目\n试着清空搜索词或选「全部来源」";
 
     /// <summary>延时预设值（秒），驱动编辑器的快选按钮（FR-4.2）。</summary>
     /// <remarks>每次刷新时随配置一起更新，用户在设置页改过的预设值立刻生效。</remarks>
@@ -106,8 +142,25 @@ public sealed partial class ItemsViewModel : ObservableObject
         {
             LoadSettings();
 
-            var result = await Task.Run(_scanner.Scan, cancellationToken).ConfigureAwait(true);
-            Apply(result);
+            // 图标提取和扫描放同一个后台任务：提取单个图标 5~15ms，37 项约几百毫秒，
+            // 放 UI 线程会把刷新冻住；单独开任务又多一次线程切换。顺路做完最划算。
+            var scan = await Task.Run(
+                    () =>
+                    {
+                        var result = _scanner.Scan();
+                        var pixels = new Dictionary<StartupEntry, IconPixels?>(capacity: result.Entries.Count);
+                        foreach (var entry in result.Entries)
+                        {
+                            var source = IconSourceOf(entry);
+                            pixels[entry] = source is null ? null : _icons.TryGetIcon(source);
+                        }
+
+                        return (Result: result, Pixels: pixels);
+                    },
+                    cancellationToken)
+                .ConfigureAwait(true);
+
+            Apply(scan.Result, scan.Pixels);
         }
         catch (OperationCanceledException)
         {
@@ -162,13 +215,16 @@ public sealed partial class ItemsViewModel : ObservableObject
 
     /// <summary>把扫描结果灌进列表与页头。</summary>
     /// <param name="result">扫描结果。</param>
-    private void Apply(ScanResult result)
+    /// <param name="pixels">每个条目的图标像素（后台阶段提取）。</param>
+    private void Apply(ScanResult result, Dictionary<StartupEntry, IconPixels?> pixels)
     {
         Rows.Clear();
         foreach (var entry in result.Entries)
         {
-            Rows.Add(new StartupEntryRow(entry));
+            Rows.Add(new StartupEntryRow(entry, pixels[entry]));
         }
+
+        ApplyFilters();
 
         Subtitle = BuildSubtitle(result);
 
@@ -185,6 +241,88 @@ public sealed partial class ItemsViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(IsEmpty));
+    }
+
+    /// <summary>搜索词变化 → 重算可见列表。</summary>
+    /// <param name="value">新的搜索词。</param>
+    /// <remarks>
+    /// 源生成器（CommunityToolkit.Mvvm）在 <c>SearchText</c> 的 setter 里调用本方法，
+    /// 不必手写订阅 PropertyChanged。
+    /// </remarks>
+    partial void OnSearchTextChanged(string value) => ApplyFilters();
+
+    /// <summary>来源筛选变化 → 重算可见列表。</summary>
+    /// <param name="value">新的下拉序号。</param>
+    partial void OnSourceFilterIndexChanged(int value) => ApplyFilters();
+
+    /// <summary>按当前搜索词与来源筛选重建 <see cref="FilteredRows"/>。</summary>
+    private void ApplyFilters()
+    {
+        var keyword = SearchText.Trim();
+
+        FilteredRows.Clear();
+        foreach (var row in Rows)
+        {
+            if (MatchesSourceFilter(row) && MatchesKeyword(row, keyword))
+            {
+                FilteredRows.Add(row);
+            }
+        }
+
+        OnPropertyChanged(nameof(FilteredEmpty));
+        OnPropertyChanged(nameof(EmptyText));
+    }
+
+    /// <summary>判断一行是否通过来源筛选。</summary>
+    /// <param name="row">候选行。</param>
+    /// <returns>通过为 <see langword="true"/>。</returns>
+    private bool MatchesSourceFilter(StartupEntryRow row) => SourceFilterIndex switch
+    {
+        1 => row.Entry.Source == StartupSource.Registry,
+        2 => row.Entry.Source == StartupSource.StartupFolder,
+        3 => row.Entry.Source == StartupSource.ScheduledTask,
+        4 => row.Entry.Source == StartupSource.Uwp,
+        _ => true,
+    };
+
+    /// <summary>判断一行是否命中搜索词。</summary>
+    /// <param name="row">候选行。</param>
+    /// <param name="keyword">已去空白的关键词；空串恒通过。</param>
+    /// <returns>命中为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 三个字段全参与匹配：用户记住的可能是程序名（"微信"）、也可能是
+    /// 可执行文件名（"WeChat"）或它藏身的位置（"Run"）—— 只匹配名称会把
+    /// 后两种常见排查路径堵死。
+    /// </remarks>
+    private static bool MatchesKeyword(StartupEntryRow row, string keyword)
+    {
+        if (keyword.Length == 0)
+        {
+            return true;
+        }
+
+        return row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+            || row.CommandLine.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+            || row.LocationText.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>条目的图标解析名（D30）。</summary>
+    /// <param name="entry">扫描结果中的条目。</param>
+    /// <returns>
+    /// UWP 条目没有文件路径，用 <c>shell:AppsFolder\&lt;AUMID&gt;</c> 解析名 ——
+    /// 与调度端启动 UWP 的路径约定同源（R12：零 COM 的启动方式，图标提取恰好也吃这个名字）。
+    /// 其余条目用路径本身（<c>.lnk</c> 会被 shell 自动解析到目标图标）。
+    /// </returns>
+    private static string? IconSourceOf(StartupEntry entry)
+    {
+        if (entry.Source == StartupSource.Uwp)
+        {
+            return string.IsNullOrWhiteSpace(entry.SourceKey)
+                ? null
+                : $"shell:AppsFolder\\{entry.SourceKey}";
+        }
+
+        return string.IsNullOrWhiteSpace(entry.Path) ? null : entry.Path;
     }
 
     /// <summary>拼页头副标题。</summary>

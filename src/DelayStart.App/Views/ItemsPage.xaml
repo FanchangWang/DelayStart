@@ -60,10 +60,12 @@
             Severity="Warning"
             Title="部分来源扫描失败" />
 
-        <!-- 工具栏（本批只有刷新；搜索 / 筛选 / 排序随后补） -->
+        <!-- 工具栏：搜索 + 来源筛选 + 刷新（搜索 / 筛选只过滤显示，不触发重扫） -->
         <Grid Grid.Row="3" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
@@ -73,28 +75,65 @@
                 VerticalAlignment="Center"
                 Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
 
-            <Button
+            <TextBox
                 Grid.Column="1"
+                MinWidth="220"
+                VerticalAlignment="Center"
+                PlaceholderText="搜索名称、命令或位置"
+                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+            <ComboBox
+                Grid.Column="2"
+                MinWidth="130"
+                VerticalAlignment="Center"
+                SelectedIndex="{x:Bind ViewModel.SourceFilterIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="全部来源" />
+                <ComboBoxItem Content="注册表" />
+                <ComboBoxItem Content="启动文件夹" />
+                <ComboBoxItem Content="计划任务" />
+                <ComboBoxItem Content="UWP" />
+            </ComboBox>
+
+            <Button
+                Grid.Column="3"
                 Command="{x:Bind ViewModel.RefreshCommand}"
                 Content="刷新扫描" />
         </Grid>
 
-        <!-- 列表 -->
+        <!-- 列表：绑定筛选后的可见集合 -->
         <ListView
             Grid.Row="4"
             ItemContainerStyle="{StaticResource ItemRowStyle}"
-            ItemsSource="{x:Bind ViewModel.Rows}"
+            ItemsSource="{x:Bind ViewModel.FilteredRows}"
             SelectionMode="None">
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="vm:StartupEntryRow">
                     <Grid Padding="12,10" ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <StackPanel Grid.Column="0" Spacing="2">
+                        <!-- 图标（D30）：64px 源显示为 32 DIP，200% DPI 下不糊；取不到时显示占位符 -->
+                        <Grid
+                            Grid.Column="0"
+                            Width="32"
+                            Height="32"
+                            VerticalAlignment="Center">
+                            <Image
+                                Source="{x:Bind Icon, Mode=OneWay}"
+                                Stretch="Uniform"
+                                Visibility="{x:Bind HasIcon, Mode=OneWay}" />
+                            <FontIcon
+                                FontSize="20"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Glyph="&#xE7C3;"
+                                Visibility="{x:Bind HasNoIcon, Mode=OneWay}" />
+                        </Grid>
+
+                        <StackPanel Grid.Column="1" Spacing="2">
                             <TextBlock
                                 FontWeight="SemiBold"
                                 Text="{x:Bind Name}"
@@ -112,7 +151,7 @@
                         </StackPanel>
 
                         <TextBlock
-                            Grid.Column="1"
+                            Grid.Column="2"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="{x:Bind StatusText}" />
@@ -122,7 +161,7 @@
                             判据来自模型的 CanTakeOver，界面不复制一份。
                         -->
                         <Button
-                            Grid.Column="2"
+                            Grid.Column="3"
                             VerticalAlignment="Center"
                             Click="OnDelayRequested"
                             Content="延时启动"
@@ -133,21 +172,18 @@
             </ListView.ItemTemplate>
         </ListView>
 
-        <!-- 空状态；有数据时整块折叠 -->
+        <!-- 空状态：区分"系统里没有"与"被筛光了"，文案与显隐都来自 ViewModel -->
         <StackPanel
             Grid.Row="4"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Spacing="6"
-            Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay}">
-            <TextBlock
-                HorizontalAlignment="Center"
-                Style="{StaticResource SubtitleTextBlockStyle}"
-                Text="此位置没有自启动项" />
+            Visibility="{x:Bind ViewModel.FilteredEmpty, Mode=OneWay}">
             <TextBlock
                 HorizontalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Text="点「刷新扫描」重新检查全部来源" />
+                TextAlignment="Center"
+                Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" />
         </StackPanel>
     </Grid>
 </Page>

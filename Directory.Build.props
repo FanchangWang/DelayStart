@@ -21,8 +21,20 @@
     <!-- 内部成员不强制 XML 文档 -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
 
-    <!-- 本项目无多语言需求，省体积（调度端 AOT 体积敏感，见 architecture.md 8.1） -->
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!--
+      🔴 必须为 false。原值 true 是 Phase 0 的误判（理由写在"省体积"，已作废）。
+
+      语义澄清：invariant 模式不是"不要多语言"，而是**不存在任何 culture** ——
+      任何 CultureInfo 构造都会抛 CultureNotFoundException。而
+      Microsoft.Win32.TaskScheduler.Trigger 的静态构造器会
+      CreateSpecificCulture("en") 来格式化任务 XML 日期 → 一旦按 FR-11.3 用
+      TaskService.RegisterTaskDefinition 注册计划任务，必抛
+      TypeInitializationException（D34 真机实测，manager.log 有完整异常链）。
+
+      体积代价实测 ≈ 0：Windows 上 .NET 用系统 C:\Windows\System32\icu.dll，
+      输出目录 ICU 文件 0 个、140.8 MB 不变。
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
 </Project>

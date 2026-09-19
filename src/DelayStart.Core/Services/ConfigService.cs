@@ -151,9 +151,13 @@ public sealed class ConfigService : IAppConfigStore
     /// </summary>
     /// <remarks>
     /// 补齐的三项：<c>scope</c>、<c>enabled</c>、<c>originalState</c>。
-    /// 其中 <c>originalState</c> 保守取 <c>WasEnabled=false</c> —— 能被接管的条目
-    /// 在接管时通常已被软禁用，取 false 与真相最接近，也最安全（移除接管时不会
-    /// 误把不该启用的项打开）。
+    /// <para>
+    /// <c>originalState</c> 取 <see cref="OriginalState.WasEnabled"/> = <see langword="true"/>。
+    /// ⚠️ 早先此处取 <c>false</c>，理由是"能被接管的条目在接管时通常已被软禁用" ——
+    /// <b>那是把因果搞反了</b>：接管后处于禁用状态是**我们刚写的标记**造成的，
+    /// 而 <c>OriginalState</c> 要回答的是"接管**之前**是什么样"。v1 条目在接管前是正常
+    /// 自启动的，记成 <c>false</c> 会让它们「移出延时启动」后仍然不启动，用户无从知道原因。
+    /// </para>
     /// </remarks>
     private AppConfig MigrateFromV1(string json)
     {
@@ -188,7 +192,9 @@ public sealed class ConfigService : IAppConfigStore
             Scope = InferLegacyScope(source, legacy.SourceDetail),
             SourceKey = legacy.SourceKeyName,
             SourceDetail = legacy.SourceDetail,
-            OriginalState = new OriginalState { WasEnabled = false },
+            // v1 条目记不下接管前的状态。按"原本会自启动"处理 —— 取 false 会让这些历史条目
+            // 在「移出延时启动」后仍然不启动，而用户无从知道原因。
+            OriginalState = new OriginalState { WasEnabled = true },
         };
     }
 

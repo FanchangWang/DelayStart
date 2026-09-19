@@ -114,7 +114,9 @@ public sealed class ConfigServiceTests : IDisposable
         Assert.Equal("Weixin", registry.SourceKey);
         Assert.Equal(30, registry.DelaySeconds);
         Assert.True(registry.Enabled);
-        Assert.False(registry.OriginalState.WasEnabled);
+        // v1 条目接管前是正常自启动的 → 迁移后必须记成"原本启用"，
+        // 否则「移出延时启动」会把它永久留在禁用状态（见 ConfigService 迁移方法的 remarks）。
+        Assert.True(registry.OriginalState.WasEnabled);
 
         // 启动文件夹项：scope 推断为系统启动文件夹
         var folder = config.Items[1];

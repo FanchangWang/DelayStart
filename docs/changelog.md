@@ -395,6 +395,42 @@ Phase 0 发现 `UseWindowsForms=true` + `PublishAot=true` 是**官方不支持**
 
 ---
 
+## R8（2026-09-19）：Phase 2 — 新增决策点 D30–D34（落点索引）
+
+> 按本文件声明，编码开始后不再逐条维护实现变更，**新增决策点时仅追加落点索引**。
+> （此条本应随 Phase 2 的 `docs` 提交写入，当时遗漏，本轮补齐。）
+
+| 内容 | 章节 |
+|---|---|
+| D30（图标/服务查询/系统启动项检查推迟）完整论证 | `design-spec.md` 6.11.1 |
+| D31（`FailureStreakService` 迁 Core，文档三处自相矛盾的修正） | `design-spec.md` 6.11.2 |
+| D32（headless CLI，让 Phase 2 产物能被真实执行） | `design-spec.md` 6.11.3 |
+| D33（Management 层单测范围） | `design-spec.md` 6.11.4 |
+| D34（计划任务本期真机验证） | `design-spec.md` 6.11.5 |
+| Phase 2 执行记录（含 D34 两条缺陷复盘） | `architecture.md` 10.3 |
+| **R13**（`InvariantGlobalization=true` 让计划任务注册必崩） | `architecture.md` 第九节 |
+| 9.1 安全验收执行状态 + 边界说明 | `build-and-test.md` 9.1 · `requirements.md` 9.3 |
+| **关联编号** | `D30`–`D34`、`R13`（新增）、`FR-11`、`FR-3.1`、`requirements.md 9.3` |
+
+---
+
+## R9（2026-09-19）：Phase 3 开工前 — 新增决策点 D35–D37（落点索引）
+
+**其中 D37 由用户改判，属需求变更**（时间轴两处都砍），故关联改动比其他两条更广。
+
+| 内容 | 章节 |
+|---|---|
+| D35（管理端 DI 容器）完整论证 | `design-spec.md` 6.12.1 |
+| D36（导出/导入与预设延时值不提前） | `design-spec.md` 6.12.2 |
+| **D37（时间轴整体删除）** | `design-spec.md` 6.12.3 |
+| 页面 1 删「开机启动时间轴」卡片 / 页面 3 删时间轴视图与分段控件 | `design-spec.md` 三、页面 1 / 页面 3 |
+| `FR-10.4` 收窄为「进度视图」 | `requirements.md` FR-10 · 9.5 |
+| 目录结构删 `Controls/TimelineView.xaml`、`AddManualDialog` 并入 `DelayEditorDialog` | `architecture.md` 5.1 |
+| R7 措辞对齐（"时间轴与列表行错位" → "列表行与卡片错位"） | `architecture.md` 第九节 |
+| **关联编号** | `D35`、`D36`、`D37`、`D7`（措辞对齐）、`FR-10.4`、`FR-12.2`、`D11` |
+
+---
+
 > **本文件的作用域到此为止。** 按开头的声明，编码开始后不再逐条维护实现变更 ——
 > R1–R7 覆盖了"文档建立 → 决策冻结 → Phase 1"这一段。
 > 后续只在**新增决策点**时追加一条"落点索引"（README 维护规则第 3 条要求），实现层面的变更由 `git log` 承载。

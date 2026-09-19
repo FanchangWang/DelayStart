@@ -578,17 +578,16 @@ DelayStart.App/
 ├─ App.xaml / App.xaml.cs             # 应用入口、DI 容器、单实例
 ├─ MainWindow.xaml                    # NavigationView 外壳
 ├─ Views/
-│  ├─ OverviewPage.xaml               # 总览（含时间轴、上次运行横幅）
+│  ├─ OverviewPage.xaml               # 总览（含「最近一次开机调度」表、上次运行横幅）
 │  ├─ ItemsPage.xaml                  # 自启动项（按来源筛选）
-│  ├─ DelayPage.xaml                  # 延时启动（列表 / 时间轴双视图）
+│  ├─ DelayPage.xaml                  # 延时启动（**仅列表**，时间轴已按 D37=B 删除）
 │  ├─ SystemPage.xaml                 # 系统启动项（只读）
 │  ├─ LogPage.xaml                    # 运行日志
 │  └─ SettingsPage.xaml               # 设置
 ├─ Dialogs/
-│  ├─ DelayEditorDialog.xaml          # 延时配置编辑器（4 步布局）
+│  ├─ DelayEditorDialog.xaml          # 延时配置编辑器（4 步布局 × 3 形态，**手动添加与编辑共用**）
 │  ├─ ConfirmRemoveDialog.xaml        # 移除确认（两种变体文案）
-│  ├─ SimulateDialog.xaml             # 模拟调度
-│  └─ AddManualDialog.xaml            # 手动添加
+│  └─ SimulateDialog.xaml             # 模拟调度（0.5 倍速进度视图，D37=B 后不再有时间轴）
 ├─ ViewModels/
 │  ├─ ShellViewModel.cs
 │  ├─ OverviewViewModel.cs
@@ -598,18 +597,24 @@ DelayStart.App/
 │  ├─ LogViewModel.cs
 │  └─ SettingsViewModel.cs
 ├─ Controls/
-│  ├─ TimelineView.xaml               # 时间轴（总览与延时页共用）
 │  ├─ StartupItemRow.xaml             # 列表行（图标 + 双行文本 + 操作）
 │  ├─ DelayEditorSection.xaml         # 编辑器内的编号步骤块
 │  └─ ResultBanner.xaml               # 上次运行结果横幅 / 常驻告警条
 ├─ Services/
+│  ├─ ServiceRegistration.cs           # ★ 组合根：CLI 与 GUI 共用的唯一容器（D35）
 │  ├─ NavigationService.cs
 │  ├─ DialogService.cs
 │  ├─ SimulationService.cs            # 模拟调度
 │  ├─ NotificationService.cs          # 管理端内通知（InfoBar）
 │  └─ ActivationRouter.cs             # 处理 --goto-log --run=xxx
 └─ Converters/
+   └─ BoolToVisibilityConverter.cs    # bool → Visibility（x:Bind 不做该隐式转换）
 ```
+
+> **组合根为什么放在 `Services/ServiceRegistration.cs` 而不是 `App.xaml.cs`**：
+> headless CLI（D32）与 GUI 必须装配**同一批实例** —— 两个 `FileLogger` 同时打开
+> `manager.log` 会共享冲突，两个 `ConfigService` 会让"命令行看到的"与"界面看到的"不一致。
+> 容器因此在 `Program.Main` 里构建一次，先分流 CLI、再交给 `App`。
 
 ### 5.2 MVVM 约定
 
@@ -621,13 +626,19 @@ DelayStart.App/
 ### 5.3 启动流程
 
 ```
-App.OnLaunched
- ├─ 解析命令行（--goto-log --run=<id> → 决定初始页）
- ├─ 单实例检查（已存在 → 激活它并退出）
- ├─ 构建 DI 容器
- ├─ 创建 MainWindow
- └─ 触发首次扫描（FR-1.2，异步，不等它完成就显示窗口）
+Program.Main
+ ├─ 构建 DI 容器（ServiceRegistration.AddDelayStartServices）
+ ├─ CliHost.TryExecute(provider, args) ── 命中 headless 子命令 → 直接返回退出码
+ └─ Application.Start
+     └─ App.OnLaunched
+         ├─ 解析命令行（--goto-log --run=<id> → 决定初始页）
+         ├─ 单实例检查（已存在 → 激活它并退出）
+         ├─ 从容器解析 MainWindow
+         └─ 触发首次扫描（FR-1.2，异步，不等它完成就显示窗口）
 ```
+
+> 🔴 **容器必须在 CLI 分流之前构造**：headless 路径同样依赖 `PathService.EnsureCreated()`
+> 建出的目录树，而这条路根本不会进入 `App`。
 
 参数示例：
 
@@ -734,7 +745,7 @@ DelayStart.Scheduler/
 | **R4** | `IShellItemImageFactory` 取到的 `HBITMAP` 转 WinUI `ImageSource` 的生命周期 | 图标不显示或 GDI 句柄泄漏 | 小规模实测 + `DeleteObject` | Phase 3 |
 | **R5** | Core 层引入 AOT 不兼容 API | 调度端发布失败 | `IsAotCompatible=true` 让编译器在构建期报错 | 持续 |
 | **R6** | 计划任务创建/修改被 ACL 或组策略拒绝 | 接管链路中断 | 管理端已全程提权（D20），正常不会因权限失败。仍需捕获 `UnauthorizedAccessException` 并指出**具体条目** | Phase 2 |
-| **R7** | 高 DPI 下时间轴与列表行错位 | 界面不可用 | 100/150/200% 三档实测 | Phase 3 / 5 |
+| **R7** | 高 DPI 下列表行与卡片错位（原写"时间轴与列表行"，时间轴已按 D37=B 删除） | 界面不可用 | 100/150/200% 三档实测 | Phase 3 / 5 |
 | **R8** | `DelayStart.slnx` 与 WinUI 3 项目兼容性 | 无法打开解决方案 | ✅ **已确认（2026-09-19）**：VS 18 可正常打开 `DelayStart.slnx`（含 5 个项目与 XAML 设计器），**无需回退 `.sln`** | **Phase 0 ✅** |
 | **R9** | 🔴 **`WindowsAppSDKSelfContained=true` 时 `requireAdministrator` 可能被忽略** | **管理端不弹 UAC 也不提权 → D20 的整个权限模型失效** | ✅ **已通过（2026-09-19 实测）**：unpackaged + 自包含 + manifest 提权，Release 下**在 VS 之外双击 exe，UAC 正常弹出** → manifest **未被忽略**。`WindowsAppSDKSelfContained` 保持 `true`，三条降级路径**均不需启用**（留档备用，见下方）。⚠️ 残留一项：`WindowsPrincipal.IsInRole(Administrator)` 的**代码级**确认待 Phase 1 有代码后补测 | **Phase 0 ✅** |
 | **R10** | 🟡 提权窗口接收不到资源管理器的拖放（UIPI） | 「手动添加」的拖放区失效 | 主路径 `[浏览…]` 按钮（`FileOpenPicker` + `InitializeWithWindow`）必须 100% 可用，**不依赖拖放**；拖放作为增强：`ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES/MSGFLT_ALLOW)` + `DragAcceptFiles` + 子类化窗口处理 `WM_DROPFILES`。**不通则拖放区降级为纯按钮，不接受"等待修复"** | Phase 3 |
@@ -908,4 +919,22 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | **Phase 2 出口条件** | ✅ **已达成（2026-09-19 · D34 真机执行）**：`--scan` 37 项零误判 → `--reinstall-task` 注册成功 → `--takeover` ×4 → `--restore-all`（成功 4 / 失败 0）→ 前后全量快照 diff 中三个 `Run` 键**逐行 IDENTICAL**、其余 30+ 条目未出现于 diff → 回归扫描四项回到「启用」。详见 `build-and-test.md` 9.1 执行状态块 |
 | 🔴 **D34 缺陷 1（已修复）** | Phase 0 自行引入 `<InvariantGlobalization>true</InvariantGlobalization>`（**无对应决策**，理由写的是"省体积"）→ `TaskScheduler.Trigger..cctor` 里的 `CreateSpecificCulture("en")` 抛 `CultureNotFoundException`，**计划任务注册 100% 崩溃，并连带接管第 4 步全部回滚**。**单测与构建都发现不了**：单测注入的是 `FakeSchedulerTaskRegistrar`，真实的 `TaskRegistrationService` 从未被执行，构建也是 0 警告。**已改为 `false`**；体积代价实测 ≈ 0（Windows 用系统 `icu.dll`，产物 140.8 MB 不变）。已登记为 **R13** |
 | 🔴 **D34 缺陷 2（已修复）** | `Release` / `Rollback` 无条件调 `Enable`（删标记），而 `OriginalState.WasEnabled` **只有写入点、零读取点** —— 实现漏了 `DelayedItem.OriginalState` 注释里明写的"移除接管时据此精确还原（FR-2.7）"。后果：**接管前已被用户禁用的项，移出后会被变成启用**（违反 9.3 第 4 条）。**已修复**：恢复动作按 `WasEnabled` 分支；该字段默认值由 `false` 改为 `true`（安全侧：取"原本会自启动"，否则老配置条目释放后会永久不启动且无从解释）。新增 3 个单测钉住 |
+
+### 10.4 Phase 3 执行记录（2026-09-19，出口达成）
+
+**范围**：`architecture.md` 五（管理端设计）。按 **D35**（容器选型）与 **D36**（本期范围）执行；**D37 = B**：时间轴从延时页与总览页**整体删除**，`TimelineView` 不再存在，D7 的模拟调度改为进度列表。
+
+| 项 | 结论 |
+|---|---|
+| **D35（DI 容器）** | ✅ **A：`Microsoft.Extensions.DependencyInjection` 10.0.12**。组合根 `Services/ServiceRegistration.cs`，**CLI 与 GUI 共用一个容器** —— 两个 `FileLogger` 打开同一个 `manager.log` 会共享冲突，两个 `ConfigService` 会让两处看到的配置不一致。`CliComposition` 退化为解析薄壳 |
+| **D36（本期范围）** | ✅ **A：导出 / 导入、预设延时值编辑都不做**，留 Phase 5 与设置页一起做 |
+| 已落地（3a 外壳） | ✅ `ServiceRegistration` / `NavigationService`（**public**，否则 `MainWindow` 构造函数报 CS0051）/ `MainWindow`（NavigationView + TitleBar + Frame）/ `ShellViewModel` / `App` 与 `Program` 改为收 `IServiceProvider`。构建 **0 警告 0 错误**，`--scan` 回归退出码 0 |
+| 已落地（3b 自启动项页） | ✅ `ItemsPage` + `ItemsViewModel`（异步扫描、来源级失败提示、空状态）+ `StartupEntryRow` + `Converters/BoolToVisibilityConverter`。**IconProvider 仍推后（D30）**，本期列表无图标 |
+| 已落地（3c 延时编辑器） | ✅ `Dialogs/DelayEditorDialog`（①目标程序只读 ②延时预设+自定义 ③身份 ④接管对象 + 底部活摘要 + 上限校验）。**「加入系统项」形态完成**；手动添加 / 编辑形态待补 |
+| 已落地（3d 延时启动页） | ✅ `DelayPage` + `DelayViewModel`（失效判定、两种空状态）+ 行内「移出延时」（两种变体文案，取自 `ui-mockup.html` 的 `unlink()`）。**上下调序 / 编辑 / 手动添加 / 模拟调度待补** |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**208 个用例全绿**（Core 与 Management 本轮未改动） |
+| ⚠️ 本机坑（新增） | ① XML 注释里出现 `--`（如 `--exact-match`）是**非法 XML**，会让整个 `Directory.Packages.props` 静默失效 → 报 **NU1015**（全部包"未指定版本"）。② 被 XAML / 容器解析的类型必须 **public**（CS0051）。③ `ContentDialog.ShowAsync` 返回 `IAsyncOperation<T>`，**没有 `ConfigureAwait`**（CS1929），直接 await 即可。④ `x:Bind` 不做 `bool → Visibility` 隐式转换，需 `IValueConverter` |
+| ✅ **R7（DPI）** | **2026-09-19 用户实测通过**：100% / 150% / 200% 三档下界面不糊、列表行与卡片不错位 |
+| ✅ **出口条件（白名单四项）** | **2026-09-19 用户实测通过**：真机走通「扫描 → 接管 → 移出」闭环，白名单四项行为符合 9.3。**Phase 3 出口达成** |
+| ⏳ **仍待人工** | **R10**（提权窗口接收拖放，随「手动添加」一起验）与任务管理器 / MSCONFIG 的显示核对 —— 可留 Phase 6 |
 

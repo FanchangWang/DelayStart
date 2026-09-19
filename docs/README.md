@@ -53,9 +53,9 @@
 
 ## 决策点状态
 
-**D1–D25 已全部批复完毕并冻结；D27 / D28 / D29 于 Phase 1 期间批复；D30–D34 于 Phase 2 开工前批复。仅 D26（测试命令走向）待决策，不阻塞编码。**
+**D1–D25 已全部批复完毕并冻结；D27 / D28 / D29 于 Phase 1 期间批复；D30–D34 于 Phase 2 开工前批复；D35–D37 于 Phase 3 开工前批复（其中 D37 由用户改判，属需求变更）。仅 D26（测试命令走向）待决策，不阻塞编码。**
 
-**Phase 0 出口条件已全部达成**；**Phase 1（Core 层）已完成**：5 个项目 Release 构建 0 警告 0 错误、**128 个单元测试全绿**。
+**Phase 0 / Phase 1 / Phase 2 出口条件均已达成**（Phase 2 含 D34 真机验证闭环）；全解决方案 Release 构建 **0 警告 0 错误**、**208 个单元测试全绿**。**下一步：Phase 3（管理端 UI 骨架）。**
 
 | 编号 | 内容 | 结论 |
 |---|---|---|
@@ -93,8 +93,11 @@
 | **D32** | **Phase 2 无 UI 时怎么执行安全验收** | **✅ A — 给管理端加 headless CLI**：`--restore-all` / `--reinstall-task`（D22 本来就要求）+ `--takeover` / `--release`。B（等 Phase 3）会让整个 Phase 2 的写入链路一次都没跑过就进入下一阶段。见 `design-spec.md` 6.11.3 |
 | **D33** | **Management 层单元测试范围** | **✅ A — 本期做**：假 `IStartupSource` 测 FR-1.4「单条失败不影响整次扫描」、假 `IAppConfigStore` 测 FR-3.1「任一步失败逆序回滚」（含手工测不出的失败路径）。真机写入链路由 D32 的 CLI + 注册表导出对比覆盖，两层互补 |
 | **D34** | **`DelayStartScheduler` 本期真机注册还是推 Phase 4** | **✅ A — 本期做并验证**：用 `schtasks /query /v /fo LIST` 只读核对三要素（登录触发 / 延迟 3s / `Highest`）**与身份是否为当前交互用户**（🔴 必须不是 SYSTEM —— SYSTEM 下 `%APPDATA%` 解析到 `systemprofile`，配置读不到且**不报任何错**）。验证不需要调度端能跑 |
+| **D35** | **管理端 DI 容器选型** | **✅ A — `Microsoft.Extensions.DependencyInjection`**。约 20 个服务要装配，生命周期（`ConfigStore` 单例 / Scanner 复用 / Dialog 瞬态）必须显式；手写组合根会让 ViewModel 只能静态取服务（依赖藏进方法体，漏注册是运行时空引用） |
+| **D36** | **导出/导入与预设延时值是否提前到 Phase 3** | **✅ A — 都不做**。两者归宿都是 Phase 5 设置页（FR-9.10「数据分组」本就与 FR-12.2 是同一套组件）；本期延时编辑器只用 `AppConfig` 已有默认预设值 `10/30/60/120`，**不影响任何交互** |
+| **D37** | **时间轴视图是否保留**（延时启动页双视图 + 总览页时间轴卡片） | **✅ B（用户改判，两处都砍）—— ⚠️ 这是需求变更**。同步改了 `design-spec.md` 页面 1/3 与 D7 措辞、`requirements.md` FR-10.4、`architecture.md` 5.1（删 `TimelineView.xaml`）。砍掉的是「双视图 + 搜索态同步过滤 + 上下调序与过滤态互斥」那套最易长 bug 的分支；「依赖关系用更大延时」语义改由常驻提示条承担 |
 
-> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26** / **6.9 D27** / **6.10 D28** / **6.11 D30–D34**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R1–**R12**、`build-and-test.md` 第一、二、四、七、九节。
+> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26** / **6.9 D27** / **6.10 D28** / **6.11 D30–D34** / **6.12 D35–D37**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R1–**R13**、`build-and-test.md` 第一、二、四、七、九节。
 >
 > ✅ **Phase 0（2026-09-19）出口条件全部达成**：骨架生成完毕、Release 构建 **0 警告 0 错误**、冒烟测试 2/2 通过、
 > manifest 三个标记确认嵌入 exe、**R3 / R8 / R9 三项人工验证由用户在 VS 之外实测通过**、模板残留清理完毕（D25）。
@@ -102,10 +105,18 @@
 >
 > ✅ **Phase 1（2026-09-19）已完成**：`Core` 层 **38 个源文件**落地（15 模型 / 7 抽象 / 10 服务 / 2 启动结果 / 3 序列化 / 1 日志），
 > **`IsAotCompatible=true` 全程守门且构建 0 警告 0 错误** —— 证明 Core 无 IL2026 / IL3050 违规，调度端的 AOT 边界成立。
-> **单元测试 128 个全绿**（10 个测试文件：7 个测试类 + 3 个假件；`dotnet run --project tests/DelayStart.Core.Tests -c Release`，退出码 0，耗时 0.24s）。
-> 执行记录见 `architecture.md` 10.2。**下一步：Phase 2（Management 层：4 个 Source 的扫描 + 软禁用 + 恢复）。**
+> **单元测试 128 个全绿**。执行记录见 `architecture.md` 10.2。
 >
-> ⚠️ **一个已知非阻塞项**：D26（测试命令，用 `dotnet run`）。R2（`TaskScheduler` 命名冲突）仍推迟到 Phase 2 引入该包时验证。
+> ✅ **Phase 2（2026-09-19）已完成并提交（8 commit / 52 文件）**：`Management` 层 20 个源文件（4 个 Source 的 7 个实例位置 + `StartupApprovedStore` +
+> `ScanService` / `TakeoverService` / `TaskRegistrationService`）+ `Core` 的 `FailureStreakService` + 管理端 headless CLI。
+> **出口条件（9.3 安全验收）已按 D34 真机闭环**：白名单四项走完 `--takeover` ×4 → `--restore-all`，
+> 三个 `Run` 键全量快照**逐行 IDENTICAL**；`DelayStartScheduler` 注册为 `OnLogon PT3S` / `Highest` / **`Interactive`**。
+> **单元测试 208 个全绿**，全解决方案 0 警告 0 错误。执行记录见 `architecture.md` 10.3。
+> ⚠️ 期间跑出并修复两条缺陷（`InvariantGlobalization` 导致注册必崩 → **R13**；`OriginalState.WasEnabled` 实现漏读导致恢复动作抹掉用户原有禁用状态）。
+>
+> ▶️ **下一步：Phase 3（管理端 UI 骨架：导航 + 自启动项页 + 延时启动页，跑通单链路）**，含 R10（提权窗口拖放）与 R7（高 DPI）两项实测。
+>
+> ⚠️ **一个已知非阻塞项**：D26（测试命令，用 `dotnet run`；`dotnet test` 在本项目跑不了）。
 
 
 ---

@@ -331,3 +331,71 @@ Phase 0 发现 `UseWindowsForms=true` + `PublishAot=true` 是**官方不支持**
 | Phase 0 执行记录（终版） | `architecture.md` 10.1 |
 | **关联编号** | `D25`、`D26`、`R9`、`R3`、`R8`、`R2`（延后） |
 
+---
+
+## R7（2026-09-19）：Phase 1 — `Core` 层落地 + D27 / D28 / D29
+
+### 交付与验证
+
+| 项 | 结果 |
+|---|---|
+| 交付物 | `src/DelayStart.Core/` **38 个源文件**（15 模型 / 7 抽象 / 10 服务 / 2 启动结果 / 3 序列化 / 1 日志） |
+| 构建（Core） | ✅ `IsAotCompatible=true` + `TreatWarningsAsErrors=true` 下 **0 警告 0 错误** → **R5 守门生效，Core 无 IL2026 / IL3050 违规** |
+| 构建（全解决方案） | ✅ `dotnet build DelayStart.slnx -c Release` → **0 警告 0 错误**（5 个项目，含 WinUI 3 自包含的管理端） |
+| 测试 | ✅ **128 个用例全绿**（`Total: 128, Errors: 0, Failed: 0, Skipped: 0`），退出码 0，耗时 **0.238s** |
+| **Phase 1 出口条件** | ✅ **达成**。可以进入 Phase 2（`Management` 层） |
+
+### D27（✅ A）：P/Invoke 启动器推到 Phase 4
+
+原计划 Phase 1 连 `ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 一起从 demo 移植。**决定不写**，理由三条：
+
+1. **测不了就没有绿灯** —— 提权继承 / `WTSQueryUserToken` 降权 / 降权失败回退这三条路径的正确性**只在真实登录会话里成立**。Phase 1 的调度端还不存在，写了只能靠"编译通过"自证。
+2. **会污染出口条件** —— Phase 1 的出口是"单元测试全绿"，而 P/Invoke 按 `coding-standards.md` 14.1 根本进不了单元测试。
+3. **接口留白就够** —— `IProcessLauncher`（抽象）+ `LaunchOutcome` / `LaunchEvaluation`（结果模型）+ `LaunchResultEvaluator`（判定逻辑）才是本期该交付的。
+
+### D28（✅ A）：UWP 激活弃 COM，改 `shell:AppsFolder`
+
+**Phase 1 查证**：demo 用 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown` 激活 UWP。**NativeAOT 没有 built-in COM**，这条路在 AOT 产物里**必然抛 `PlatformNotSupportedException`**（构建期表现为 **IL3052**）。而 **D24 = B 已把调度端钉死在 AOT 上** —— 与 R11 同源，WinForms 不能 AOT 也是因为它依赖 built-in COM marshalling。
+
+改 `Process.Start("explorer.exe", @"shell:AppsFolder\<AUMID>")`：零 COM、零 P/Invoke。
+
+**代价必须写清**：**拿不到 PID** → 机制 7 的"1.5 秒后复查 `HasExited`"**对 UWP 不适用**，`LaunchResultEvaluator` 收到 `null` 快照时**直接判成功**。**登记新风险 R12**（AUMID 的取得方式 + `shell:AppsFolder` 在提权进程中能否激活，后者 Phase 4 实测）。
+
+### D29（✅ 全部执行）：Phase 1 期间的文档修订 F1–F4
+
+| 项 | 内容 |
+|---|---|
+| **F1** | `requirements.md` 需求追踪矩阵「实现层」列 **6 行路径纠正**：FR-1 / FR-2 / FR-3 / FR-7 / FR-10 / FR-11 原先把 `Management/` 下的类误写成 `Core/`。判据是 AOT 兼容性而非领域，写进 `Core/` 会立刻被 `IsAotCompatible=true` 拦截 |
+| **F2** | `architecture.md` 2.1 目录树按实际代码重写（补 13 个新文件）+ 2.2 补 `PathService` / `AtomicFileWriter` / `SystemClock` 三行 |
+| **F3** | 删除 Core 的 `Interop/Shell32.cs` —— **误植**。Core 从不直接调 Shell32（`Process.Start` 由 BCL 封装），Shell 相关 P/Invoke 全属 Management 层 |
+| **F4** | `architecture.md` 第九节登记 **R12** |
+
+### 顺带修掉的两处规范自相矛盾
+
+| 冲突 | 处置 |
+|---|---|
+| `CA1707`（成员名禁下划线） vs `coding-standards.md` 14.2（**强制**测试方法名 `被测方法_场景_期望结果`） | 在 `tests/DelayStart.Core.Tests/.editorconfig` **就近关闭 CA1707**。规范是权威，分析器让位；生产代码的检查强度不受影响 |
+| `.editorconfig` 的 `insert_final_newline=false` vs 同文件第五节"每文件恰好一个末尾换行" | 改 `false` → `true`。原值是 VS 生成模板的默认值，会让格式化器**主动删掉**末尾换行 |
+
+> 另外两个设计改进（非规范问题，顺手做对）：`ILogSink` 改为 `Write(LogLevel, …)` + 扩展方法
+> —— 规避 **CA1716**（`Error` 是 VB 保留字），且**新增日志级别不需要动接口**；
+> `StartupOperationException` 构造**强制带 `EntryId`** —— 把 R6 的"失败必须定位到具体条目"从约定升级为**编译期约束**。
+
+### 落点索引
+
+| 内容 | 章节 |
+|---|---|
+| D27 完整论证 | `design-spec.md` 6.9 |
+| D28 完整论证 | `design-spec.md` 6.10 |
+| R12 登记与 R11 同源说明 | `architecture.md` 第九节 |
+| Phase 1 执行记录 | `architecture.md` 10.2 |
+| 决策点状态（全局） | `README.md`「决策点状态」 |
+| 测试规范命令（D26） | `build-and-test.md` 4.2 |
+| **关联编号** | `D27`、`D28`、`D29`、`R5`（守门生效）、`R12`（新增）、`D26`（仍待决策）、`R2`（延后到 Phase 2） |
+
+---
+
+> **本文件的作用域到此为止。** 按开头的声明，编码开始后不再逐条维护实现变更 ——
+> R1–R7 覆盖了"文档建立 → 决策冻结 → Phase 1"这一段。
+> 后续只在**新增决策点**时追加一条"落点索引"（README 维护规则第 3 条要求），实现层面的变更由 `git log` 承载。
+

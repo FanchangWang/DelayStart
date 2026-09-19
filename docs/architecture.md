@@ -185,55 +185,81 @@ DelayStart.Core/
 ├─ Abstractions/
 │  ├─ IAppConfigStore.cs           # 配置读写
 │  ├─ IRunStateStore.cs            # current-run.json / runs/ 读写
-│  ├─ IProcessLauncher.cs          # 进程启动抽象（便于测试）
+│  ├─ IProcessLauncher.cs          # 进程启动抽象（便于测试）⏳ 实现体见 Launch/ 注
 │  ├─ IClock.cs                    # 时间抽象（便于测试时序）
-│  └─ ILogSink.cs
+│  ├─ ILogSink.cs                  # ★ 只有 Write(LogLevel, …) 两个方法，见下方注
+│  ├─ LogLevel.cs                  # enum：Info / Warn / Error
+│  └─ LogSinkExtensions.cs         # Info() / Warn() / Error() 便捷扩展方法
 ├─ Models/
 │  ├─ StartupSource.cs             # enum
 │  ├─ StartupScope.cs              # enum
 │  ├─ StartupEntry.cs              # 扫描结果（内存模型）
 │  ├─ DelayedItem.cs               # 延时条目（持久化）
 │  ├─ OriginalState.cs
-│  ├─ AppConfig.cs
+│  ├─ AppConfig.cs                 # 含 CurrentVersion = 2
 │  ├─ Settings.cs
 │  ├─ RunRecord.cs
 │  ├─ RunItemResult.cs
-│  └─ RunItemState.cs              # enum
+│  ├─ RunItemState.cs              # enum
+│  ├─ ProcessSnapshot.cs           # record struct(HasExited, ExitCode)，机制 7 用
+│  ├─ ParsedCommandLine.cs         # record struct(Path, Arguments)
+│  ├─ NotifyMode.cs                # enum：FailuresOnly / Always / Never（D15）
+│  ├─ StartupFailureReason.cs      # enum，异常场景矩阵的机器可读镜像
+│  └─ StartupOperationException.cs # ★ 构造参数强制带 EntryId，见下方注
 ├─ Services/
+│  ├─ PathService.cs               # ★ D23 路径布局 + 环境变量覆盖（新增）
+│  ├─ AtomicFileWriter.cs          # ★ 机制 8 的唯一实现（新增）
 │  ├─ ConfigService.cs             # 加载/校验/迁移/原子保存
 │  ├─ RunStateService.cs           # 状态与归档读写
 │  ├─ CommandLineService.cs        # 命令行解析 + 参数拼接（★ 纯逻辑，重点测试对象）
 │  ├─ DelayCalculator.cs           # 时序计算（★ 纯逻辑，重点测试对象）
 │  ├─ ItemKeyBuilder.cs            # 稳定主键生成（★ 纯逻辑）
 │  ├─ StartupSortComparer.cs       # (delay, sortOrder) 排序（★ 纯逻辑）
-│  └─ LaunchResultEvaluator.cs     # 启动成功/失败判定（★ 纯逻辑）
+│  ├─ LaunchResultEvaluator.cs     # 启动成功/失败判定（★ 纯逻辑）
+│  └─ SystemClock.cs               # IClock 的生产实现
 ├─ Launch/
-│  ├─ ProcessLauncher.cs           # 提权/降权启动
-│  ├─ TokenHelper.cs               # WTSQueryUserToken / CreateProcessAsUser
-│  └─ LaunchOutcome.cs
+│  ├─ LaunchOutcome.cs             # 启动动作的原始结果
+│  ├─ LaunchEvaluation.cs          # record struct(State, Reason, Message)
+│  ├─ ProcessLauncher.cs           # ⏳ Phase 4（D27=A）
+│  └─ TokenHelper.cs               # ⏳ Phase 4（D27=A）
 ├─ Logging/
 │  └─ FileLogger.cs                # 滚动日志
-├─ Interop/
+├─ Interop/                        # ⏳ Phase 4（D27=A），Phase 1 不创建该目录
 │  ├─ Kernel32.cs
 │  ├─ AdvApi32.cs
 │  ├─ WtsApi32.cs
-│  ├─ UserEnv.cs
-│  └─ Shell32.cs                   # 仅 Process.Start 相关的必要部分
+│  └─ UserEnv.cs
 └─ Serialization/
-   └─ JsonContext.cs               # JsonSerializerContext 源生成
+   ├─ JsonContext.cs               # JsonSerializerContext 源生成
+   ├─ LegacyConfigV1.cs            # v1 迁移 DTO（internal，只在迁移时用）
+   └─ LegacyItemV1.cs              # v1 迁移 DTO（internal）
 ```
+
+> **注 1（F3，Phase 1 修订）**：Core 的 `Interop/` **不再包含 `Shell32.cs`**。原表中那一项是误植 ——
+> Core 从不直接调 Shell32（`Process.Start` 由 BCL 封装，`ShellExecute` 走 `ProcessStartInfo.UseShellExecute`），
+> Shell 相关 P/Invoke 全部属于 Management 层（见 3.1）。
+>
+> **注 2（`ILogSink` 的形状）**：接口只有 `Write(LogLevel, string)` 与 `Write(LogLevel, Exception, string)` 两个方法，
+> `Info/Warn/Error` 由 `LogSinkExtensions` 提供。原因：把 `Error` 直接做成接口成员会触发 **CA1716**
+> （`Error` 是 VB 保留字），而抑制分析器不如改设计 —— 现在的形状**新增日志级别不需要动接口**。
+>
+> **注 3（`StartupOperationException`）**：构造签名强制要求 `EntryId`，让"失败必须定位到具体条目"
+> 从约定变成**编译期约束**（R6 的治理手段）。
 
 ### 2.2 各模块职责
 
 | 模块 | 职责 | AOT 备注 |
 |---|---|---|
+| `PathService` | 解析 D23 的四个根（安装根 / 配置根 / 本地根 / 状态与归档子目录），支持 `DELAYSTART_LOCAL_DIR` / `DELAYSTART_CONFIG_DIR` 覆盖（测试与绿色版用） | 纯 `Environment` + 字符串，无 IO 副作用。`WritableRoots` **刻意不含安装根** —— 安装目录只读是 D23 的硬约束 |
+| `AtomicFileWriter` | 机制 8 的唯一实现：`<name>.tmp` → `File.Replace` / `File.Move` 回退 | 纯 BCL |
 | `ConfigService` | 加载 `config.json` → 校验 → 迁移（v1→v2）→ 原子保存 | 用 `JsonContext` 源生成 |
 | `RunStateService` | 读写 `state/current-run.json`、归档 `runs/<runId>.json`、清理超过 30 份的旧记录 | 同上 |
 | `CommandLineService` | ① 解析注册表值 / 快捷方式参数为 `(Path, Args)`；② 拼接最终命令行 | 纯字符串逻辑，无依赖 |
 | `DelayCalculator` | `remaining = DelaySeconds - elapsed`；排序；计算调度器驻留时长 | 纯计算，注入 `IClock` |
 | `ItemKeyBuilder` | 生成稳定主键 `{source}:{scope}:{sourceKey}` | 纯计算 |
 | `LaunchResultEvaluator` | 依据"创建结果 + 1.5 秒后 `HasExited` + 退出码"判定成功/失败 | 纯逻辑，可注入假进程探针 |
-| `ProcessLauncher` | 管理员条目继承令牌启动；普通条目降权启动；降权失败回退 | P/Invoke，`LibraryImport` |
+| `SystemClock` | `IClock` 的生产实现 | `DateTimeOffset.Now`，测试注入 `FakeClock` 替代 |
+| `ProcessLauncher` | 管理员条目继承令牌启动；普通条目降权启动；降权失败回退 | P/Invoke，`LibraryImport`。**Phase 4**（D27=A） |
 | `FileLogger` | 按大小滚动的文本日志 | 无第三方日志库（省体积） |
 
 ### 2.3 关键机制（编码时必须严格照做）
@@ -686,7 +712,7 @@ DelayStart.Scheduler/
 | # | 风险 | 影响 | 验证方式 | 时机 |
 |---|---|---|---|---|
 | **R1** | WinForms 无边框窗口在 NativeAOT 下能否正常显示 + 失焦即关 | 决定调度端面板的实现方式 | Phase 4 第一件事：写最小 demo 发布 AOT 实测 | Phase 4 前 |
-| **R2** | `Microsoft.Win32.TaskScheduler` 在 WinUI 3 下与 `System.Threading.Tasks.Task` 命名冲突 | 编译错误 | 用 `using TaskSchedulerTask = Microsoft.Win32.TaskScheduler.Task;` alias | Phase 1 |
+| **R2** | `Microsoft.Win32.TaskScheduler` 在 WinUI 3 下与 `System.Threading.Tasks.Task` 命名冲突 | 编译错误 | 用 `using TaskSchedulerTask = Microsoft.Win32.TaskScheduler.Task;` alias | Phase 2 |
 | **R3** | WinUI 3 unpackaged 下 `app.manifest` 与 `Package.appxmanifest` 的选择 | 提权与 DPI 声明是否生效 | 建项目时确认；unpackaged 用 `app.manifest` | Phase 1 |
 | **R4** | `IShellItemImageFactory` 取到的 `HBITMAP` 转 WinUI `ImageSource` 的生命周期 | 图标不显示或 GDI 句柄泄漏 | 小规模实测 + `DeleteObject` | Phase 3 |
 | **R5** | Core 层引入 AOT 不兼容 API | 调度端发布失败 | `IsAotCompatible=true` 让编译器在构建期报错 | 持续 |
@@ -696,6 +722,7 @@ DelayStart.Scheduler/
 | **R9** | 🔴 **`WindowsAppSDKSelfContained=true` 时 `requireAdministrator` 可能被忽略** | **管理端不弹 UAC 也不提权 → D20 的整个权限模型失效** | ✅ **已通过（2026-09-19 实测）**：unpackaged + 自包含 + manifest 提权，Release 下**在 VS 之外双击 exe，UAC 正常弹出** → manifest **未被忽略**。`WindowsAppSDKSelfContained` 保持 `true`，三条降级路径**均不需启用**（留档备用，见下方）。⚠️ 残留一项：`WindowsPrincipal.IsInRole(Administrator)` 的**代码级**确认待 Phase 1 有代码后补测 | **Phase 0 ✅** |
 | **R10** | 🟡 提权窗口接收不到资源管理器的拖放（UIPI） | 「手动添加」的拖放区失效 | 主路径 `[浏览…]` 按钮（`FileOpenPicker` + `InitializeWithWindow`）必须 100% 可用，**不依赖拖放**；拖放作为增强：`ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES/MSGFLT_ALLOW)` + `DragAcceptFiles` + 子类化窗口处理 `WM_DROPFILES`。**不通则拖放区降级为纯按钮，不接受"等待修复"** | Phase 3 |
 | **R11** | 🔴 **WinForms + NativeAOT 官方未支持**：SDK 主动拦截（`NETSDK1175`），放行只能靠**内部属性** `_SuppressWinFormsTrimError` | ~~调度端可能发布出"能编译但运行时崩溃"的 exe；D1 的整个技术路线受威胁~~ → **已由 D24 = B 从根源消解** | ✅ **已解决（2026-09-19 D24 批复 B）**：调度端弃用 WinForms，改**纯 Win32 + AOT**，灰色地带不复存在。Phase 0 复验——去掉逃逸属性后**仍 0 警告 0 错误**。**R11 的约束条款继续生效且更强**（禁 `.resx` 反射式资源加载 / `DataGridView` / `RichTextBox` / 动态 COM / `System.Reflection`，IL2xxx 逐个消掉）。剩下"AOT 产物真机能否运行"由 **R1 在 Phase 4** 覆盖托盘 / 面板 / 失焦即关三条路径 | **Phase 0（已结）→ Phase 4（R1 覆盖运行侧）** |
+| **R12** | 🔴 **NativeAOT 无 built-in COM**：UWP 项的 COM 激活（`IApplicationActivationManager`）在 demo 里走 `Marshal.GetObjectForIUnknown` + `[ComImport]`，AOT 下**运行时必抛 `PlatformNotSupportedException`**；同时 UWP 激活**拿不到 PID**，机制 7 的"1.5 秒后复查"对它无从执行 | FR-5.9「UWP 项的延时启动」整条链路失效 —— 而 D4 已批复 UWP 延时**要做** | ✅ **已由 D28 = A 从根源消解（2026-09-19）**：UWP 激活改用 `explorer.exe shell:AppsFolder\<AUMID>` —— 纯 `Process.Start` 拉起 explorer，**完全不碰 COM**，AOT 下可用。派生两条硬约定：① `LaunchResultEvaluator.Evaluate` 收到 **`null` 快照（无 PID）时判成功**，不套用退出码规则；② UWP 是**唯一**"延时启动 + 绕过系统启动管理"的来源，UI 文案必须写明（D4） | **Phase 1（Phase 1 已消解，Phase 4 只需实测一次）** |
 
 #### R9 实测进度（Phase 0，2026-09-19）
 
@@ -799,7 +826,7 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | Phase | 内容 | 出口条件 |
 |---|---|---|
 | **0** | 环境与骨架：先按 `build-and-test.md` 1.2 装齐工具链前置（VS 组件 + WinUI 模板包）；`dotnet new` 生成 4 个项目 + 测试项目（2.1）、`Directory.Build.props`、CPM、`.editorconfig`；**并验证 R9**（自包含 + manifest 提权） | `dotnet build` 全绿；R2 / R3 / R8 已确认；**R9 有明确结论**（决定 7.1 的自包含取值） |
-| **1** | `Core` 层：模型、`ConfigService`、`DelayCalculator`、`ItemKeyBuilder`、`CommandLineService`、`LaunchResultEvaluator` + 单元测试 | 单元测试全绿 |
+| **1** | `Core` 层：模型、`ConfigService`、`DelayCalculator`、`ItemKeyBuilder`、`CommandLineService`、`LaunchResultEvaluator` + 单元测试。**D27=A：`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 不在本期** | ✅ 单元测试全绿（128 个） |
 | **2** | `Management` 层：4 个 Source 的扫描 + 软禁用 + 恢复、`TakeoverService`、`TaskRegistrationService` | 注册表导出对比验证"零数据损坏" |
 | **3** | 管理端骨架：导航 + 自启动项页 + 延时启动页，跑通"扫描 → 接管 → 移除"单链路；验证 R10（提权下的文件选择/拖放） | 端到端手工验证通过；「手动添加」的 `[浏览…]` 路径可用 |
 | **4** | 调度端：先验 R1（+ R11 的运行侧），再做引擎 + 托盘 + 通知 + 状态文件。**D24 已批复 = B（纯 Win32），UI 归零重写** | 重启实测延时准确 |
@@ -823,5 +850,23 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | R11（WinForms + AOT） | ✅ **已由 D24 = B 从根源消解**：调度端改纯 Win32 + AOT，不再引用任何 UI 框架；**移除逃逸属性后构建仍 0 警告 0 错误**。运行侧由 R1 在 Phase 4 覆盖 |
 | 9.0 最后一项（VS 组件是否硬依赖） | ✅ **结论：体验项，不是硬依赖**。依据：`XamlCompiler.exe` 与全部 `Microsoft.UI.Xaml.Markup.Compiler.*.targets` 均由 NuGet 包 `Microsoft.WindowsAppSDK.WinUI/1.8.260224000` 的 `buildTransitive/` 提供（本机缓存实测），命令行构建不经过 VS 组件。**唯一残留的混淆因子是该组件当前已安装、无法做隔离对照** |
 | **Phase 0 出口条件** | ✅ **全部达成（2026-09-19）**：构建 0 警告 0 错误 + R3 / R8 / R9 三项人工验证通过 + D24 / D25 落地。R2 按计划延后到 Phase 2。**可以进入 Phase 1** |
-| 9.0 最后一项（VS 组件是否硬依赖） | ✅ **结论：体验项，不是硬依赖**。依据：`XamlCompiler.exe` 与全部 `Microsoft.UI.Xaml.Markup.Compiler.*.targets` 均由 NuGet 包 `Microsoft.WindowsAppSDK.WinUI/1.8.260224000` 的 `buildTransitive/` 提供（本机缓存实测），命令行构建不经过 VS 组件。**唯一残留的混淆因子是该组件当前已安装、无法做隔离对照** |
+
+### 10.2 Phase 1 执行记录（2026-09-19）
+
+**范围**：`architecture.md` 二（Core 层设计）+ `coding-standards.md` 14.1。**不含** P/Invoke（D27=A 推到 Phase 4）。
+
+| 项 | 结论 |
+|---|---|
+| 交付物 | ✅ `src/DelayStart.Core/` **38 个源文件**：`Models/` 15（含 4 个纯 enum 与 2 个 `record struct`）、`Abstractions/` 7、`Services/` 10、`Launch/` 2、`Serialization/` 3、`Logging/` 1 |
+| 新增（原 2.1 表未列） | ✅ `PathService`、`AtomicFileWriter`、`SystemClock`、`LogLevel`、`LogSinkExtensions`、`ProcessSnapshot`、`ParsedCommandLine`、`NotifyMode`、`StartupFailureReason`、`StartupOperationException`、`LaunchEvaluation`、`LegacyConfigV1`、`LegacyItemV1` —— 已回写 2.1 / 2.2（**D29 = F2**） |
+| 构建（Core） | ✅ `IsAotCompatible=true` + `TreatWarningsAsErrors=true` 下 **0 警告 0 错误** → **证明 Core 无 IL2026 / IL3050 违规，AOT 边界成立**（R5 守门生效） |
+| 构建（全解决方案） | ✅ `dotnet build DelayStart.slnx -c Release` → **0 警告 0 错误**（5 个项目，含 WinUI 3 自包含的管理端） |
+| 测试 | ✅ **128 个用例全绿**，`Total: 128, Errors: 0, Failed: 0, Skipped: 0`，退出码 0，**耗时 0.238s**。命令同 D26：`dotnet run --project tests/DelayStart.Core.Tests -c Release` |
+| 测试结构 | ✅ 10 个文件 = 7 个测试类（`DelayCalculator` 15 / `ItemKeyBuilder` 15 / `CommandLineService` ~22 / `LaunchResultEvaluator` 10 / `StartupSortComparer` 9 / `PathService` 14 / `ConfigService` 24）+ 3 个假件（`FakeLogSink` / `FakeClock` / `TempDirectory`） |
+| 冒烟测试清理 | ✅ 删除 `ScaffoldSmokeTests.cs`（Phase 0 遗留，`build-and-test.md` 9.0 注明"业务用例到位后再删"） |
+| **新增 R12（D28 派生）** | 🔴 **NativeAOT 无 built-in COM** → demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown` 激活 UWP **运行时必抛 `PlatformNotSupportedException`**。**已由 D28 = A 消解**（改 `explorer.exe shell:AppsFolder\<AUMID>`）。Phase 4 真机实测 `shell:AppsFolder` 在**提权进程**中是否仍可激活（UIPI） |
+| 新增约定（写进 2.1 注） | ✅ ① `ILogSink` 只有 `Write(LogLevel, …)`，`Info/Warn/Error` 走扩展方法（规避 **CA1716**，且新增级别不动接口）；② `StartupOperationException` 构造**强制带 `EntryId`** —— 把"失败必须定位到具体条目"（R6）从约定升级为编译期约束 |
+| 规范冲突处置 | ✅ `CA1707`（成员名禁下划线）与 `coding-standards.md` 14.2 强制的测试命名 `被测方法_场景_期望结果` 直接冲突 → 在 `tests/DelayStart.Core.Tests/.editorconfig` **就近关闭 CA1707**，生产代码的检查强度不受影响。另修 `.editorconfig` 的 `insert_final_newline=false`（与 14.2 所在的第五节"每文件恰好一个末尾换行"矛盾） |
+| 文档修订（D29） | ✅ **F1** `requirements.md` 追踪矩阵实现层 6 行路径纠正（`Core/` → `Management/`）；**F2** 2.1 / 2.2 补 `PathService` 等；**F3** 删 Core 的 `Interop/Shell32.cs`（误植）；**F4** 登记 R12 |
+| **Phase 1 出口条件** | ✅ **达成**：单元测试全绿（128/128）+ AOT 守门 0 警告。**可以进入 Phase 2** |
 

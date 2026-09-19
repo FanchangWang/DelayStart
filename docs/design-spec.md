@@ -468,7 +468,7 @@
 ## 六、决策点与批复结果
 
 > **状态图例**：`✅` 已批复并锁定 · `⏳` 尚未批复（列出建议值，**未批复前不进入编码**）
-> **D1–D25 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。D26 待决策（测试命令走向），不阻塞 Phase 1。**
+> **D1–D25 已于 2026-09-19 全部批复完毕，决策冻结。D27 / D28 / D29 于 Phase 1 期间批复（均为 Phase 1 暴露的分层与 AOT 边界问题）。仅 D26 待决策（测试命令走向），不阻塞 Phase 1。**
 >
 > - D1–D3、D14–D19：首轮批复
 > - D4–D13：2026-09-19 按建议值批量批复
@@ -479,6 +479,9 @@
 > - D24：**调度端 UI 改纯 Win32**（Phase 0 发现 WinForms + NativeAOT 是官方不支持的组合，**重开 D1**；理由见 6.6）
 > - D25：**Phase 0 模板页全部删除**，导航壳刻意留空，Phase 3 从零建 6 个页面（理由见 6.7）
 > - D26：**`dotnet test` 在本项目不可用**，测试命令改用 `dotnet run`；是否补 VSTest 适配器待定（理由见 6.8）
+> - D27：**Phase 1 只做 Core 层接口与纯逻辑**，P/Invoke 启动器推到 Phase 4（理由见 6.9）
+> - D28：**UWP 激活改用 `explorer.exe shell:AppsFolder\<AUMID>`**，弃用 COM（理由见 6.10，新增 R12）
+> - D29：**Phase 1 期间的 4 项文档修订**（F1–F4），不改变任何行为约定
 
 | 编号 | 决策 | 选项 | 批复 | 优先级 |
 |---|---|---|---|---|
@@ -508,6 +511,9 @@
 | **D24** | 调度端 UI 技术选型（Phase 0 重开 D1） | A. 维持 **WinForms + AOT**（靠内部属性放行，**官方不支持**）<br>B. 改 **纯 Win32**（`Shell_NotifyIcon` + 自绘弹窗，**官方完全支持**）<br>C. 改 **WinUI 3 + AOT**（官方支持，但冷启动 0.5–0.7s 超 NFR-1.2，且 WinUI 3 **无托盘 API**）<br>D. **放弃 AOT**（冷启动 1–2s + 需装 Desktop Runtime） | **✅ B** —— 用户批复。Phase 0 已按 B 落地骨架：调度端 csproj 去掉 `UseWindowsForms` 与 `_SuppressWinFormsTrimError`，`Program.cs` 改为纯 Win32 入口。详见 6.6 | 🔴 |
 | **D25** | Phase 0 模板残留页（`Pages/` 的 Home / About / Settings） | A. **现在就删**，导航壳留空，Phase 3 从零建 6 个页面<br>B. 留到 Phase 3 整体替换 | **✅ A** —— 模板页与 `architecture.md` 1.4 的页集不符，留着只是 6 个死文件 + 假导航。已执行。详见 6.7 | 🟢 |
 | **D26** | 测试命令：`dotnet test` 集成有缺陷，怎么走 | A. **只改命令**（用 `dotnet run`，零改动）<br>B. 补 `xunit.runner.visualstudio` + 退回 VSTest 路径（VS 测试资源管理器可用）<br>C. 换掉 `xunit.v3.mtp-v2` 改用 `xunit.v3` | ⏳ **待决策** —— AI 建议 **A（已生效）**。`xunit.v3.mtp-v2` 4.0.1 + SDK 10.0.401 下 `dotnet test` 报零测试（发现本身正常）；B/C 属优化，**不阻塞 Phase 1**。详见 6.8 | 🟡 |
+| **D27** | Phase 1（Core 层）是否连同 P/Invoke 启动器一起写 | A. **本期只做接口 + 纯逻辑**，`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 推到 Phase 4<br>B. 本期连 P/Invoke 一起写完（照 demo 移植） | **✅ A** —— 用户批复。P/Invoke 启动器的正确性只能在**真实登录会话**里验证（见 6.9），Phase 1 写了只能靠编译通过自证。派生出 `IProcessLauncher` 接口留白 + 已落地的判定逻辑 | 🔴 |
+| **D28** | UWP 项怎么激活（AOT 约束下） | A. **`explorer.exe shell:AppsFolder\<AUMID>`**（纯 `Process.Start`，零 COM）<br>B. 维持 demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown`<br>C. 砍掉 UWP 延时（回退 D4 的 A） | **✅ A** —— 用户批复。B 在 NativeAOT 下运行时必抛 `PlatformNotSupportedException`（R12），与 D24=B 的 AOT 前提直接冲突；C 推翻 D4。代价：无 PID → 机制 7 不适用，`null` 快照判成功。详见 6.10 | 🔴 |
+| **D29** | Phase 1 期间的文档修订（F1–F4） | F1 `requirements.md` 追踪矩阵实现层 6 行路径<br>F2 `architecture.md` 2.1 / 2.2 补 `PathService` 等<br>F3 删 Core 的 `Interop/Shell32.cs`<br>F4 登记 R12 | **✅ 全部执行** —— 均为一句话级修正，不改变行为约定，故并入 Phase 1。详见 `changelog.md` 第七轮 | 🟢 |
 
 > **D14–D19 归属调度端**，完整论证、技术硬约束（AOT / elevated 通知限制）、通知文案矩阵、跨进程状态文件设计见独立文档 **`docs/scheduler-design.md`**。
 > **D20 / D21 / D22 / D23 / D24 的完整论证见下方 6.2 / 6.3 / 6.4 / 6.5 / 6.6**，工程落地见 `architecture.md` 1.4 / 1.5 与 `build-and-test.md` 第一、二、七节。
@@ -854,6 +860,58 @@ error NETSDK1175: 启用剪裁时，不支持或不推荐使用 Windows 窗体�
 
 **⚠️ 顺带记一笔对 VS 工作流的影响**：目前**在 VS 的测试资源管理器里看不到、也点不动这些测试**
 （它走 VSTest 适配器，本项目没引用；而 MTP 路径又不通）。要用 VS 跑测试就得选 B。
+
+---
+
+### 6.9 ✅ D27（Phase 1 批复）：P/Invoke 启动器推到 Phase 4
+
+**背景**：Phase 1 的交付物是 `Core` 层。而 `Core/Launch/ProcessLauncher.cs` + `TokenHelper.cs` + `Core/Interop/*`
+需要移植 demo 的 `WTSQueryUserToken` / `CreateEnvironmentBlock` / `CreateProcessAsUser` 四段 P/Invoke（约 300 行）。
+
+**为什么不本期写**
+
+| 理由 | 说明 |
+|---|---|
+| **测不了就没有绿灯** | 这三条路径的正确性**只在真实登录会话里成立**：① 管理员条目继承调度端令牌；② 普通条目 `WTSQueryUserToken` 降权；③ 降权失败回退 `Process.Start`。Phase 1 的调度端还不存在（Phase 4 才做），写了只能靠"编译通过 + 代码审阅"自证，**这是假绿灯**，比不写更危险 |
+| **会污染 Phase 1 的出口条件** | Phase 1 的出口是"单元测试全绿"。P/Invoke 无论怎么写都进不了单元测试（`coding-standards.md` 14.1 要求测试不碰真实注册表 / 文件 / 进程），留下来就是一个**永远无法勾选的待办** |
+| **接口留白就够了** | `IProcessLauncher` 是抽象，`LaunchResultEvaluator` / `LaunchOutcome` 是纯逻辑，**这三者才是 Phase 1 该交付的**——它们把"什么算启动成功"钉死（机制 7），Phase 4 只负责把真实进程塞进去 |
+
+**批复：A。** 本期交付 `IProcessLauncher`（接口）+ `LaunchOutcome` / `LaunchEvaluation`（结果模型）+ `LaunchResultEvaluator`（判定逻辑 + 假探针测试）。
+`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 在 `architecture.md` 2.1 中标 ⏳ Phase 4。
+
+> **代价与兜底**：Phase 4 开工第一件事仍是 R1（AOT 产物真机实测），届时 P/Invoke 与调度引擎一起落地并**在同一次真机重启中验证**，比 Phase 1 写完放到 Phase 4 再验更集中。
+
+### 6.10 ✅ D28（Phase 1 批复）：UWP 激活弃 COM，改 `shell:AppsFolder`
+
+**事实（Phase 1 查证，非推断）**
+
+demo 用 `CoCreateInstance(CLSID_ApplicationActivationManager)` + `[ComImport]` 接口 + `Marshal.GetObjectForIUnknown` 激活 UWP。
+在 NativeAOT 下这条路**必然失败**：NativeAOT **没有 built-in COM**，`Marshal.GetObjectForIUnknown` 会抛
+`PlatformNotSupportedException`（构建期表现为 **IL3052**，而 `Core.csproj` 已开 `IsAotCompatible=true`）。
+
+根因与 R11 同源 —— WinForms 之所以不能 AOT，也是因为它重度依赖 built-in COM marshalling（`architecture.md` R11）。
+而 **D24 = B 已把调度端钉死在 AOT 上**，所以 B 选项在架构层面不可能成立。
+
+**选项**
+
+| 选项 | 做法 | 判定 |
+|---|---|---|
+| **A. `shell:AppsFolder`**（✅ 批复） | `Process.Start("explorer.exe", $@"shell:AppsFolder\{aumid}")` | 零 COM、零 P/Invoke，AOT 下可用；一行代码 |
+| B. 维持 COM 激活 | demo 原样移植 | ❌ AOT 下运行时崩，与 D24=B 冲突 |
+| C. 砍掉 UWP 延时 | 回退 D4 的 A 选项 | ❌ 推翻已批复的 D4，且 UWP 项占自启动项相当比例 |
+
+**批复：A。**
+
+**A 的代价必须写清（这是取舍，不是零成本）**
+
+| 代价 | 处理 |
+|---|---|
+| **拿不到 PID** —— `explorer.exe` 立刻退出，它拉起的 UWP 应用进程无从对应 | 机制 7 的"1.5 秒后复查 `HasExited`"**对 UWP 不适用**。`LaunchResultEvaluator.Evaluate` 收到 `null` 快照时**直接判成功**（"已交给系统，无从复核"），不再套退出码规则 |
+| **绕不过系统启动管理** | 这是 D4 已批复并已写进 UI 文案的既定事实（`requirements.md` 4.2），本条不新增 |
+| **UWP 是唯一"延时 + 绕过启动管理"并存的来源** | UI 必须在 UWP 条目上单独标注，不能与注册表项共用一套文案 |
+
+> **登记新风险 R12**（`architecture.md` 第九节）：AUMID 的取得方式（`Get-StartApps` / `PackageManager`）、
+> 以及 `shell:AppsFolder` 在**提升权限进程**中是否仍能激活（UIPI 相关）—— 后者 Phase 4 真机实测覆盖。
 
 ---
 

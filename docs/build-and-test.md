@@ -606,7 +606,14 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 > 处置：新增 `tests/DelayStart.Core.Tests/ScaffoldSmokeTests.cs`，断言两件**运行期**的事
 > （`DelayStart.Core` / `DelayStart.Management` 能按程序集名解析、宿主确实跑在 .NET 10 上）——
 > 编译期通过挡不住这两条，属于真实的 Phase 0 出口项，不是凑数。
-> **Phase 1 注意**：冒烟文件不是真实用例的替代品，等业务用例到位后再删它。
+> **✅ Phase 1 已删**：128 个业务用例到位后，`ScaffoldSmokeTests.cs` 按本条约定删除（2026-09-19）。
+> 它挡的两件事已由真实用例间接覆盖 —— 测试项目能跑起来就说明程序集解析与宿主版本没问题。
+>
+> **坑③（Phase 1）`CA1707` 与测试命名规范冲突。** `TreatWarningsAsErrors=true` + `AnalysisLevel=latest-recommended`
+> 下，`CA1707`（成员名禁下划线）会把**每一个**测试方法名报成编译错误，而 14.2 **强制**要求
+> `被测方法_场景_期望结果` 格式。**规范是权威**：在 `tests/DelayStart.Core.Tests/.editorconfig` 就近
+> `dotnet_diagnostic.CA1707.severity = none`，**不要**改测试方法名，也**不要**全局关闭
+> （生产代码仍应受该规则约束）。新增测试项目时记得拷一份这个 `.editorconfig`。
 >
 > **坑② `dotnet test` 在本项目跑不了（已登记 D26）。** 退出码 5 还有第二个来源：
 > `xunit.v3.mtp-v2` 4.0.1 与 .NET SDK 10.0.401 的 `dotnet test` 集成有缺陷 ——

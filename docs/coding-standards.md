@@ -432,6 +432,19 @@ var result = DelayCalculator.Remaining(30, TimeSpan.FromSeconds(10));
 Assert.Equal(TimeSpan.FromSeconds(20), result);
 ```
 
+**【必须】** 测试项目根目录**放一份 `.editorconfig`**，内容为 `dotnet_diagnostic.CA1707.severity = none`：
+
+```ini
+# tests/DelayStart.Core.Tests/.editorconfig
+[*.cs]
+dotnet_diagnostic.CA1707.severity = none
+```
+
+原因：本仓库 `TreatWarningsAsErrors=true` + `AnalysisLevel=latest-recommended`，`CA1707`（成员名禁下划线）
+会把**每一个**测试方法名报成编译错误，而它与上面强制的 `被测方法_场景_期望结果` 格式**直接冲突**。
+**规范优先，分析器让位**，但**只在测试目录内关闭** —— 生产代码仍受 `CA1707` 约束（`src/` 下不允许下划线成员名），
+所以**不要**把这行加进根 `.editorconfig`。新增测试项目时记得同样放置一份。
+
 **【建议】** 边界值必须覆盖：`0`、负数、`int.MaxValue`、空字符串、`null`、单元素集合。
 
 ### 14.3 xUnit v3 特性约定

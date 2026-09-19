@@ -434,22 +434,27 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 
 | 需求域 | 设计文档 | 实现层 | 测试方式 |
 |---|---|---|---|
-| FR-1 扫描 | `design-spec.md` 页面 2 / 4 | `Core/StartupSources/*` | 单元测试（解析逻辑）+ 手工（真机扫描） |
-| FR-2 软禁用 | `api-analysis.md` 1.2 / 二 | `Core/StartupSources/*` | 手工（注册表导出对比）+ 单元测试（标记数据格式） |
-| FR-3 接管 | `design-spec.md` 三之二 | `Core/Services/TakeoverService` | 手工端到端 |
-| FR-4 延时配置 | `design-spec.md` 三之二 / 页面 3 | `Core/Services/ConfigService` | 单元测试（校验/排序/持久化） |
-| FR-5 调度执行 | `scheduler-design.md` 第七 / 八节 | `Scheduler/*` | 手工（真机重启）+ 日志校验 |
-| FR-6 通知追溯 | `scheduler-design.md` 第三 / 五 / 九节 | `Scheduler/*` + `App/Views/LogView` | 手工 |
-| FR-7 系统启动项 | `design-spec.md` 页面 4 | `Core/Services/ServiceQuery` | 手工 |
-| FR-8 运行日志 | `design-spec.md` 页面 5 | `App/Views/LogView` | 手工 |
-| FR-9 设置 | `design-spec.md` 页面 6 | `App/Views/SettingsView` | 手工 |
-| FR-10 模拟调度 | `design-spec.md` 页面 3 | `Core/Services/SimulationService` | 手工 |
-| FR-11 计划任务注册 | `api-analysis.md` 3.1 | `Core/Services/TaskRegistrationService` | 手工 |
-| FR-12 配置迁移 | `architecture.md` 第四节 | `Core/Services/ConfigService` | 单元测试 |
+| FR-1 扫描 | `design-spec.md` 页面 2 / 4 | `Management/Sources/*` + `Management/Services/ScanService` | 单元测试（解析逻辑）+ 手工（真机扫描） |
+| FR-2 软禁用 | `api-analysis.md` 1.2 / 二 | `Management/Sources/*` | 手工（注册表导出对比）+ 单元测试（标记数据格式） |
+| FR-3 接管 | `design-spec.md` 三之二 | `Management/Services/TakeoverService` + `Core/Services/ConfigService` | 手工端到端 |
+| FR-4 延时配置 | `design-spec.md` 三之二 / 页面 3 | `Core/Services/ConfigService` + `App/Dialogs/DelayEditorDialog.xaml` | 单元测试（校验/排序/持久化） |
+| FR-5 调度执行 | `scheduler-design.md` 第七 / 八节 | `Scheduler/*` + `Core/Services/DelayCalculator`、`LaunchResultEvaluator` | 手工（真机重启）+ 日志校验 |
+| FR-6 通知追溯 | `scheduler-design.md` 第三 / 五 / 九节 | `Scheduler/*` + `App/Views/LogPage.xaml` + `Core/Services/RunStateService` | 手工 |
+| FR-7 系统启动项 | `design-spec.md` 页面 4 | `Management/Services/ServiceQueryService`、`SystemStartupInspector` + `App/Views/SystemPage.xaml` | 手工 |
+| FR-8 运行日志 | `design-spec.md` 页面 5 | `App/Views/LogPage.xaml` + `Core/Services/RunStateService` | 手工 |
+| FR-9 设置 | `design-spec.md` 页面 6 | `App/Views/SettingsPage.xaml` + `Core/Services/ConfigService` | 手工 |
+| FR-10 模拟调度 | `design-spec.md` 页面 3 | `App/Services/SimulationService` + `App/Dialogs/SimulateDialog.xaml` | 手工 |
+| FR-11 计划任务注册 | `api-analysis.md` 3.1 | `Management/Services/TaskRegistrationService` | 手工 |
+| FR-12 配置迁移 | `architecture.md` 第四节 | `Core/Services/ConfigService` + `Core/Serialization/Legacy*V1.cs` | 单元测试 |
 | NFR-1 性能 | — | 全部 | 手工实测 |
 | NFR-2 可靠性 | — | 全部 | 单元测试 + 手工 |
 | NFR-3 安全 | `api-analysis.md` 二 | 全部 | 手工（注册表导出对比） |
 | NFR-4 可维护性 | `architecture.md` | 全部 | 代码评审 |
+
+> **本表在 Phase 1 做过一次校正（D29 = F1）**：FR-1 / FR-2 / FR-3 / FR-7 / FR-10 / FR-11 六行的「实现层」
+> 原先把 `Management/` 下的类误写成 `Core/`。分层的判据是 **AOT 兼容性而非领域**（`architecture.md` 1.1）——
+> 凡是用到 COM / 反射 / `Microsoft.Win32.TaskScheduler` 的扫描与接管代码**一律在 Management**，
+> 写进 `Core/` 会立刻被 `IsAotCompatible=true` 拦截。路径写错会让追踪矩阵失效，故按实际结构更正。
 
 ---
 
@@ -472,14 +477,22 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | **D22** | 分发形态（MSIX 是否可行） | **A：Inno Setup 安装器 + unpackaged**。MSIX 被否决（Win10 无法提权 / 注册表虚拟化 / 路径含版本号） | ✅ |
 | **D23** | 安装与数据布局 | **per-user 不提权安装**：程序 `%LOCALAPPDATA%\Programs\DelayStart`（只读）；配置 `%APPDATA%\DelayStart\config.json`（Roaming）；日志/状态/归档 `%LOCALAPPDATA%\DelayStart\`（Local） | ✅ |
 | **D24** | 调度端 UI 技术选型（**重开 D1**） | A. 维持 WinForms+AOT + 内部属性 `_SuppressWinFormsTrimError`（改动最小但官方不支持）<br>**B. 改纯 Win32**（`Shell_NotifyIcon` + 自绘弹窗，彻底离开灰色地带）<br>C. 改 WinUI 3+AOT（官方支持但冷启动 0.5–0.7s 超 NFR-1.2，且 WinUI 3 无托盘 API）<br>D. 放弃 AOT 改框架依赖（体积/冷启动不可接受） | **✅ B（2026-09-19 批复）** —— 调度端 UI 归零重写为纯 Win32，不再引用任何 UI 框架。Phase 0 已按 B 落地 | 🔴 |
-
 | **D25** | Phase 0 模板残留页（`Pages/` 的 Home / About / Settings）怎么处理 | A. **现在就删**，导航壳留空、Phase 3 按文档从零建 6 个页面<br>B. 留到 Phase 3 整体替换 | **✅ A（2026-09-19 批复）** —— 模板页与 `architecture.md` 1.4 的页集不符（`SettingsPage` 名字撞了但内容是占位符），且**不预置死链导航项**。已执行：删 `Pages/` 全 6 文件 + 清空 `MainWindow` 导航项 | 🟢 |
 | **D26** | 测试命令：`dotnet test` 集成有缺陷，怎么走 | A. **只改命令**：规范用 `dotnet run --project tests/DelayStart.Core.Tests -c Release`，不动包<br>B. 补 `xunit.runner.visualstudio` + 从 `global.json` 去掉 MTP 声明，退回 VSTest 路径（VS 测试资源管理器也能用）<br>C. 换掉 `xunit.v3.mtp-v2`，改用不带 `-mtp-v2` 变体的 `xunit.v3` | ⏳ **待决策** —— AI 建议 **A 先落地（已生效）**，B/C 属优化。**不阻塞 Phase 1**：测试照写，只是命令不同 | 🟡 |
+| **D27** | Phase 1（Core 层）的分工边界：P/Invoke 启动器是否本期落地 | A. **本期只做接口与纯逻辑**，`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 推到 **Phase 4** 与调度引擎一起写<br>B. 本期连同 P/Invoke 一起写完 | **✅ A（2026-09-19 批复）** —— P/Invoke 的正确性**只能在真实登录会话里验证**（提权继承 / `WTSQueryUserToken` / 降权回退三条路径都依赖真实令牌），Phase 1 写了也只能靠"编译通过"自证，等于假绿灯。Phase 1 交付 `IProcessLauncher` 接口 + `LaunchOutcome` / `LaunchEvaluation` 判定逻辑 + 假探针注入测试 | 🔴 |
+| **D28** | UWP 项的激活方式（AOT 约束下的唯一出路） | A. **`explorer.exe shell:AppsFolder\<AUMID>`**，纯 `Process.Start`，零 COM<br>B. 维持 demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown`<br>C. 砍掉 UWP 的延时启动（回退 D4 的 A） | **✅ A（2026-09-19 批复）** —— B 在 NativeAOT 下**运行时必抛 `PlatformNotSupportedException`**（无 built-in COM，见 R12），而 D24=B 已把调度端钉死在 AOT 上，B 不可能通。C 会推翻已批复的 D4。A 的代价是**拿不到 PID**：机制 7 的 1.5 秒复查对 UWP 不适用，`LaunchResultEvaluator` 对 `null` 快照**直接判成功**。**新增 R12 登记** | 🔴 |
+| **D29** | Phase 1 期间的文档修订项（F1–F4） | **F1** 修 `requirements.md` 追踪矩阵实现层路径（6 行）<br>**F2** `architecture.md` §2.1 补 `PathService`、§2.2 补三行<br>**F3** 删 Core 的 `Interop/Shell32.cs`（误植）<br>**F4** 登记 R12 | **✅ 全部执行（2026-09-19）** —— 均为一句话级修正，不改变任何行为约定，故合并进 Phase 1 一并处理。详见 `changelog.md` 第七轮 | 🟢 |
 
-> **D1–D25 已全部批复完毕，决策冻结，可进入编码。** 完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24**）。D23 的 6 条实现规则见 `architecture.md` 1.5。
+> **D1–D29 现状**：D1–D25 已全部批复并冻结；**D27 / D28 / D29 于 Phase 1 期间批复**（均为 Phase 1 暴露出的分层与 AOT 边界问题）；
+> **仅 D26 仍待决策**（仅影响测试命令，不阻塞编码）。完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.9 D27** / **6.10 D28**）。
+> D23 的 6 条实现规则见 `architecture.md` 1.5。
 >
 > **D26 背景（Phase 0 实测）**：`xunit.v3.mtp-v2` 4.0.1 + `Microsoft.Testing.Platform` 2.4.0 + .NET SDK 10.0.401 组合下，
 > `dotnet test` 报"运行了零个测试"并返回退出码 5，**但测试发现本身是好的**（xUnit 自带运行器能枚举到全部用例）。
 > 逐一排除了 `IsTestProject`、参数转发、包版本冲突三种可能。详见 `build-and-test.md` 4.2。
 >
 > **D24 为什么重开 D1**：Phase 0 实测发现 `UseWindowsForms=true` + `PublishAot=true` 会被 SDK 主动拦截（`NETSDK1175`），官方明确把 WinForms 列为 trimming/AOT 不支持，放行只能靠**内部属性**。D1 当初是在不知道这件事的前提下做的决策。详见 `architecture.md` R11。
+>
+> **D28 为什么不能用 COM**：NativeAOT **没有 built-in COM**，`Marshal.GetObjectForIUnknown` + `[ComImport]` 在 AOT 产物里
+> 必然抛 `PlatformNotSupportedException`。这与 R11 的结论同源（WinForms 不能 AOT 也是因为它重度依赖 built-in COM marshalling）。
+> 详见 `architecture.md` R12。

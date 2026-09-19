@@ -53,18 +53,16 @@
 
 ## 决策点状态
 
-### 决策点状态
+**D1–D25 已全部批复完毕并冻结；D27 / D28 / D29 于 Phase 1 期间批复。仅 D26（测试命令走向）待决策，不阻塞编码。**
 
-**D1–D25 已于 2026-09-19 全部批复完毕，决策冻结，可进入编码。D26（测试命令走向）待决策，不阻塞 Phase 1。**
-
-**Phase 0 出口条件已全部达成**：构建 0 警告 0 错误、R3 / R8 / R9 三项人工验证通过、D24 / D25 落地、模板残留清理完毕。
+**Phase 0 出口条件已全部达成**；**Phase 1（Core 层）已完成**：5 个项目 Release 构建 0 警告 0 错误、**128 个单元测试全绿**。
 
 | 编号 | 内容 | 结论 |
 |---|---|---|
 | D1 | 调度端技术 | A — 独立轻量进程 + AOT。**UI 层被 D24 改写为纯 Win32**（原 WinForms 部分作废） |
 | D2 | 主窗口导航 | A — 左侧 NavigationView + 来源子项 |
 | D3 | 界面语言 | A — 仅简体中文 |
-| D4 | UWP 延时语义 | B — 做，文案写明会绕过系统启动管理 |
+| D4 | UWP 延时语义 | B — 做，文案写明会绕过系统启动管理。**激活方式被 D28 改写为 `shell:AppsFolder`** |
 | D5 | 「系统启动项」页范围 | B — 只做服务 `delayed-auto` 切换 |
 | D6 | 程序名 | A — 延时启动管理器 / DelayStart |
 | D7 | 「立即模拟调度」 | A — 做 |
@@ -85,17 +83,24 @@
 | D22 | 分发形态（MSIX 是否可行） | **A — Inno Setup 安装器 + unpackaged**。MSIX 三条否决理由见 `design-spec.md` 6.4；**取代 D8** |
 | D23 | 安装与数据布局 | **per-user、不提权**：程序 `%LOCALAPPDATA%\Programs\DelayStart`（只读）；配置 `%APPDATA%\DelayStart\config.json`（Roaming）；日志/状态/归档 `%LOCALAPPDATA%\DelayStart\`（Local）。见 `architecture.md` 1.5 |
 | **D24** | **调度端 UI 技术选型（重开 D1）** | **✅ B — 纯 Win32 + AOT**：`Shell_NotifyIcon` 托盘 + 自绘无边框弹窗，全 P/Invoke，不引用任何 UI 框架。否决 A（WinForms+AOT 官方不支持，靠内部属性逃逸）／C（WinUI 3 官方支持 AOT 但冷启动 0.5–0.7s 超 NFR-1.2，**且 WinUI 3 无托盘 API**）／D（放弃 AOT，体积与冷启动不可接受）。见 `design-spec.md` 6.6、`architecture.md` R11 |
-
 | **D25** | **Phase 0 模板残留页处理** | **✅ A — 现在就删**：`Pages/` 的 Home / About / Settings 全删，`MainWindow` 导航项清空、**不预置死链**，Phase 3 按 `architecture.md` 1.4 从零建 6 个页面 |
-| **D26** | **测试命令（`dotnet test` 跑不了）** | ⏳ **待决策**：`xunit.v3.mtp-v2` 4.0.1 + SDK 10.0.401 下 `dotnet test` 报"运行了零个测试"（**测试发现本身正常**）。**AI 建议 A**：规范命令改 `dotnet run --project tests/DelayStart.Core.Tests -c Release`（已生效，零改动）；B 补 `xunit.runner.visualstudio` 退回 VSTest（VS 测试资源管理器可用）／C 换包。**不阻塞 Phase 1**。见 `design-spec.md` 6.8 |
+| **D26** | **测试命令（`dotnet test` 跑不了）** | ⏳ **待决策**：`xunit.v3.mtp-v2` 4.0.1 + SDK 10.0.401 下 `dotnet test` 报"运行了零个测试"（**测试发现本身正常**）。**AI 建议 A**：规范命令改 `dotnet run --project tests/DelayStart.Core.Tests -c Release`（已生效，零改动）；B 补 `xunit.runner.visualstudio` 退回 VSTest（VS 测试资源管理器可用）／C 换包。**不阻塞编码**。见 `design-spec.md` 6.8 |
+| **D27** | **Phase 1 是否连 P/Invoke 启动器一起写** | **✅ A — 本期只做接口 + 纯逻辑**：`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 推到 **Phase 4** 与调度引擎一起落地。理由：P/Invoke 的正确性只能在**真实登录会话**里验证，Phase 1 写了只能靠编译通过自证（假绿灯）。见 `design-spec.md` 6.9 |
+| **D28** | **UWP 项怎么激活（AOT 约束下）** | **✅ A — `explorer.exe shell:AppsFolder\<AUMID>`**，纯 `Process.Start`、零 COM。B（demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown`）在 NativeAOT 下**运行时必抛 `PlatformNotSupportedException`**，与 D24=B 的 AOT 前提直接冲突。**代价：拿不到 PID → 机制 7 不适用，`null` 快照判成功。新增 R12**。见 `design-spec.md` 6.10 |
+| **D29** | **Phase 1 期间的文档修订（F1–F4）** | **✅ 全部执行**：F1 追踪矩阵实现层 6 行路径、F2 `architecture.md` 2.1/2.2 补 `PathService` 等、F3 删 Core 的 `Interop/Shell32.cs`（误植）、F4 登记 R12。均为一句话级修正，不改变行为约定 |
 
-> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R9 / R10 / **R11**、`build-and-test.md` 第一、二、四、七、九节。
+> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26** / **6.9 D27** / **6.10 D28**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R1–**R12**、`build-and-test.md` 第一、二、四、七、九节。
 >
 > ✅ **Phase 0（2026-09-19）出口条件全部达成**：骨架生成完毕、Release 构建 **0 警告 0 错误**、冒烟测试 2/2 通过、
 > manifest 三个标记确认嵌入 exe、**R3 / R8 / R9 三项人工验证由用户在 VS 之外实测通过**、模板残留清理完毕（D25）。
-> 执行记录见 `architecture.md` 10.1 与 `build-and-test.md` 9.0。**下一步：Phase 1（Core 层 + 单元测试）。**
+> 执行记录见 `architecture.md` 10.1 与 `build-and-test.md` 9.0。
 >
-> ⚠️ **两个已知非阻塞项**：D26（测试命令，用 `dotnet run`）与 R2（`TaskScheduler` 命名冲突，推迟到 Phase 2 引入该包时验证）。
+> ✅ **Phase 1（2026-09-19）已完成**：`Core` 层 **38 个源文件**落地（15 模型 / 7 抽象 / 10 服务 / 2 启动结果 / 3 序列化 / 1 日志），
+> **`IsAotCompatible=true` 全程守门且构建 0 警告 0 错误** —— 证明 Core 无 IL2026 / IL3050 违规，调度端的 AOT 边界成立。
+> **单元测试 128 个全绿**（10 个测试文件：7 个测试类 + 3 个假件；`dotnet run --project tests/DelayStart.Core.Tests -c Release`，退出码 0，耗时 0.24s）。
+> 执行记录见 `architecture.md` 10.2。**下一步：Phase 2（Management 层：4 个 Source 的扫描 + 软禁用 + 恢复）。**
+>
+> ⚠️ **一个已知非阻塞项**：D26（测试命令，用 `dotnet run`）。R2（`TaskScheduler` 命名冲突）仍推迟到 Phase 2 引入该包时验证。
 
 
 ---
@@ -131,6 +136,7 @@
 - **需求变更** → 先改 `requirements.md`，再改代码。不允许"代码先改，文档后补"。
 - **文案变更** → 必须同步 `design-spec.md`。界面上的每一个字都以此文档为准。
 - **新增决策点** → 在 `requirements.md` 第十一节与本文「决策点状态」两处登记，并在 `changelog.md` 当轮记录落点。
-- **设计阶段的每轮改动** → 记入 `changelog.md`。**编码开始后停止维护该文件**，改由 `git log` 承载。
+- **设计阶段的每轮改动** → 记入 `changelog.md`。**编码开始后停止逐条维护该文件**（R1–R7 覆盖到 Phase 1 为止），此后只在**新增决策点**时追加一条「落点索引」，实现层面的变更改由 `git log` 承载。
 - **发现新的技术坑** → 补进 `api-analysis.md`，并在 `coding-standards.md` 里加对应的【必须】条目。
+- **新增 NativeAOT 不兼容的 API 用法** → 登记为新风险（`architecture.md` 第九节）。判据：凡是 `[ComImport]` / `Marshal.GetObjectForIUnknown` / 动态 COM / `System.Reflection` / `Reflection.Emit`，**默认视为不能进 `Core`**（R11 与 R12 同源）。
 - **文档间不重复**。同一个内容只在一个文档里详述，其他文档用链接引用。发现重复就删掉一份。

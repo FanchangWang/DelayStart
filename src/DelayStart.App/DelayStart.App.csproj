@@ -78,4 +78,15 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" />
   </ItemGroup>
 
+  <!--
+    D35：MVVM 源生成器 + 官方 DI 容器。
+    CommunityToolkit.Mvvm 是 architecture.md 5.2 与 coding-standards.md 12 指定的
+    [ObservableProperty] / [RelayCommand] 实现；两者都只服务管理端 —— 调度端绝不引用
+    本项目的任何包（它只引用 Core，见 architecture.md 1.2）。
+  -->
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
 </Project>

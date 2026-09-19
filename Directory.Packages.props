@@ -30,6 +30,18 @@
     <PackageVersion Include="TaskScheduler" Version="2.12.2" />
   </ItemGroup>
 
+  <ItemGroup Label="管理端 MVVM 与依赖注入（D35）">
+    <!--
+      D35 = A：管理端用官方 DI 容器。约 20 个服务要装配，生命周期（ConfigStore 单例 /
+      来源复用 / ViewModel 瞬态）必须显式；手写组合根会让 ViewModel 只能静态取服务，
+      依赖从构造函数签名里消失，漏注册就是运行时空引用。
+
+      版本按 CPM 规则取当前最新稳定版（2026-09-19 用 `dotnet package search` 精确匹配实测）。
+    -->
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+  </ItemGroup>
+
   <ItemGroup Label="单元测试（D21：xUnit v3 / Microsoft.Testing.Platform v2）">
     <PackageVersion Include="xunit.v3.mtp-v2" Version="4.0.1" />
   </ItemGroup>

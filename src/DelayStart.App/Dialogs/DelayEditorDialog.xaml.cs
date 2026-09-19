@@ -8,6 +8,8 @@ using DelayStart.Management.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
 using Windows.Storage.Pickers;
 
 namespace DelayStart.App.Dialogs;
@@ -157,10 +159,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
         PrimaryButtonText = "加入延时启动";
         SubtitleText.Text = "选择一个程序，由本程序在登录后延时启动";
 
-        // ⚠️ 设计稿原文是"拖入文件或点击选择"。当前**只实现了点击选择** ——
-        // 提权进程的拖放（R10）尚未在本期落地，与其留一个"拖进去没反应"的控件，
-        // 不如不承诺它。拖放可用后再把这句改回原文。
-        TargetHintText.Text = "点击选择程序";
+        // R10 已落地：主窗口在创建时经 ChangeWindowMessageFilterEx 放行了 UIPI
+        // 拖放消息白名单，提权窗口现在可以接收资源管理器的拖放（设计稿原文恢复）。
+        TargetHintText.Text = "拖入文件或点击选择";
 
         ImpactHeaderText.Text = "④ 系统影响";
         InfoTypeText.Text = "手动添加 · 不属于系统自启动项";
@@ -297,7 +298,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         picker.ViewMode = PickerViewMode.List;
         picker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-        foreach (var extension in new[] { ".exe", ".lnk", ".bat", ".cmd", ".msi" })
+        foreach (var extension in PickerExtensions)
         {
             picker.FileTypeFilter.Add(extension);
         }
@@ -315,6 +316,65 @@ public sealed partial class DelayEditorDialog : ContentDialog
         }
 
         ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
+    }
+
+    /// <summary>拖放悬停：只接受文件项，并给出"复制"视觉反馈。</summary>
+    /// <remarks>
+    /// R10：主窗口已放行 UIPI 拖放消息（见 <c>UipiMessageFilter</c>），
+    /// 这里的拖放事件在提权窗口里才能真正触发。
+    /// </remarks>
+    private void OnTargetDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+            return;
+        }
+
+        e.AcceptedOperation = DataPackageOperation.Copy;
+        e.DragUIOverride.Caption = "添加为延时启动";
+        e.DragUIOverride.IsCaptionVisible = true;
+        e.DragUIOverride.IsContentVisible = true;
+        e.Handled = true;
+    }
+
+    /// <summary>拖放落下：取第一个受支持的文件当作目标程序。</summary>
+    private async void OnTargetDrop(object sender, DragEventArgs e)
+    {
+        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            return;
+        }
+
+        var items = await e.DataView.GetStorageItemsAsync();
+        var path = items.OfType<StorageFile>().FirstOrDefault()?.Path;
+
+        if (string.IsNullOrEmpty(path))
+        {
+            ShowValidation("拖入的不是文件", "请拖入 .exe / .lnk / .bat / .cmd / .msi 文件。");
+            return;
+        }
+
+        if (!IsSupportedProgram(path))
+        {
+            ShowValidation("不支持的文件类型", "只接受 .exe / .lnk / .bat / .cmd / .msi。");
+            return;
+        }
+
+        ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
+    }
+
+    private static bool IsSupportedProgram(string path) =>
+        Array.Exists(PickerExtensions, extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>与文件选择器一致的扩展名白名单（单一事实来源：两处必须同步改）。</summary>
+    private static readonly string[] PickerExtensions = [".exe", ".lnk", ".bat", ".cmd", ".msi"];
+
+    private void ShowValidation(string title, string message)
+    {
+        ValidationBar.Title = title;
+        ValidationBar.Message = message;
+        ValidationBar.IsOpen = true;
     }
 
     private void OnDelayPresetChanged(object sender, SelectionChangedEventArgs e)
@@ -417,20 +477,20 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         if (IsPickTarget && string.IsNullOrWhiteSpace(_targetPath))
         {
-            ValidationBar.Title = "还没有选择程序";
-            ValidationBar.Message = "请点击上方区域选择一个程序（.exe / .lnk / .bat / .cmd / .msi）。";
-            ValidationBar.IsOpen = true;
+            ShowValidation(
+                "还没有选择程序",
+                "请拖入或点击上方区域选择一个程序（.exe / .lnk / .bat / .cmd / .msi）。");
             args.Cancel = true;
             return;
         }
 
         if (_delaySeconds < 0 || (_maxDelaySeconds > 0 && _delaySeconds > _maxDelaySeconds))
         {
-            ValidationBar.Title = "延时值不合法";
-            ValidationBar.Message = _maxDelaySeconds > 0
-                ? $"延时必须在 0 到 {_maxDelaySeconds.ToString(CultureInfo.InvariantCulture)} 秒之间（上限可在「设置」里调整）。"
-                : "延时不能为负数。";
-            ValidationBar.IsOpen = true;
+            ShowValidation(
+                "延时值不合法",
+                _maxDelaySeconds > 0
+                    ? $"延时必须在 0 到 {_maxDelaySeconds.ToString(CultureInfo.InvariantCulture)} 秒之间（上限可在「设置」里调整）。"
+                    : "延时不能为负数。");
             args.Cancel = true;
         }
     }

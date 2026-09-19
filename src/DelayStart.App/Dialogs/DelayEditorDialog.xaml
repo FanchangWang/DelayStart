@@ -64,14 +64,17 @@
                     </StackPanel>
                 </Border>
 
-                <!-- 形态 B-1：还没选程序 -->
+                <!-- 形态 B-1：还没选程序（允许拖放 —— R10 已在主窗口放行 UIPI 拖放消息） -->
                 <Border
                     x:Name="PickEmptyBorder"
                     Padding="0"
+                    AllowDrop="True"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
-                    CornerRadius="{StaticResource ControlCornerRadius}">
+                    CornerRadius="{StaticResource ControlCornerRadius}"
+                    DragOver="OnTargetDragOver"
+                    Drop="OnTargetDrop">
                     <Button
                         x:Name="PickFileButton"
                         Padding="16,18"
@@ -80,7 +83,7 @@
                         Click="OnPickFile"
                         Style="{StaticResource TextBlockButtonStyle}">
                         <StackPanel Spacing="4">
-                            <TextBlock HorizontalAlignment="Center" Text="点击选择程序" />
+                            <TextBlock HorizontalAlignment="Center" Text="拖入文件，或点击选择程序" />
                             <TextBlock
                                 x:Name="PickFileTypesText"
                                 HorizontalAlignment="Center"
@@ -91,14 +94,17 @@
                     </Button>
                 </Border>
 
-                <!-- 形态 B-2：已选程序 -->
+                <!-- 形态 B-2：已选程序（同样允许拖放更换） -->
                 <Border
                     x:Name="PickFilledBorder"
                     Padding="12,10"
+                    AllowDrop="True"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
-                    CornerRadius="{StaticResource ControlCornerRadius}">
+                    CornerRadius="{StaticResource ControlCornerRadius}"
+                    DragOver="OnTargetDragOver"
+                    Drop="OnTargetDrop">
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

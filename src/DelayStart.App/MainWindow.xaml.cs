@@ -43,6 +43,10 @@ public sealed partial class MainWindow : Window
         // 句柄上，否则 PickSingleFileAsync 在运行时直接抛异常。此刻 AppWindow 已可用。
         handles.Set(WinRT.Interop.WindowNative.GetWindowHandle(this));
 
+        // R10：本程序提权运行（高完整性），不放开 UIPI 过滤，资源管理器往窗口里
+        // 拖文件会被系统静默拦截（鼠标变禁止）。在窗口创建时放行拖放消息白名单。
+        Interop.UipiMessageFilter.AllowDragDrop(handles.Handle);
+
         ViewModel.RefreshTaskStatus();
 
         // ⚠️ 顺序：必须在 InitializeComponent 之后设 SelectedItem ——

@@ -223,7 +223,7 @@ DelayStart.exe --goto-log --run=20260919-084112
 | JSON | `System.Text.Json` **源生成器**模式；不用反射序列化 |
 | 数据绑定 | 手工赋值。`DataSource` 类绑定依赖反射，AOT 下不可用 |
 | P/Invoke | 用 `LibraryImport`（源生成器）；`bool` 返回值必须显式 `[return: MarshalAs(UnmanagedType.Bool)]` |
-| 全局化 | `<InvariantGlobalization>true</InvariantGlobalization>`（省体积，本项目无需多语言） |
+| 全局化 | 🔴 **不设** `InvariantGlobalization`（保持默认 `false`）。设 `true` 会让 `TaskScheduler` 注册计划任务时抛 `CultureNotFoundException`（D34 真机实测，见 `architecture.md` R13）。⚠️ 原文写的"省体积"是**误判** —— Windows 上 .NET 用系统 ICU，不随产物分发 |
 | 数据路径 | 配置读 `%APPDATA%\DelayStart\config.json`（Roaming）；日志 / 状态 / 归档写 `%LOCALAPPDATA%\DelayStart\`（Local）。**一律经 `PathService` 解析，禁止硬编码**（D23 · `architecture.md` 1.5） |
 | 运行身份 | 计划任务 `LogonType=Interactive` + `RunLevel=Highest`，🔴 **禁止 SYSTEM / 服务账户**（NFR-6.8）。SYSTEM 下 `%APPDATA%` 会解析到 `C:\Windows\System32\config\systemprofile` —— 配置读不到、日志写错位置、且**不报任何错** |
 

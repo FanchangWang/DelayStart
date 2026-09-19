@@ -216,6 +216,7 @@ DelayStart.Core/
 │  ├─ ItemKeyBuilder.cs            # 稳定主键生成（★ 纯逻辑）
 │  ├─ StartupSortComparer.cs       # (delay, sortOrder) 排序（★ 纯逻辑）
 │  ├─ LaunchResultEvaluator.cs     # 启动成功/失败判定（★ 纯逻辑）
+│  ├─ FailureStreakService.cs      # ★ 连续失败聚合（★ 纯逻辑，D31：管理端与调度端共用）
 │  └─ SystemClock.cs               # IClock 的生产实现
 ├─ Launch/
 │  ├─ LaunchOutcome.cs             # 启动动作的原始结果
@@ -245,6 +246,12 @@ DelayStart.Core/
 >
 > **注 3（`StartupOperationException`）**：构造签名强制要求 `EntryId`，让"失败必须定位到具体条目"
 > 从约定变成**编译期约束**（R6 的治理手段）。
+>
+> **注 4（`FailureStreakService` 为什么在 Core，D31）**：它原先被安排在 Management 层，与两条硬约束
+> **直接冲突** —— `scheduler-design.md` 9.2 要求**调度端**的托盘角标按连续失败次数升级，
+> 而调度端**只引用 Core**（1.2 分层表）。登录那一刻管理端根本没运行，不可能算出调度端要用的数。
+> 该计算是**纯函数**（只吃 `RunRecord` 列表，不碰注册表 / 无 COM / 无反射），AOT 安全，故搬入 Core 两端共用。
+> 调度端仍保持**无状态**（每次现算、不维护计数器），与原设计意图一致。详见 `design-spec.md` 6.11.2。
 
 ### 2.2 各模块职责
 
@@ -257,7 +264,8 @@ DelayStart.Core/
 | `CommandLineService` | ① 解析注册表值 / 快捷方式参数为 `(Path, Args)`；② 拼接最终命令行 | 纯字符串逻辑，无依赖 |
 | `DelayCalculator` | `remaining = DelaySeconds - elapsed`；排序；计算调度器驻留时长 | 纯计算，注入 `IClock` |
 | `ItemKeyBuilder` | 生成稳定主键 `{source}:{scope}:{sourceKey}` | 纯计算 |
-| `LaunchResultEvaluator` | 依据"创建结果 + 1.5 秒后 `HasExited` + 退出码"判定成功/失败 | 纯逻辑，可注入假进程探针 |
+| `LaunchResultEvaluator` | 依据"创建结果 + 1.5 秒后 `HasExited` + 退出码"判定成功/失败；UWP 因无 PID 而收到 `null` 快照时直接判成功（D28） | 纯逻辑，可注入假进程探针 |
+| `FailureStreakService` | 扫最近若干份 `runs/*.json`，**现算**连续失败次数与提醒级别（E13）；输出供管理端横幅与调度端角标使用 | 纯函数，只吃 `RunRecord` 列表。**D31 从 Management 搬入**，见注 4 |
 | `SystemClock` | `IClock` 的生产实现 | `DateTimeOffset.Now`，测试注入 `FakeClock` 替代 |
 | `ProcessLauncher` | 管理员条目继承令牌启动；普通条目降权启动；降权失败回退 | P/Invoke，`LibraryImport`。**Phase 4**（D27=A） |
 | `FileLogger` | 按大小滚动的文本日志 | 无第三方日志库（省体积） |
@@ -381,30 +389,37 @@ DelayStart.Management/
 ├─ Abstractions/
 │  ├─ IStartupSource.cs            # 扫描 + 禁用/启用 的统一接口
 │  ├─ IShellLinkResolver.cs
-│  ├─ IIconProvider.cs
-│  └─ IScheduledTaskGateway.cs
+│  ├─ IScheduledTaskGateway.cs     # 计划任务访问抽象 —— 接管编排靠它注入假实现（D33）
+│  └─ IIconProvider.cs             # ⏳ Phase 3（D30）
 ├─ Sources/
 │  ├─ RegistryStartupSource.cs     # HKCU / HKLM / HKLM-WOW64 三个实例
 │  ├─ StartupFolderSource.cs       # 用户 / 系统 两个实例
 │  ├─ ScheduledTaskSource.cs
 │  └─ UwpStartupSource.cs
 ├─ Services/
-│  ├─ ScanService.cs               # 并发调度各 Source，汇总结果
-│  ├─ TakeoverService.cs           # 接管 / 移除（含失败回滚）
-│  ├─ TaskRegistrationService.cs   # DelayStartScheduler 计划任务的创建/更新/删除
-│  ├─ ShellLinkResolver.cs         # IShellLinkW 解析目标与参数
-│  ├─ IconProvider.cs              # IShellItemImageFactory 按尺寸取图标
-│  ├─ ServiceQueryService.cs       # 系统服务查询 + delayed-auto 切换
-│  ├─ SystemStartupInspector.cs    # 驱动 / Winlogon / 登录脚本（只读）
-│  └─ FailureStreakService.cs      # 聚合 runs/ 计算连续失败次数
+│  ├─ ScanService.cs               # 遍历各 Source，单源失败不影响其余（FR-1.4）
+│  ├─ TakeoverService.cs           # 接管 / 移除（失败逆序回滚，FR-3.1）
+│  ├─ TaskRegistrationService.cs   # DelayStartScheduler 的创建/更新/删除（FR-11）
+│  ├─ ShellLinkResolver.cs         # IShellLinkW 解析目标与参数（FR-1.7）
+│  ├─ IconProvider.cs              # ⏳ Phase 3（D30）：IShellItemImageFactory
+│  ├─ ServiceQueryService.cs       # ⏳ Phase 3/5（D30）：服务查询 + delayed-auto
+│  └─ SystemStartupInspector.cs    # ⏳ Phase 5（D30）：驱动 / Winlogon / 登录脚本
 ├─ Interop/
-│  ├─ Shell32.cs                   # SHCreateItemFromParsingName / SHGetFileInfo
-│  ├─ ShellInterfaces.cs           # IShellLinkW / IPersistFile / IShellItemImageFactory
-│  ├─ AdvApi32.cs                  # ChangeServiceConfig
-│  └─ Shlwapi.cs                   # SHLoadIndirectString
+│  ├─ ShellInterfaces.cs           # IShellLinkW / IPersistFile
+│  ├─ Shell32.cs                   # ⏳ Phase 3（D30）：SHCreateItemFromParsingName
+│  ├─ AdvApi32.cs                  # ⏳ Phase 5（D30）：ChangeServiceConfig
+│  └─ Shlwapi.cs                   # SHLoadIndirectString（UWP 显示名，FR-1.8）
 └─ Serialization/
    └─ (复用 Core 的 JsonContext)
 ```
+
+> **Phase 2 范围说明（D30 / D31）**
+>
+> - 带 `⏳` 的六项**本期不实现**（D30）。它们本期没有消费者（图标是纯 UI 依赖，FR-7 的页面在 Phase 3），
+>   且按 `coding-standards.md` 14.1 **进不了单元测试** —— 写了只能靠"编译通过"自证，与 D27 拒绝在
+>   Phase 1 写 P/Invoke 启动器是同一条逻辑。验证时**不得**把它们算作已完成项。
+> - `FailureStreakService.cs` **已移出本层**（D31），改在 `Core/Services/` —— 理由见 2.1 注 4。
+>   原表中它列在 Management 是本项目**唯一一处真的实现不了的设计**（调度端要用它，却拿不到它）。
 
 ### 3.2 `IStartupSource` 统一接口
 
@@ -439,7 +454,9 @@ public interface IStartupSource
 
 `Remove(item)` 反向执行：恢复系统项 → 删配置 → 若已无条目则删除计划任务。
 
-### 3.4 图标提取
+### 3.4 图标提取（⏳ Phase 3，D30）
+
+> 本节记录设计意图，**Phase 2 不实现** —— 图标是纯 UI 依赖，本期没有消费者。
 
 `SHGetFileInfo` 只能给 32×32 或 16×16，在高 DPI 的 64px 列表行里会糊。改用 `IShellItemImageFactory`：
 
@@ -657,7 +674,7 @@ DelayStart.Scheduler/
 | JSON | `JsonSerializerContext` 源生成 |
 | 控件绑定 | 手工赋值，**禁止 `DataSource`** 类反射绑定 |
 | P/Invoke | `LibraryImport`；`bool` 返回值必须 `[return: MarshalAs(UnmanagedType.Bool)]` |
-| 全局化 | `<InvariantGlobalization>true</InvariantGlobalization>` |
+| 全局化 | 🔴 **不得设 `InvariantGlobalization`**，继承仓库级 `false`。设 `true` 会让 `TaskScheduler` 注册计划任务时抛 `CultureNotFoundException`（见 R13） |
 | 禁用 API | `Reflection.Emit`、`BinaryFormatter`、`Marshal.GetTypedObjectForIUnknown`、COM RCW 动态包装 |
 
 > **Phase 4 的第一个动作**必须先验证"无边框弹出面板在 AOT 下能否工作"（`Deactivate` 失焦即关）。不通过则切 `ProgressPopupFallback`，零风险。这是全项目唯一的未知项。
@@ -723,6 +740,7 @@ DelayStart.Scheduler/
 | **R10** | 🟡 提权窗口接收不到资源管理器的拖放（UIPI） | 「手动添加」的拖放区失效 | 主路径 `[浏览…]` 按钮（`FileOpenPicker` + `InitializeWithWindow`）必须 100% 可用，**不依赖拖放**；拖放作为增强：`ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES/MSGFLT_ALLOW)` + `DragAcceptFiles` + 子类化窗口处理 `WM_DROPFILES`。**不通则拖放区降级为纯按钮，不接受"等待修复"** | Phase 3 |
 | **R11** | 🔴 **WinForms + NativeAOT 官方未支持**：SDK 主动拦截（`NETSDK1175`），放行只能靠**内部属性** `_SuppressWinFormsTrimError` | ~~调度端可能发布出"能编译但运行时崩溃"的 exe；D1 的整个技术路线受威胁~~ → **已由 D24 = B 从根源消解** | ✅ **已解决（2026-09-19 D24 批复 B）**：调度端弃用 WinForms，改**纯 Win32 + AOT**，灰色地带不复存在。Phase 0 复验——去掉逃逸属性后**仍 0 警告 0 错误**。**R11 的约束条款继续生效且更强**（禁 `.resx` 反射式资源加载 / `DataGridView` / `RichTextBox` / 动态 COM / `System.Reflection`，IL2xxx 逐个消掉）。剩下"AOT 产物真机能否运行"由 **R1 在 Phase 4** 覆盖托盘 / 面板 / 失焦即关三条路径 | **Phase 0（已结）→ Phase 4（R1 覆盖运行侧）** |
 | **R12** | 🔴 **NativeAOT 无 built-in COM**：UWP 项的 COM 激活（`IApplicationActivationManager`）在 demo 里走 `Marshal.GetObjectForIUnknown` + `[ComImport]`，AOT 下**运行时必抛 `PlatformNotSupportedException`**；同时 UWP 激活**拿不到 PID**，机制 7 的"1.5 秒后复查"对它无从执行 | FR-5.9「UWP 项的延时启动」整条链路失效 —— 而 D4 已批复 UWP 延时**要做** | ✅ **已由 D28 = A 从根源消解（2026-09-19）**：UWP 激活改用 `explorer.exe shell:AppsFolder\<AUMID>` —— 纯 `Process.Start` 拉起 explorer，**完全不碰 COM**，AOT 下可用。派生两条硬约定：① `LaunchResultEvaluator.Evaluate` 收到 **`null` 快照（无 PID）时判成功**，不套用退出码规则；② UWP 是**唯一**"延时启动 + 绕过系统启动管理"的来源，UI 文案必须写明（D4） | **Phase 1（Phase 1 已消解，Phase 4 只需实测一次）** |
+| **R13** | 🔴 **`InvariantGlobalization=true` 让计划任务注册必然崩溃**（D34 真机实测）：该开关的语义**不是**"不要多语言"，而是**不存在任何 culture** —— 任何 `CultureInfo` 构造都抛 `CultureNotFoundException`。`Microsoft.Win32.TaskScheduler.Trigger` 的静态构造器会 `CreateSpecificCulture("en")` 来格式化任务 XML 的日期 | FR-11 计划任务注册 **100% 不可用**，并**连带 FR-3.1 全部接管动作失败**（第 4 步失败 → 回滚），Phase 2 的核心交付物在真机上完全不能用。⚠️ `--scan` 的枚举路径不受影响（`DescribeTrigger` 不触发该静态构造器），所以只坏"写"不坏"读" | ✅ **已修复（2026-09-19）**：`Directory.Build.props` 改为 `false`。体积代价实测 ≈ 0（Windows 上 .NET 用系统 `C:\Windows\System32\icu.dll`，**不随产物分发**，产物 140.8 MB 不变）→ 原"省体积"论据在 Windows 上本就不成立。⚠️ 该开关**构建期写入 `runtimeconfig.json`**，运行时环境变量翻不回来（`DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` 无效）。误判根源：Phase 0 把它当成"本项目无多语言需求"的性能选项，**从未作为决策走审批** | **Phase 2（已结）** |
 
 #### R9 实测进度（Phase 0，2026-09-19）
 
@@ -827,7 +845,7 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 |---|---|---|
 | **0** | 环境与骨架：先按 `build-and-test.md` 1.2 装齐工具链前置（VS 组件 + WinUI 模板包）；`dotnet new` 生成 4 个项目 + 测试项目（2.1）、`Directory.Build.props`、CPM、`.editorconfig`；**并验证 R9**（自包含 + manifest 提权） | `dotnet build` 全绿；R2 / R3 / R8 已确认；**R9 有明确结论**（决定 7.1 的自包含取值） |
 | **1** | `Core` 层：模型、`ConfigService`、`DelayCalculator`、`ItemKeyBuilder`、`CommandLineService`、`LaunchResultEvaluator` + 单元测试。**D27=A：`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 不在本期** | ✅ 单元测试全绿（128 个） |
-| **2** | `Management` 层：4 个 Source 的扫描 + 软禁用 + 恢复、`TakeoverService`、`TaskRegistrationService` | 注册表导出对比验证"零数据损坏" |
+| **2** | `Management` 层：4 个 Source 的扫描 + 软禁用 + 恢复、`TakeoverService`、`TaskRegistrationService` | ✅ **已达成（D34）**：三个 `Run` 键经全量快照对比**值数量与内容零变化**（`requirements.md` 9.3 第 1 条），接管 / 移出往返闭环。详见 10.3 |
 | **3** | 管理端骨架：导航 + 自启动项页 + 延时启动页，跑通"扫描 → 接管 → 移除"单链路；验证 R10（提权下的文件选择/拖放） | 端到端手工验证通过；「手动添加」的 `[浏览…]` 路径可用 |
 | **4** | 调度端：先验 R1（+ R11 的运行侧），再做引擎 + 托盘 + 通知 + 状态文件。**D24 已批复 = B（纯 Win32），UI 归零重写** | 重启实测延时准确 |
 | **5** | 总览 / 日志 / 设置 / 系统启动项页 | 全部页面文案对齐 `design-spec.md` |
@@ -869,4 +887,25 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | 规范冲突处置 | ✅ `CA1707`（成员名禁下划线）与 `coding-standards.md` 14.2 强制的测试命名 `被测方法_场景_期望结果` 直接冲突 → 在 `tests/DelayStart.Core.Tests/.editorconfig` **就近关闭 CA1707**，生产代码的检查强度不受影响。另修 `.editorconfig` 的 `insert_final_newline=false`（与 14.2 所在的第五节"每文件恰好一个末尾换行"矛盾） |
 | 文档修订（D29） | ✅ **F1** `requirements.md` 追踪矩阵实现层 6 行路径纠正（`Core/` → `Management/`）；**F2** 2.1 / 2.2 补 `PathService` 等；**F3** 删 Core 的 `Interop/Shell32.cs`（误植）；**F4** 登记 R12 |
 | **Phase 1 出口条件** | ✅ **达成**：单元测试全绿（128/128）+ AOT 守门 0 警告。**可以进入 Phase 2** |
+
+### 10.3 Phase 2 执行记录（2026-09-19）
+
+**范围**：`architecture.md` 三（Management 层设计）+ 机制 2 / 3 / 4。按 **D30** 排除图标、服务查询、系统启动项检查三块。
+
+| 项 | 结论 |
+|---|---|
+| 交付物（Management） | ✅ `src/DelayStart.Management/` **20 个源文件**：`Abstractions/` 3（`IStartupSource` / `ISchedulerTaskRegistrar` / `IShellLinkResolver`）、`Sources/` 4（注册表 / 启动文件夹 / 计划任务 / UWP）、`Services/` 5（`StartupApprovedStore` / `ShellLinkResolver` / `TaskRegistrationService` / `ScanService` / `TakeoverService`）、`Interop/` 3（`ShellInterfaces` / `ComFactory` / `Shlwapi`）、`Models/` 5 |
+| 交付物（Core 新增） | ✅ `FailureStreakService` + 4 个配套模型（**D31**），Core 由 38 → **43 个源文件**。纯函数，`IsAotCompatible` 守门仍 **0 警告** |
+| 交付物（App 新增） | ✅ `Program.cs` + `Cli/`×3（**D32**）。`DISABLE_XAML_GENERATED_MAIN` 接管入口，`--restore-all` / `--reinstall-task` / `--takeover` / `--release` / `--scan` 五条命令 |
+| 构建（全解决方案） | ✅ `dotnet build DelayStart.slnx -c Release` → **0 警告 0 错误**（5 个项目） |
+| 测试 | ✅ **205 个用例全绿**，`Total: 205, Errors: 0, Failed: 0, Skipped: 0`，退出码 0，**耗时 0.260s**（Phase 1 的 128 + 本期新增 77） |
+| 测试结构（本期新增） | ✅ 7 个文件 = 4 个测试类（`FailureStreakService` / `StartupApprovedStore` / `ScanService` / `TakeoverService`）+ 3 个新替身（`FakeStartupSource` / `FakeSchedulerTaskRegistrar` / `InMemoryConfigStore`） |
+| **R2 验证** | ✅ **已消解**：`Microsoft.Win32.TaskScheduler.Task` 与 `System.Threading.Tasks.Task` 的冲突用 `using TaskSchedulerTask = …` 解决，构建 0 警告。**并且文档里的包名本身是错的**，见下条 |
+| 🔴 **包名勘误** | 本文与 `api-analysis.md` 1.4 早先写的包 id `Microsoft.Win32.TaskScheduler` 是**另一个同名旧包**（最新 2.2.0.3，2016 年，只带 `.NETFramework4.0` 资产，**对 .NET 10 不可用**）。真正在维护的是 **`TaskScheduler` 2.12.2**。已按后者落地并回写 `api-analysis.md` 1.4 |
+| 新增本机坑 | ⚠️ `[LibraryImport]` 需要 `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`，否则 **SYSLIB1062 + CS0227**（`Management` / `App` 两处，是 `build-and-test.md` 坑 9 的完整形态）。⚠️ `[ComImport] class` **不能**显式转接口（**CS0030**），改走 `CoCreateInstance` + `Marshal.GetObjectForIUnknown`（`Interop/ComFactory.cs`）。⚠️ `lambda` 参数命名为 `_` 会让内部的 `_ = x` 变成给参数赋值（**CS0029**）。⚠️ `new App();` 裸调用触发 **CA1806** |
+| ⏳ **已知偏差 1** | UWP 显示名解析只做了 **FR-1.8 的第 1 / 2 / 4 步**（`SplashScreen\...\AppName` → `SHLoadIndirectString` → 回退包名前缀），**第 3 步（MrtCache 反查 `PackageFullName`）未实现**。理由：需解码 `resources.pri` 或改 TFM 引入 WinRT 的 `PackageManager`，代价明显高于收益，而第 4 步已给出可读兜底 |
+| ⏳ **已知偏差 2** | `ScheduledTaskSource` **整体跳过 `\Microsoft\*` 下的任务**，而不是"展示为只读"。理由：一台干净 Win11 上就有上百个系统任务，全部列出会把用户真正关心的十几项淹掉，且它们按 D20 提权也改不动。这是比 FR-1.9 更强的保证（"不可操作" → "不展示"），但确实是解释上的偏离 |
+| **Phase 2 出口条件** | ✅ **已达成（2026-09-19 · D34 真机执行）**：`--scan` 37 项零误判 → `--reinstall-task` 注册成功 → `--takeover` ×4 → `--restore-all`（成功 4 / 失败 0）→ 前后全量快照 diff 中三个 `Run` 键**逐行 IDENTICAL**、其余 30+ 条目未出现于 diff → 回归扫描四项回到「启用」。详见 `build-and-test.md` 9.1 执行状态块 |
+| 🔴 **D34 缺陷 1（已修复）** | Phase 0 自行引入 `<InvariantGlobalization>true</InvariantGlobalization>`（**无对应决策**，理由写的是"省体积"）→ `TaskScheduler.Trigger..cctor` 里的 `CreateSpecificCulture("en")` 抛 `CultureNotFoundException`，**计划任务注册 100% 崩溃，并连带接管第 4 步全部回滚**。**单测与构建都发现不了**：单测注入的是 `FakeSchedulerTaskRegistrar`，真实的 `TaskRegistrationService` 从未被执行，构建也是 0 警告。**已改为 `false`**；体积代价实测 ≈ 0（Windows 用系统 `icu.dll`，产物 140.8 MB 不变）。已登记为 **R13** |
+| 🔴 **D34 缺陷 2（已修复）** | `Release` / `Rollback` 无条件调 `Enable`（删标记），而 `OriginalState.WasEnabled` **只有写入点、零读取点** —— 实现漏了 `DelayedItem.OriginalState` 注释里明写的"移除接管时据此精确还原（FR-2.7）"。后果：**接管前已被用户禁用的项，移出后会被变成启用**（违反 9.3 第 4 条）。**已修复**：恢复动作按 `WasEnabled` 分支；该字段默认值由 `false` 改为 `true`（安全侧：取"原本会自启动"，否则老配置条目释放后会永久不启动且无从解释）。新增 3 个单测钉住 |
 

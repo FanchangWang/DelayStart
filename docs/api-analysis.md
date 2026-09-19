@@ -69,7 +69,13 @@
 
 ### 1.4 计划任务
 
-依赖 NuGet `Microsoft.Win32.TaskScheduler`（命名空间 `Microsoft.Win32.TaskScheduler`，注意 `TaskService` 与 `System.Threading.Tasks.Task` 同名，需要 alias）。
+依赖 NuGet **`TaskScheduler`**（作者 David Hall；nuspec 标题写明它就是 "the original Microsoft.Win32.TaskScheduler"，命名空间仍是 `Microsoft.Win32.TaskScheduler`。注意其中的 `Task` 与 `System.Threading.Tasks.Task` 同名，需要 alias —— 即 R2）。
+
+> 🔴 **包名勘误（Phase 2 实测，2026-09-19）**：本文早先写的包 id 是 `Microsoft.Win32.TaskScheduler`，
+> 但那是**另一个同名旧包** —— 最新版本停在 **2.2.0.3（2016 年）**，nuspec 里只有一个
+> `.NETFramework4.0` 的程序集引用，**对 .NET 10 完全不可用**。
+> 真正在维护的是 **`TaskScheduler` 2.12.2**（资产含 `net9.0-windows7.0`，由 `net10.0-windows` 消费）。
+> 已按后者落地，见 `Directory.Packages.props` 的注释。
 
 ```csharp
 using var ts = new TaskService();

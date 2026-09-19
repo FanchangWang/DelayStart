@@ -31,7 +31,7 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>   <!-- 内部成员不强制 XML 文档 -->
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 🔴 刻意**不设** InvariantGlobalization。理由见下方第 6 条与 architecture.md R13 -->
   </PropertyGroup>
 </Project>
 ```
@@ -277,7 +277,7 @@ public static bool TryGetActiveConsoleSessionId(out uint sessionId)
 | 3 | JSON 用 `JsonSerializerContext` 源生成 | 反射序列化会在裁剪后失效 |
 | 4 | 控件数据绑定手工赋值 | **禁止 `DataSource`** 类反射绑定 |
 | 5 | P/Invoke 用 `LibraryImport` | `DllImport` 在 AOT 下需额外配置且不生成高效代码 |
-| 6 | `<InvariantGlobalization>true</InvariantGlobalization>` | 省体积；本项目无需多语言 |
+| 6 | **不设** `InvariantGlobalization`（保持默认 `false`） | 🔴 设 `true` 的含义不是"关闭多语言"，而是**不存在任何 culture** —— 任何 `CultureInfo` 创建都抛异常。`TaskScheduler` 注册计划任务时必崩（D34 真机实测），详见 `architecture.md` R13 |
 | 7 | 异常用 `throw new XxxException("...")` 而非 `throw ex` | 保留原始栈 |
 
 **【禁止】在 `Core` 与 `Scheduler` 中使用：**

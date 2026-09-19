@@ -447,7 +447,8 @@ warning IL2026 / IL3050 / IL3053
   <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   <PublishAot>true</PublishAot>
   <UseWindowsForms>true</UseWindowsForms>
-  <InvariantGlobalization>true</InvariantGlobalization>
+  <!-- 🔴 刻意**不设** InvariantGlobalization（继承仓库级的 false）。
+       设成 true 会让 TaskScheduler 注册计划任务时抛 CultureNotFoundException —— 见 architecture.md R13 -->
   <SelfContained>true</SelfContained>
   <StripSymbols>true</StripSymbols>
 
@@ -637,10 +638,97 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 - [ ] 禁用某计划任务 → `schtasks /query /tn <名>` 显示 `Status: Disabled`
 - [ ] 全部禁用后，**重新导出对比**：三个 `Run` 键的值**数量与内容零变化**
 
+> **执行状态（2026-09-19 · D34 已真机执行完毕 → Phase 2 出口达成）**
+>
+> 白名单约束：本次只操作**用户指定的 4 个项目**，系统其余自启动项一个字节未动（有前后快照为证）。
+>
+> | 目标 | 主键 | 接管前状态 |
+> |---|---|---|
+> | HKCU `Run\Gemini` | `registry:hkcu:gemini` | 启用（标记 `02…`） |
+> | HKLM `Run\小米电脑管家` | `registry:hklm:小米电脑管家` | 启用（标记 `02…`） |
+> | HKLM WOW6432Node `Run\SunJavaUpdateSched` | `registry:hklmwow:sunjavaupdatesched` | 启用（标记 `02…`） |
+> | 计划任务 `XiaomiPCHostTask` | `scheduledtask:none:\xiaomipchosttask` | `Enabled=True` |
+>
+> **实测结果**
+>
+> | 步骤 | 结果 |
+> |---|---|
+> | `--scan` | ✅ 37 项 / 4 来源全出货；15 个 `03…` 标记判定**零误判**；`Microsoft.Windows.DevHome` 的两个同名 UWP 被 `ItemKey` 正确区分（**机制 1 的真机反例**，用 `(Name, Source)` 二元组会误判）；`SunJavaUpdateSched` 的标记确实读自 `Run32`（5 值）而非 `Run`（3 值）—— **机制 4 现场确认** |
+> | `--reinstall-task` | ✅ 任务 `Ready` / `LogonTrigger Delay=PT3S` / `RunLevel=Highest` / **`LogonType=Interactive`** / `UserId=guyue`，action 指向 `DelayStart.Scheduler.exe` |
+> | `--takeover` ×4 | ✅ 四项退出码全 0；三个 `Run` 键**值数量与内容零变化**；四个目标全部落到"已禁用"（标记 `03…` / 任务 `Enabled=False`） |
+> | `--restore-all` | ✅ 「还原完成：成功 4 项，失败 0 项。调度计划任务已删除。」 |
+> | 前后全量快照 diff | ✅ 三个 `Run` 键**逐行 IDENTICAL**；`XiaomiPCHostTask` 完整还原（`Enabled=True / State=Running`）；其余 30+ 个未接管条目全部未出现于 diff |
+> | 回归 `--scan` | ✅ 四项全部回到「启用」，总数仍 37、已接管 0 |
+>
+> **对 9.3 安全验收的逐条结论**
+>
+> | 9.3 条目 | 结论 |
+> |---|---|
+> | 全流程操作后 `Run` 下原值数量与内容**零变化** | ✅ **通过** —— 三个键逐行 IDENTICAL |
+> | 启动文件夹文件数量与内容零变化 | ✅ 未触碰（本轮白名单不含启动文件夹项） |
+> | 未接管的计划任务 `Enabled` 状态零变化 | ✅ 通过 |
+> | 卸载/重置后系统回到接管前状态 | ✅ 通过（功能状态一致） |
+>
+> ⚠️ **唯一非字节级还原点（如实记录，判定为"符合需求"，不是缺陷）**：三个目标接管前在 `StartupApproved` 里带有
+> **显式启用标记** `02000000…`，释放时按 **FR-2.2「启用 = 删除标记值」** 被删除
+> （`HKCU SA\Run` 36→35、`HKLM SA\Run` 4→3、`HKLM SA\Run32` 5→4）。
+> 这是需求定义的恢复动作，且 `StartupApproved` **不在 9.3 的承诺范围内** —— 9.3 第 1 条限定的是 **`Run` 键**。
+> 功能上"无标记"与 `02…` 对 Windows 完全等价（任务管理器一律显示"已启用"）。
+> 若要连标记形态也逐字节还原，就得改 FR-2.2 —— **不建议**（收益为零，代价是给"启用"引入第二种语义）。
+>
+> **执行期发现并修复的两个缺陷**（详见 `architecture.md` 10.3 的 D34 缺陷小节）
+>
+> | # | 缺陷 | 根因 | 处置 |
+> |---|---|---|---|
+> | **1** | 计划任务注册 **100% 崩溃**（连带接管第 4 步全部回滚 → FR-3.1 不可用） | `Directory.Build.props` 的 `<InvariantGlobalization>true</InvariantGlobalization>`（**Phase 0 自行引入，无对应决策**，理由写的是"省体积"）→ `Microsoft.Win32.TaskScheduler.Trigger` 静态构造器 `CreateSpecificCulture("en")` 抛 `CultureNotFoundException` | 改 `false`。**Windows 上 .NET 用系统 `icu.dll`，产物 140.8 MB 不变 —— 体积代价实测 ≈ 0**，原理由本就不成立 |
+> | **2** | 「移出延时启动」无法还原"**接管前已被禁用**"的项（会把它变成启用） | `Release` / `Rollback` 无条件调 `Enable`（删标记），而 `OriginalState.WasEnabled` **全仓库只有写入点、零读取点** —— 实现漏了 `DelayedItem.OriginalState` 注释里明写的"移除接管时据此精确还原（FR-2.7）" | 恢复动作改为按 `OriginalState.WasEnabled` 分支（`true` → `Enable`，`false` → `Disable`）；并修正该字段默认值 `false` → `true`（取"原本会自启动"这一安全侧，否则老配置条目释放后会永久不启动且无从解释） |
+>
+> **证据文件**（`.workbuddy/tmp/`，**均不入库**）：`d34-reg-d35-before.txt` / `-mid.txt` / `-after.txt`（三份全量快照）、
+> `d35-final-diff.txt`（37 行差异全文）、`d35-takeover.txt` / `d35-restore.txt`、`manager.log`（含缺陷 1 的完整三层异常链）。
+>
+> ⚠️ **`reg.exe` 在本机被安全策略列入 Program Blacklist**（策略明确禁止换 shell / 脚本绕过），因此上面的"导出对比"
+> 改用**等价的 `.NET Registry` 值级快照**：逐值记录类型与内容，字节数组额外记 hex。
+> 覆盖面（值数量 + 值内容）与 `.reg` 导出一致，仅少了原始 `.reg` 文本这份**形式证据** —— 如需归档，请手动补跑三条 `reg export`。
+>
+> ⏳ **仍未验证的一项**：任务管理器 / MSCONFIG 的 **UI 显示**未人工核对。标记字节与任务 `Enabled` 已确认落到正确取值，
+> 但"界面显示为已禁用"需要人眼。建议留到 Phase 6 真机全面验收时一次性补 —— 在那里重新截图留档更自然。
+>
+> **单测侧的锚点**（真机之外的进程内保证，仍然有效）：`StartupApprovedStoreTests.cs` 钉住三级回退 / `Run32` 仅对 WOW6432Node /
+> 标记恰 12 字节；`TakeoverServiceTests.cs` 钉住事务顺序与逆序回滚（含回滚自身失败）；`ScanServiceTests.cs` 钉住"坏来源不拖垮整页"。
+>
+> **重跑命令**（会写真实注册表与计划任务 —— 务必先确认操作白名单）：
+>
+> ```bash
+> # 1. 基线
+> reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" before-hkcu.reg
+> reg export "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" before-hklm.reg
+> reg export "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" before-wow.reg
+>
+> # 2. 注册调度任务（幂等；不碰任何 Run 值）
+> DelayStart.exe --reinstall-task
+> schtasks /query /tn DelayStartScheduler /v /fo LIST   # 核对：登录触发 / 延迟 3s / RunLevel=Highest / 身份=当前交互用户
+>
+> # 3. 挑 1 个 HKCU 项 + 1 个 WOW6432Node 项做接管→移出往返
+> DelayStart.exe --scan
+> DelayStart.exe --takeover <ItemKey> 15
+> DelayStart.exe --release  <ItemKey>
+>
+> # 4. 收尾：全量还原 + 对比
+> DelayStart.exe --restore-all
+> reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" after-hkcu.reg
+> # 三个键逐一 diff：值数量与内容必须零变化
+> ```
+>
+> 清理：`--restore-all` 之后 `DelayStartScheduler` 任务应被删除（`schtasks /query /tn DelayStartScheduler` 报"找不到"即正确）。
+> 上面这些 `*.reg` 是**验收证据**，执行完请保留到 Phase 2 出口签字为止，**不要提交进仓库**。
+> ⚠️ 本机因 `reg.exe` 被策略拦截，D34 实际使用的是等价的 `.NET Registry` 值级快照（见上"证据文件"）。
+
 ### 9.2 接管与调度（Phase 4 出口）
 
 - [ ] 把 3 个程序分别设为 10 / 20 / 30 秒延时，接管
 - [ ] `schtasks /query /tn DelayStartScheduler /v /fo LIST` 确认触发方式为"登录时"、延迟 3 秒、最高权限
+  - ℹ️ 这一条**注册侧的验证已提前到 Phase 2**（D34），命令与核对点见 9.1 末尾的执行状态块。
+    此处要验的是**反过来的一半**：任务在登录时真的把调度端拉起来了，而不只是"任务本身长得对"。
 - [ ] **重启登录**，观察：
   - 各程序在预期时刻启动（秒表或录屏核对，偏差 < 1 秒）
   - `%LOCALAPPDATA%\DelayStart\runs\` 下生成当次运行记录

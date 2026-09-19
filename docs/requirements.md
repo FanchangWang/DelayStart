@@ -416,6 +416,14 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 - [ ] 未接管的计划任务 `Enabled` 状态零变化
 - [ ] 卸载/重置后系统回到接管前状态
 
+> **边界说明（2026-09-19 补，起因是一次误读）**：第 1 条刻意限定在 **`Run` 键**，因为软禁用本身
+> 就要往并行的 `StartupApproved` 子键写标记（FR-2.3）—— 若要求"注册表整表零变化"，就会与 FR-2 直接矛盾。
+> 本验收要证明的是「**我们从不改动用户的原值**」，而不是「我们不写任何字节」。
+> `StartupApproved` 下的标记变化属于**设计内的正常写入**，恢复时按 FR-2.2（启用 = 删除标记值）处理。
+>
+> **执行状态（D34，2026-09-19）**：第 1 / 3 / 4 条已在真机通过；第 2 条本轮未涉及（白名单不含启动文件夹项）。
+> 证据与逐条结论见 `build-and-test.md` 9.1 的执行状态块。
+
 ### 9.4 分发验收（D22 / D23）
 
 - [ ] 安装到**固定路径** `%LOCALAPPDATA%\Programs\DelayStart`，路径中**不含版本号**
@@ -439,8 +447,8 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | FR-3 接管 | `design-spec.md` 三之二 | `Management/Services/TakeoverService` + `Core/Services/ConfigService` | 手工端到端 |
 | FR-4 延时配置 | `design-spec.md` 三之二 / 页面 3 | `Core/Services/ConfigService` + `App/Dialogs/DelayEditorDialog.xaml` | 单元测试（校验/排序/持久化） |
 | FR-5 调度执行 | `scheduler-design.md` 第七 / 八节 | `Scheduler/*` + `Core/Services/DelayCalculator`、`LaunchResultEvaluator` | 手工（真机重启）+ 日志校验 |
-| FR-6 通知追溯 | `scheduler-design.md` 第三 / 五 / 九节 | `Scheduler/*` + `App/Views/LogPage.xaml` + `Core/Services/RunStateService` | 手工 |
-| FR-7 系统启动项 | `design-spec.md` 页面 4 | `Management/Services/ServiceQueryService`、`SystemStartupInspector` + `App/Views/SystemPage.xaml` | 手工 |
+| FR-6 通知追溯 | `scheduler-design.md` 第三 / 五 / 九节 | `Scheduler/*` + `App/Views/LogPage.xaml` + `Core/Services/RunStateService` + **`Core/Services/FailureStreakService`（D31：两端共用，角标升级数据源）** | 手工 + 单元测试（连续失败聚合） |
+| FR-7 系统启动项 | `design-spec.md` 页面 4 | ⏳ **本期不实现（D30）**：`Management/Services/ServiceQueryService`、`SystemStartupInspector` + `App/Views/SystemPage.xaml` 推到 **Phase 3/5** —— 本期无消费者且进不了单元测试 | 手工（延后） |
 | FR-8 运行日志 | `design-spec.md` 页面 5 | `App/Views/LogPage.xaml` + `Core/Services/RunStateService` | 手工 |
 | FR-9 设置 | `design-spec.md` 页面 6 | `App/Views/SettingsPage.xaml` + `Core/Services/ConfigService` | 手工 |
 | FR-10 模拟调度 | `design-spec.md` 页面 3 | `App/Services/SimulationService` + `App/Dialogs/SimulateDialog.xaml` | 手工 |
@@ -482,9 +490,15 @@ UWP 应用的"自启动"由系统 AppModel 调度，**第三方无法延后它�
 | **D27** | Phase 1（Core 层）的分工边界：P/Invoke 启动器是否本期落地 | A. **本期只做接口与纯逻辑**，`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 推到 **Phase 4** 与调度引擎一起写<br>B. 本期连同 P/Invoke 一起写完 | **✅ A（2026-09-19 批复）** —— P/Invoke 的正确性**只能在真实登录会话里验证**（提权继承 / `WTSQueryUserToken` / 降权回退三条路径都依赖真实令牌），Phase 1 写了也只能靠"编译通过"自证，等于假绿灯。Phase 1 交付 `IProcessLauncher` 接口 + `LaunchOutcome` / `LaunchEvaluation` 判定逻辑 + 假探针注入测试 | 🔴 |
 | **D28** | UWP 项的激活方式（AOT 约束下的唯一出路） | A. **`explorer.exe shell:AppsFolder\<AUMID>`**，纯 `Process.Start`，零 COM<br>B. 维持 demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown`<br>C. 砍掉 UWP 的延时启动（回退 D4 的 A） | **✅ A（2026-09-19 批复）** —— B 在 NativeAOT 下**运行时必抛 `PlatformNotSupportedException`**（无 built-in COM，见 R12），而 D24=B 已把调度端钉死在 AOT 上，B 不可能通。C 会推翻已批复的 D4。A 的代价是**拿不到 PID**：机制 7 的 1.5 秒复查对 UWP 不适用，`LaunchResultEvaluator` 对 `null` 快照**直接判成功**。**新增 R12 登记** | 🔴 |
 | **D29** | Phase 1 期间的文档修订项（F1–F4） | **F1** 修 `requirements.md` 追踪矩阵实现层路径（6 行）<br>**F2** `architecture.md` §2.1 补 `PathService`、§2.2 补三行<br>**F3** 删 Core 的 `Interop/Shell32.cs`（误植）<br>**F4** 登记 R12 | **✅ 全部执行（2026-09-19）** —— 均为一句话级修正，不改变任何行为约定，故合并进 Phase 1 一并处理。详见 `changelog.md` 第七轮 | 🟢 |
+| **D30** | Phase 2 是否连 `IconProvider` / `ServiceQueryService` / `SystemStartupInspector` 一起做 | A. **不做**，推到 Phase 3（图标）与 Phase 5（系统启动项只读页）<br>B. 本期一并写完 | **✅ A（2026-09-19 批复）** —— 三者本期**都没有消费者**：图标是纯 UI 依赖（Phase 2 无 UI）；服务查询与 Winlogon/驱动检查属 FR-7，其页面在 Phase 3。更关键的是按 `coding-standards.md` 14.1 它们**进不了单元测试**，写了只能靠"编译通过"自证 = 假绿灯，与 D27 同一条逻辑。`ServiceQueryService` 对应 FR-7，已在追踪矩阵标注延期 | 🟡 |
+| **D31** | `FailureStreakService`（连续失败聚合）放 Core 还是 Management | A. **搬进 Core**<br>B. 留在 Management | **✅ A（2026-09-19 批复）** —— 原文档三者互相矛盾，**这条链路原本实现不了**：`scheduler-design.md` 9.2 要求调度端托盘角标按连续失败次数升级 ≥3 次不消失 → 托盘在**调度端**；调度端**只引用 Core**（硬边界）；而同文档 339 行写"由**管理端**聚合计算" —— 但登录那一刻管理端根本没运行。正解：连续失败计算是**纯函数**（只吃 `RunRecord` 列表，不碰注册表 / 无 COM / 无反射），AOT 安全，搬进 Core 由两端共用。调度端仍"无状态"（每次现算、不维护计数器），与原意一致，只是把"谁算"从管理端扩到两端。**属文档错误修正，非新功能** | 🔴 |
+| **D32** | Phase 2 没有 UI，9.1「注册表导出对比零数据损坏」怎么执行 | A. **给管理端加 headless CLI**：`--restore-all` / `--reinstall-task`（D22 本就要求）+ 最小 `--takeover` / `--release`<br>B. 等到 Phase 3 有 UI 再验 | **✅ A（2026-09-19 批复）** —— B 的后果是整个 Phase 2 的产物**无法被真实执行**，出口条件（9.3 安全验收）只能推迟到两个阶段之后，问题会滚雪球。其中 `--restore-all` 是 **D22 卸载可逆性的必需品**（Inno `[Code]` 调它并检查退出码），迟早要写；`--reinstall-task` 是 D22「首启幂等注册」的同一入口。补最小 `--takeover` / `--release` 只多几十行，却能把 Phase 2 从"编译过"抬到"真跑过" | 🔴 |
+| **D33** | Management 层单元测试范围 | A. **本期做**：假 `IStartupSource` 测 FR-1.4、假 `IAppConfigStore` 测 FR-3.1 回滚<br>B. 只做手工验证 | **✅ A（2026-09-19 批复）** —— FR-1.4「单条失败不影响整次扫描」与 FR-3.1「任一步失败逆序回滚」是**纯编排逻辑**，用假实现就能确定性覆盖（含"第 3 步抛异常时第 1、2 步是否被撤销"这种手工几乎测不出的分支）。这是把本期出口从纯手工抬到有自动化证据的唯一机会。真机写入链路仍由 D32 的 CLI + 注册表导出对比覆盖 | 🟡 |
+| **D34** | `DelayStartScheduler` 计划任务本期真机注册还是推 Phase 4 | A. **本期做并验证**<br>B. 推到 Phase 4 与调度端一起 | **✅ A（2026-09-19 批复）** —— 验证不需要调度端能跑：`schtasks /query /tn DelayStartScheduler /v /fo LIST` 就能直接读出 FR-11.1 的三要素（登录触发 / 延迟 3s / `RunLevel=Highest`）**以及身份是否为当前交互用户**（🔴 不是 SYSTEM，见 `api-analysis.md` 3.1）。B 会把这个最容易静默出错、后果最严重（SYSTEM 身份下配置读不到且不报错）的环节一直拖到最后一个阶段 | 🟡 |
 
-> **D1–D29 现状**：D1–D25 已全部批复并冻结；**D27 / D28 / D29 于 Phase 1 期间批复**（均为 Phase 1 暴露出的分层与 AOT 边界问题）；
-> **仅 D26 仍待决策**（仅影响测试命令，不阻塞编码）。完整选项与论证见 `design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.9 D27** / **6.10 D28**）。
+> **D1–D34 现状**：D1–D25 已全部批复并冻结；**D27 / D28 / D29 于 Phase 1 期间批复**，**D30–D34 于 Phase 2 开工前批复**；
+> **仅 D26 仍待决策**（仅影响测试命令，不阻塞编码）。完整选项与论证见 `design-spec.md` 第六节
+> （6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.9 D27** / **6.10 D28** / **6.11 D30–D34**）。
 > D23 的 6 条实现规则见 `architecture.md` 1.5。
 >
 > **D26 背景（Phase 0 实测）**：`xunit.v3.mtp-v2` 4.0.1 + `Microsoft.Testing.Platform` 2.4.0 + .NET SDK 10.0.401 组合下，

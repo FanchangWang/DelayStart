@@ -514,6 +514,11 @@
 | **D27** | Phase 1（Core 层）是否连同 P/Invoke 启动器一起写 | A. **本期只做接口 + 纯逻辑**，`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 推到 Phase 4<br>B. 本期连 P/Invoke 一起写完（照 demo 移植） | **✅ A** —— 用户批复。P/Invoke 启动器的正确性只能在**真实登录会话**里验证（见 6.9），Phase 1 写了只能靠编译通过自证。派生出 `IProcessLauncher` 接口留白 + 已落地的判定逻辑 | 🔴 |
 | **D28** | UWP 项怎么激活（AOT 约束下） | A. **`explorer.exe shell:AppsFolder\<AUMID>`**（纯 `Process.Start`，零 COM）<br>B. 维持 demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown`<br>C. 砍掉 UWP 延时（回退 D4 的 A） | **✅ A** —— 用户批复。B 在 NativeAOT 下运行时必抛 `PlatformNotSupportedException`（R12），与 D24=B 的 AOT 前提直接冲突；C 推翻 D4。代价：无 PID → 机制 7 不适用，`null` 快照判成功。详见 6.10 | 🔴 |
 | **D29** | Phase 1 期间的文档修订（F1–F4） | F1 `requirements.md` 追踪矩阵实现层 6 行路径<br>F2 `architecture.md` 2.1 / 2.2 补 `PathService` 等<br>F3 删 Core 的 `Interop/Shell32.cs`<br>F4 登记 R12 | **✅ 全部执行** —— 均为一句话级修正，不改变行为约定，故并入 Phase 1。详见 `changelog.md` 第七轮 | 🟢 |
+| **D30** | Phase 2 是否连 `IconProvider` / `ServiceQueryService` / `SystemStartupInspector` 一起做 | A. **不做**，推到 Phase 3（图标）/ Phase 5（系统启动项只读页）<br>B. 本期一并写完 | **✅ A** —— 三者本期没有消费者，且进不了单元测试（14.1），写了只能靠"编译通过"自证 = 假绿灯，与 D27 同一条逻辑。详见 6.11 | 🟡 |
+| **D31** | `FailureStreakService`（连续失败聚合）放 Core 还是 Management | A. **搬进 Core**，两端共用<br>B. 留在 Management | **✅ A** —— 原文档三处互相矛盾（调度端要角标 / 调度端只引用 Core / 却写"由管理端聚合"），该链路原本实现不了。计算是纯函数，AOT 安全。**属文档错误修正**。详见 6.11 | 🔴 |
+| **D32** | Phase 2 没有 UI，安全验收怎么执行 | A. **给管理端加 headless CLI**（`--restore-all` / `--reinstall-task` / `--takeover` / `--release`）<br>B. 等到 Phase 3 有 UI 再验 | **✅ A** —— B 会让整个 Phase 2 的产物无法被真实执行。`--restore-all` 本就是 D22 卸载可逆性的必需品。详见 6.11 | 🔴 |
+| **D33** | Management 层单元测试范围 | A. **本期做**（假 `IStartupSource` 测 FR-1.4、假 Store 测 FR-3.1 回滚）<br>B. 只做手工验证 | **✅ A** —— 编排逻辑用假实现可确定性覆盖，含手工几乎测不出的"第 3 步抛异常时前两步是否被撤销"。详见 6.11 | 🟡 |
+| **D34** | `DelayStartScheduler` 本期真机注册还是推 Phase 4 | A. **本期做并验证**<br>B. 推到 Phase 4 | **✅ A** —— 验证不需要调度端能跑，`schtasks /query /v /fo LIST` 就能读出三要素与身份。B 会把最易静默出错（SYSTEM 身份下配置读不到且不报错）的环节拖到最后。详见 6.11 | 🟡 |
 
 > **D14–D19 归属调度端**，完整论证、技术硬约束（AOT / elevated 通知限制）、通知文案矩阵、跨进程状态文件设计见独立文档 **`docs/scheduler-design.md`**。
 > **D20 / D21 / D22 / D23 / D24 的完整论证见下方 6.2 / 6.3 / 6.4 / 6.5 / 6.6**，工程落地见 `architecture.md` 1.4 / 1.5 与 `build-and-test.md` 第一、二、七节。
@@ -912,6 +917,104 @@ demo 用 `CoCreateInstance(CLSID_ApplicationActivationManager)` + `[ComImport]` 
 
 > **登记新风险 R12**（`architecture.md` 第九节）：AUMID 的取得方式（`Get-StartApps` / `PackageManager`）、
 > 以及 `shell:AppsFolder` 在**提升权限进程**中是否仍能激活（UIPI 相关）—— 后者 Phase 4 真机实测覆盖。
+
+### 6.11 ✅ D30–D34（Phase 2 开工前批复）：范围界定与一处文档错误修正
+
+Phase 2 是 Management 层，第一次真正**写系统**（注册表 / 启动文件夹 / 计划任务 / UWP 状态）。
+开工前提了五个决策点，其中 **D31 不是新功能，是文档里的真错误**。
+
+#### 6.11.1 D30：本期**不做**的三件事
+
+`IconProvider` / `ServiceQueryService` / `SystemStartupInspector` 推到 Phase 3（图标）与 Phase 5（系统启动项只读页）。
+
+三条理由，按重要性排序：
+
+1. **没有消费者**。图标是纯 UI 依赖，Phase 2 没有 UI；FR-7 的只读检查页属 Phase 3。
+2. **进不了单元测试**（`coding-standards.md` 14.1）。三者都直接依赖真实系统状态（`IShellItemImageFactory` / SCM / 注册表），
+   无法用假实现确定性覆盖 —— 写了只能靠"编译通过"自证，**这正是 D27 拒绝在 Phase 1 写 P/Invoke 启动器的同一条逻辑**。
+3. **它们不构成任何验收项的阻塞**。9.1 / 9.3 的验收点全部落在四个 Source 与接管链路上。
+
+> 换句话说：这两期的判据是**「能不能被自动化验证」**，不是「重不重要」。
+> 它们重要，但此刻写出来只是无证据的代码。
+
+#### 6.11.2 D31：`FailureStreakService` 的归属 —— 文档三处互相矛盾
+
+这是 Phase 2 提案里唯一一个**必须改文档**的问题，因为按原文实现不出来：
+
+| # | 文档原话 | 位置 |
+|---|---|---|
+| 1 | 提醒三级升级含「**托盘角标**」≥3 次不自动消失 | `scheduler-design.md` 9.2 |
+| 2 | 托盘是**调度端**的（无主窗口、仅托盘） | D14 / `architecture.md` 六 |
+| 3 | 调度端**只引用 Core**（硬边界，写在分层表与硬约束里） | `architecture.md` 1.2 / `README.md` |
+| 4 | 「连续失败次数由**管理端**聚合计算」 | `scheduler-design.md` 339 行 |
+
+1 + 2 要求在调度端起角标；3 说调度端只能看见 Core；4 却把计算放在 Management ——
+而**登录那一刻管理端根本没在运行**，它不可能算出调度端要用的数。
+
+**正解：把计算搬进 Core。**
+
+```
+连续失败次数 = f(RunRecord 列表)      // 纯函数，只读归档，不碰系统
+```
+
+- 满足 3：Core 是两端唯一共享层，调度端能拿到
+- 满足 1 + 2：调度端每次**现算**（无状态，不维护计数器），与原设计"不存计数"的意图一致
+- 满足 4 的**本意**：只是把"谁来算"从管理端扩到两端，而非推翻它
+
+选它还有一个附带好处：它是**纯逻辑**，可以注入假的 `RunRecord` 列表做确定性测试 ——
+若留在 Management 且依赖真实 `runs/` 目录，测试就得操作文件系统。
+
+> ⚠️ 这与 `RunRecord` 的注释直接冲突（原文写"由 **Management 层的** `FailureStreakService`"），
+> 该注释在本次一并更正。
+
+#### 6.11.3 D32：headless CLI —— 让 Phase 2 的产物**能被真实执行**
+
+Phase 2 出口条件是 `build-and-test.md` 9.1 的**全量快照对比 —— 三个 `Run` 键的值数量与内容零变化**（= `requirements.md` 9.3 第 1 条）。
+但 `TakeoverService` 的调用方是管理端 UI，UI 在 Phase 3 —— 于是验收点变成**无入口可达**。
+
+选 B（推到 Phase 3）的代价是滚雪球：Phase 2 写完全部写入链路却一次都没跑过，
+等到 Phase 3 才第一次碰真实注册表，那时**栈已经有三层深**，出错无法定位是哪一层的假设错了。
+
+**A 的四条命令，其中两条本来就必须写**：
+
+| 命令 | 用途 | 出处 |
+|---|---|---|
+| `--restore-all` | 还原全部接管项 + 返回退出码 | **D22 卸载可逆性必需**（Inno `[Code] InitializeUninstall()` + `ewWaitUntilTerminated` + 非 0 中止卸载） |
+| `--reinstall-task` | 幂等注册/更新 `DelayStartScheduler` | **D22「管理端首启幂等注册」的同一入口** |
+| `--takeover` / `--release` | 最小接管/释放，供验证据 | 本期新增，几十行 |
+
+> 🔴 `--restore-all` **必须**返回有意义的退出码：`[UninstallRun]` 读不到退出码，
+> 所以卸载还原只能走 `[Code]` + `ewWaitUntilTerminated`。
+> 违反的后果是用户卸载后所有程序**永久不自启且不知情** —— 本项目最严重的潜在缺陷。
+
+#### 6.11.4 D33：Management 层单测范围
+
+两条纯编排逻辑，用假实现可确定性覆盖：
+
+| 需求 | 怎么测 | 为什么手工测不出来 |
+|---|---|---|
+| **FR-1.4** 单条读取失败不影响整次扫描 | 假 `IStartupSource` 中一个实例 `Scan()` 抛异常，断言其余 Source 的结果仍然汇总、异常被记日志 | 真机上很难**按需**造出"某一个计划任务读取抛异常" |
+| **FR-3.1** 任一步失败逆序回滚 | 假 Store 让第 3 步抛异常，断言第 1、2 步已被撤销（配置里没有半成品条目、系统项未被禁用） | 这是"失败路径"，正常操作永远走不到 |
+
+真机写入链路（12 字节标记、`Run32` 分流、三级回退）仍由 **D32 的 CLI + 注册表导出对比**覆盖 —— 两层互补，不重复。
+
+#### 6.11.5 D34：计划任务本期验证
+
+验证**不需要调度端能跑**。`schtasks /query /tn DelayStartScheduler /v /fo LIST` 直接可读：
+
+| FR-11.1 要素 | 在 `schtasks` 输出里的位置 |
+|---|---|
+| 登录触发 | `计划类型: 登录时` / `Logon Mode` |
+| 延迟 3s | 触发器内的 `延迟` / `Delay` 字段 |
+| `RunLevel=Highest` | `以最高权限运行` / `运行级别` |
+| 🔴 **身份是当前交互用户** | `运行身份` / `作为用户` —— 必须**不是** `SYSTEM` |
+
+**为什么不能推后**：SYSTEM 身份下 `%APPDATA%` 解析到
+`C:\Windows\System32\config\systemprofile`，配置读不到、日志写错位置，**且不抛任何异常**（静默失效）。
+这是全项目最容易静默出错的一处，拖到最后一个阶段意味着它可能一直没被验证过。
+
+> 注：`api-analysis.md` 3.1 要求用 `TaskService` API 而非 `schtasks.exe` 创建（FR-11.3），
+> 但**验证**用 `schtasks` 只读查询反而更可信 —— 它是独立的第三方视角，不依赖本程序自己的代码解释结果。
 
 ---
 

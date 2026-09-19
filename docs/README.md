@@ -53,7 +53,7 @@
 
 ## 决策点状态
 
-**D1–D25 已全部批复完毕并冻结；D27 / D28 / D29 于 Phase 1 期间批复。仅 D26（测试命令走向）待决策，不阻塞编码。**
+**D1–D25 已全部批复完毕并冻结；D27 / D28 / D29 于 Phase 1 期间批复；D30–D34 于 Phase 2 开工前批复。仅 D26（测试命令走向）待决策，不阻塞编码。**
 
 **Phase 0 出口条件已全部达成**；**Phase 1（Core 层）已完成**：5 个项目 Release 构建 0 警告 0 错误、**128 个单元测试全绿**。
 
@@ -88,8 +88,13 @@
 | **D27** | **Phase 1 是否连 P/Invoke 启动器一起写** | **✅ A — 本期只做接口 + 纯逻辑**：`ProcessLauncher` / `TokenHelper` / `Core/Interop/*` 推到 **Phase 4** 与调度引擎一起落地。理由：P/Invoke 的正确性只能在**真实登录会话**里验证，Phase 1 写了只能靠编译通过自证（假绿灯）。见 `design-spec.md` 6.9 |
 | **D28** | **UWP 项怎么激活（AOT 约束下）** | **✅ A — `explorer.exe shell:AppsFolder\<AUMID>`**，纯 `Process.Start`、零 COM。B（demo 的 `IApplicationActivationManager` + `Marshal.GetObjectForIUnknown`）在 NativeAOT 下**运行时必抛 `PlatformNotSupportedException`**，与 D24=B 的 AOT 前提直接冲突。**代价：拿不到 PID → 机制 7 不适用，`null` 快照判成功。新增 R12**。见 `design-spec.md` 6.10 |
 | **D29** | **Phase 1 期间的文档修订（F1–F4）** | **✅ 全部执行**：F1 追踪矩阵实现层 6 行路径、F2 `architecture.md` 2.1/2.2 补 `PathService` 等、F3 删 Core 的 `Interop/Shell32.cs`（误植）、F4 登记 R12。均为一句话级修正，不改变行为约定 |
+| **D30** | **Phase 2 是否连图标 / 服务查询 / 系统启动项检查一起做** | **✅ A — 本期不做**，推到 Phase 3（`IconProvider`）与 Phase 5（`ServiceQueryService` / `SystemStartupInspector`）。三者本期无消费者，且按 14.1 进不了单元测试 → 只能靠编译自证（假绿灯，同 D27 逻辑）。FR-7 在追踪矩阵已标注延期 |
+| **D31** | **`FailureStreakService` 归属（🔴 文档错误修正）** | **✅ A — 搬进 Core**。原文档三处互相矛盾（调度端要角标 / 调度端只引用 Core / 却写"由管理端聚合"），该链路原本**实现不了** —— 登录那一刻管理端没运行。连续失败计算是纯函数、AOT 安全，两端共用；调度端仍无状态（现算不存计数）。见 `design-spec.md` 6.11.2 |
+| **D32** | **Phase 2 无 UI 时怎么执行安全验收** | **✅ A — 给管理端加 headless CLI**：`--restore-all` / `--reinstall-task`（D22 本来就要求）+ `--takeover` / `--release`。B（等 Phase 3）会让整个 Phase 2 的写入链路一次都没跑过就进入下一阶段。见 `design-spec.md` 6.11.3 |
+| **D33** | **Management 层单元测试范围** | **✅ A — 本期做**：假 `IStartupSource` 测 FR-1.4「单条失败不影响整次扫描」、假 `IAppConfigStore` 测 FR-3.1「任一步失败逆序回滚」（含手工测不出的失败路径）。真机写入链路由 D32 的 CLI + 注册表导出对比覆盖，两层互补 |
+| **D34** | **`DelayStartScheduler` 本期真机注册还是推 Phase 4** | **✅ A — 本期做并验证**：用 `schtasks /query /v /fo LIST` 只读核对三要素（登录触发 / 延迟 3s / `Highest`）**与身份是否为当前交互用户**（🔴 必须不是 SYSTEM —— SYSTEM 下 `%APPDATA%` 解析到 `systemprofile`，配置读不到且**不报任何错**）。验证不需要调度端能跑 |
 
-> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26** / **6.9 D27** / **6.10 D28**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R1–**R12**、`build-and-test.md` 第一、二、四、七、九节。
+> 详细选项与论证：`design-spec.md` 第六节（6.1 D17 / 6.2 D20 / 6.3 D21 / 6.4 D22 / 6.5 D23 / **6.6 D24** / **6.7 D25** / **6.8 D26** / **6.9 D27** / **6.10 D28** / **6.11 D30–D34**）。工程落地：`architecture.md` 1.3 / 1.4 / 1.5 / 第九节 R1–**R12**、`build-and-test.md` 第一、二、四、七、九节。
 >
 > ✅ **Phase 0（2026-09-19）出口条件全部达成**：骨架生成完毕、Release 构建 **0 警告 0 错误**、冒烟测试 2/2 通过、
 > manifest 三个标记确认嵌入 exe、**R3 / R8 / R9 三项人工验证由用户在 VS 之外实测通过**、模板残留清理完毕（D25）。

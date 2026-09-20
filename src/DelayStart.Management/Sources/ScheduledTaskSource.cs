@@ -136,8 +136,9 @@ public sealed class ScheduledTaskSource : IStartupSource
             return null;
         }
 
-        // 自身的调度任务不是"自启动项"，不列给用户 —— 它的生命周期由本程序管理（FR-11）。
-        if (path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase))
+        // 自身的调度任务与普通用户代理任务不是"自启动项"，不列给用户 ——
+        // 它们的生命周期由本程序管理（FR-11 / D38）。旧版根任务一并排除（迁移过渡期）。
+        if (IsOwnedTask(path))
         {
             return null;
         }
@@ -188,6 +189,13 @@ public sealed class ScheduledTaskSource : IStartupSource
             IsProtected = false,
             IsTakenOver = takenOverKeys.Contains(id),
         };
+    }
+
+    /// <summary>判定是否为本程序自己的计划任务（根任务 / D38 遗留文件夹双任务）。</summary>
+    private static bool IsOwnedTask(string path)
+    {
+        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(@"\" + TaskRegistrationService.LegacyFolderName + @"\", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>常见的"包装器"可执行文件名（小写）—— 它们只是拉起真正程序的跳板。</summary>

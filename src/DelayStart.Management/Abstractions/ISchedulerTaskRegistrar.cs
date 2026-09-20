@@ -3,7 +3,8 @@ using DelayStart.Core.Models;
 namespace DelayStart.Management.Abstractions;
 
 /// <summary>
-/// 调度端计划任务（<c>DelayStartScheduler</c>）的注册、更新与删除（FR-11）。
+/// 调度端与普通用户代理计划任务（<c>\DelayStart\Scheduler</c> / <c>\DelayStart\Agent</c>，
+/// D38）的注册、更新与删除（FR-11）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,7 +18,7 @@ namespace DelayStart.Management.Abstractions;
 /// </remarks>
 public interface ISchedulerTaskRegistrar
 {
-    /// <summary>调度端计划任务的完整路径（形如 <c>\DelayStartScheduler</c>）。</summary>
+    /// <summary>调度端计划任务的完整路径（形如 <c>\DelayStart\Scheduler</c>）。</summary>
     string TaskPath { get; }
 
     /// <summary>计划任务当前是否存在且指向本程序安装目录下的调度端。</summary>

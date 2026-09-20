@@ -62,7 +62,8 @@ internal static unsafe partial class NativeMethods
 
     public const int GwlpUserdata = -21;
 
-    public const int LrDefaultsize = 0x00000040;
+    // ⚠️ 刻意不声明 LR_DEFAULTSIZE：CreateIconFromResourceEx 带上它会把条目放大到
+    //    SM_CXICON(32)，再被托盘缩回 16 —— 白搭两次重采样。见 IconResources.TrayIconSize。
 
     // ---- 托管 / 原生桥 ----
 

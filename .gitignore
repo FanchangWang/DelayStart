@@ -101,6 +101,9 @@ BundleArtifacts/
 *.appxbundle
 *.appxupload
 
+# 安装包与 publish 产物（installer\build-installer.ps1 输出）
+dist/
+
 # 本地 NuGet 源覆盖（若某台机器需要走代理或镜像，用 NuGet.config 的本地覆盖，
 # 不要把机器相关配置提交上去）
 NuGet.config.local

@@ -10,7 +10,14 @@
       ★ OutputType 必须是 WinExe（不是 Exe）——用 Exe 会在登录瞬间闪一个控制台黑框。
       AOT 与体积约束见 docs/architecture.md 8.1；发布配置见 docs/build-and-test.md 6.3。
     -->
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!--
+      ★ 目标架构（D60-2）：可由命令行覆盖 —— dotnet publish -r win-arm64。
+      默认 win-x64 便于本地开发。
+      ⚠️ arm64 需要主机装有 MSVC 的 ARM64 工具集（组件 ID
+      Microsoft.VisualStudio.Component.VC.Tools.ARM64）；本机 2026-09-20 实测**未装**，
+      故 arm64 产物唯一由 CI 产出（.github/workflows/release.yml）。
+    -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>
     <StripSymbols>true</StripSymbols>
@@ -43,18 +50,40 @@
     <!--
       ★ 托盘图标以普通嵌入资源进程序集（scheduler-design.md 六：禁 .resx，AOT 下加载必失败）。
       运行时手工解析 ICO 容器 + CreateIconFromResourceEx 生成 HICON，零反射。
+      ⚠️ 两枚都是 10 档多尺寸容器（tools/make-icon.py 生成），加载端按托盘尺寸挑条目 ——
+        见 IconResources.TrayIconSize。
     -->
     <EmbeddedResource Include="Assets\Scheduler.ico" />
     <EmbeddedResource Include="Assets\SchedulerWarning.ico" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <!--
+      ★ exe 自身的图标（D63 用户要求："DelayStart.Scheduler.exe 要不要换图标？"）。
+      ⚠️ 这跟上面那两枚 EmbeddedResource 是**两回事**：EmbeddedResource 管"文件随程序
+        发布 + 运行时自己解析"，ApplicationIcon 管"图标写进 PE 资源，让资源管理器 /
+        任务管理器 / 通知区域能直接读到"。少写这一行，调度端在系统里就是 .NET 默认图标。
+      ⚠️ 用 Scheduler.ico 而不是 AppIcon.ico：它是 10 档多尺寸，256 档在"大图标"
+        视图下也清晰。
+    -->
+    <ApplicationIcon>Assets\Scheduler.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 链接器需要的 Windows SDK 库目录按目标架构切换（D60-2）。 -->
+    <_WinSdkLibArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_WinSdkLibArch>
+    <_WinSdkLibArch Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</_WinSdkLibArch>
+  </PropertyGroup>
+
   <ItemGroup>
     <!--
       ★ 本机 VS 2026 的 vcvarsall 未自动带出 Windows SDK 的 um/ucrt 库路径
-        （LNK1181: advapi32.lib），这里显式补上（10.0.26100.0，本机唯一已装 SDK）。
+        （LNK1181: advapi32.lib），这里显式补上（10.0.26100.0）。
+      ⚠️ 目录加了 Exists 条件：CI 的 runner 若没装这个版本的 SDK 就跳过，
+        而不是抛一个看不懂的路径错误 —— 真正缺库时链接器仍会报 LNK1181。
     -->
-    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64" />
-    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64" />
+    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\$(_WinSdkLibArch)" Condition="Exists('C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\$(_WinSdkLibArch)')" />
+    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\$(_WinSdkLibArch)" Condition="Exists('C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\$(_WinSdkLibArch)')" />
   </ItemGroup>
 
 </Project>

@@ -70,6 +70,16 @@
 
 图标资源必须**嵌入为程序集资源**（`Assembly.GetManifestResourceStream`），**不能用 `.resx`** —— WinForms 的 `.resx` 资源加载在 NativeAOT 下会失败。这是实测踩过的坑，见第六节。
 
+> 🔴 **D63（2026-09-21）补充——两枚 ico 的形态与加载方式**：
+> ① 素材来自 `assets/icon/delay.png`，由 `tools/make-icon.py --roles tray` 生成
+> `Assets/Scheduler.ico` 与 `Assets/SchedulerWarning.ico`（告警角标是脚本手绘的红圆 + 白叹号）；
+> 它们同时充当 exe 图标（csproj 的 `<ApplicationIcon>`），因此是 **10 档多尺寸容器**，不是单张 32×32。
+> ② 因此 `IconResources` **不能"取第一个条目"**（首条是 16×16）：改为**按目标尺寸挑条目**
+> （优先 ≤ 32 的最大档），并把 cx/cy 显式传给 `CreateIconFromResourceEx`（**不带**
+> `LR_DEFAULTSIZE` —— 那会把 16×16 放大到 32 再被外壳缩回 16，白搭两次重采样）。
+> 目标尺寸取 **32** 而不是 `GetSystemMetrics(SM_CXSMICON)`：调度端没有 DPI 感知声明，
+> 那个值恒为 16，在 150%/200% 下等于发一个 16px 位图让外壳放大。
+
 ### 3.2 悬停 tooltip 文案
 
 `NotifyIcon.Text` 有 **63 字符上限**（超出会抛异常），且**不支持换行**（换行符会被显示为空格）。所以只能压成一行：

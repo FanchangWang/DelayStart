@@ -12,6 +12,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
 
+    <!--
+      ★ 版本号唯一来源（D60-5）。安装脚本从本文件解析它，再用 ISCC /DAppVersion 注入 iss，
+      保证「程序集版本 = 文件版本 = 安装程序版本」三者同源。
+      ⚠️ 改版本只改这一行 —— installer/DelayStart.iss 里的 AppVersion 只是缺省值，
+      手工编译时才生效；正式构建一律由 installer/build-installer.ps1 传入。
+    -->
+    <Version>0.1.0</Version>
+
     <!-- 验收标准是零警告。不要用 #pragma warning disable 绕过。 -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>

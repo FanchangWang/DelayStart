@@ -1,0 +1,114 @@
+name: Release
+
+# D60-4：两种触发都要 —— 推 v* 标签自动出包并建 Release；同时留手动入口，
+# 方便版本号没变时试构建（手动触发只产出 artifact，不建 Release）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.0）。留空则读 Directory.Build.props'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: ${{ matrix.rid }} · ${{ matrix.flavor }}
+    runs-on: windows-latest
+    strategy:
+      # 一个架构失败不要拖掉其余三个：四个包各自独立，能出几个是几个
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64, slim: false, flavor: full }
+          - { rid: win-x64, slim: true, flavor: slim }
+          - { rid: win-arm64, slim: false, flavor: full }
+          - { rid: win-arm64, slim: true, flavor: slim }
+
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+
+      # win-arm64 的 NativeAOT 需要 ARM64 链接器。runner 上若没有这个组件，
+      # 失败会发生在链接阶段且报错难懂 —— 提前一步给出可读的结论。
+      - name: 检测 MSVC ARM64 工具集
+        if: matrix.rid == 'win-arm64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "找不到 vswhere.exe" }
+          $path = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $path) {
+            throw "缺少 MSVC ARM64 工具集（Microsoft.VisualStudio.Component.VC.Tools.ARM64），win-arm64 的 NativeAOT 无法链接。"
+          }
+          Write-Host "ARM64 工具集可用：$path"
+
+      - name: 安装 Inno Setup 6
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          # build-installer.ps1 自己会探测路径；这里只做一次可见性确认
+          Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" | Select-Object -ExpandProperty FullName
+
+      - name: 构建安装包
+        shell: pwsh
+        run: |
+          # tag 触发的版本号以标签为准（v0.2.0 → 0.2.0），否则读 Directory.Build.props
+          $version = ''
+          if ($env:GITHUB_REF -like 'refs/tags/*') { $version = $env:GITHUB_REF_NAME -replace '^v', '' }
+          elseif ('${{ inputs.version }}')          { $version = '${{ inputs.version }}' }
+
+          $buildArgs = @{ Rid = '${{ matrix.rid }}' }
+          if ('${{ matrix.slim }}' -eq 'true') { $buildArgs.Slim = $true }
+          if ($version) { $buildArgs.Version = $version; Write-Host "版本号（外部指定）：$version" }
+
+          ./installer/build-installer.ps1 @buildArgs
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-${{ matrix.rid }}-${{ matrix.flavor }}
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: 发布 GitHub Release
+    needs: build
+    # 手动触发时不出 Release —— 避免每次试构建都多一个版本
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总安装包
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列出产物
+        run: ls -lh dist
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.exe \
+            --title "DelayStart ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag

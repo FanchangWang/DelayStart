@@ -98,6 +98,11 @@ public sealed partial class ServiceQueryService
                 // sizeof = 8 + 8 + 36 向上取整到 8 的倍数 = **56**。
                 // 曾经写成 7 * 4 = 44：每条漂移 12 字节，前几条正常、往后指针读到垃圾值，
                 // 在 PtrToStringUni 上直接 AV —— 而 AV 是损坏状态异常，外层 catch 拦不住。
+                // ⚠️ 这个 56 是 **64 位布局**（两个 8 字节指针 + 36 字节 SERVICE_STATUS_PROCESS，
+                //    向上对齐到 8 的倍数）。32 位进程下两个指针各 4 字节 → 应为 4+4+36 = 44。
+                //    D60 决策：本项目只产出 win-x64 / win-arm64 安装包，故保持 56；
+                //    🔴 若日后要支持 win-x86，**必须先改这里**（换 Marshal.SizeOf<结构体>()
+                //    或按 IntPtr.Size 分支），否则每条漂移 12 字节。
                 const int entrySize = 8 + 8 + 9 * 4 + 4; // 56 = 两个指针 + 36 字节 + 尾部对齐填充
 
                 for (var index = 0; index < returned; index++)

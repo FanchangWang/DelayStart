@@ -17,6 +17,17 @@ namespace DelayStart.Scheduler;
 /// </remarks>
 internal sealed class IconResources : IDisposable
 {
+    /// <summary>
+    /// 托盘图标请求的 HICON 边长（像素）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 刻意**不**用 <c>GetSystemMetrics(SM_CXSMICON)</c>：本进程没有 DPI 感知声明，
+    /// 那个值恒为 16，在 150%/200% 缩放下等于把 16px 的位图交给外壳放大 —— 糊。
+    /// 取 32 的实际效果：100% 由外壳缩到 16（1:2 整数比，干净）、150% 缩到 24、
+    /// 200% 直接用满 32。即"发一个偏大的位图让外壳往下缩"，是托盘图标的常规做法。
+    /// </remarks>
+    private const int TrayIconSize = 32;
+
     private readonly nint _normal;
     private readonly nint _warning;
 
@@ -83,7 +94,13 @@ internal sealed class IconResources : IDisposable
         }
     }
 
-    /// <summary>解析 ICO 容器并生成 HICON。取容器内第一个条目（本项目的图标资源只含一个尺寸）。</summary>
+    /// <summary>解析 ICO 容器并生成 HICON：挑一枚最贴合托盘尺寸的条目。</summary>
+    /// <remarks>
+    /// 🔴 不要"取第一个条目"。图标资源是 10 档的多尺寸容器（<c>tools/make-icon.py</c> 生成），
+    /// 目录按尺寸升序排，第一个是 16×16；配上 <c>LR_DEFAULTSIZE</c> 会被系统放大到 32×32、
+    /// 再被外壳缩回 16×16 —— 两次重采样，肉眼可见地糊。这里按目标尺寸挑条目并把
+    /// cx/cy 显式传下去，全程只重采样一次（或一次都不需要）。
+    /// </remarks>
     private static unsafe nint CreateIconFromIcoBytes(byte[] icoBytes)
     {
         if (icoBytes.Length < 6)
@@ -97,9 +114,16 @@ internal sealed class IconResources : IDisposable
             return 0;
         }
 
-        // ICONDIRENTRY 从偏移 6 开始，每条 16 字节；取第一个条目的数据段。
-        var dataOffset = ReadUInt32(icoBytes, 6 + 12);
-        var dataLength = ReadUInt32(icoBytes, 6 + 8);
+        var entryIndex = PickEntryIndex(icoBytes, entryCount, out var entrySize);
+        if (entryIndex < 0)
+        {
+            return 0;
+        }
+
+        // ICONDIRENTRY 从偏移 6 开始，每条 16 字节：+8 = 数据长度，+12 = 数据偏移。
+        var directoryOffset = 6 + (16 * entryIndex);
+        var dataOffset = ReadUInt32(icoBytes, directoryOffset + 12);
+        var dataLength = ReadUInt32(icoBytes, directoryOffset + 8);
         if (dataOffset + dataLength > icoBytes.Length)
         {
             return 0;
@@ -112,10 +136,56 @@ internal sealed class IconResources : IDisposable
                 dataLength,
                 icon: true,
                 0x00030000,
-                0,
-                0,
-                NativeMethods.LrDefaultsize);
+                entrySize,
+                entrySize,
+                0);
         }
+    }
+
+    /// <summary>
+    /// 在 ICO 目录里挑最合适的条目：优先"不超过目标尺寸里最大的那枚"，都没有则取最小的那枚。
+    /// </summary>
+    /// <param name="icoBytes">完整 ICO 字节。</param>
+    /// <param name="entryCount">目录条目数。</param>
+    /// <param name="entrySize">选中的边长（正方形，取宽高中较小者）。</param>
+    /// <returns>目录下标；无法解析时 -1。</returns>
+    private static int PickEntryIndex(byte[] icoBytes, int entryCount, out int entrySize)
+    {
+        var bestFitIndex = -1;
+        var bestFitSize = 0;
+        var smallestIndex = -1;
+        var smallestSize = int.MaxValue;
+
+        for (var i = 0; i < entryCount; i++)
+        {
+            var offset = 6 + (16 * i);
+
+            // ICO 的宽高字段各占一个字节，装不下 256 —— 0 就表示 256。
+            var width = icoBytes[offset] == 0 ? 256 : icoBytes[offset];
+            var height = icoBytes[offset + 1] == 0 ? 256 : icoBytes[offset + 1];
+            var size = Math.Min(width, height);
+
+            if (size <= TrayIconSize && size > bestFitSize)
+            {
+                bestFitSize = size;
+                bestFitIndex = i;
+            }
+
+            if (size < smallestSize)
+            {
+                smallestSize = size;
+                smallestIndex = i;
+            }
+        }
+
+        if (bestFitIndex >= 0)
+        {
+            entrySize = bestFitSize;
+            return bestFitIndex;
+        }
+
+        entrySize = smallestIndex >= 0 ? smallestSize : 0;
+        return smallestIndex;
     }
 
     private static ushort ReadUInt16(byte[] data, int offset)

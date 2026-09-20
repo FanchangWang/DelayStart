@@ -73,7 +73,7 @@ internal static class CliHost
                 "--scan" => RunScan(cli),
                 "--takeover" => RunTakeover(cli, args),
                 "--release" => RunRelease(cli, args),
-                "--restore-all" => RunRestoreAll(cli),
+                "--restore-all" => RunRestoreAll(cli, args),
                 "--reinstall-task" => RunReinstallTask(cli),
                 _ => UnknownCommand(command),
             };
@@ -189,7 +189,25 @@ internal static class CliHost
         return ExitFailure;
     }
 
-    private static int RunRestoreAll(CliServices services)
+    /// <summary>
+    /// <c>--restore-all</c>：还原全部接管项并删除计划任务（D22 的卸载路径）。
+    /// </summary>
+    /// <param name="services">共享服务。</param>
+    /// <param name="args">原始命令行，用于取可选的 <c>--result-file</c>。</param>
+    /// <remarks>
+    /// <para>
+    /// 🔴 D61（2026-09-21 真机实测）：本命令**必须提权才能跑**（app.manifest 是
+    /// <c>requireAdministrator</c>），而 Inno 的卸载器以 <c>PrivilegesRequired=lowest</c>
+    /// 运行，其 <c>Exec</c>（CreateProcess）打不开提权目标 —— 直接 740
+    /// （ERROR_ELEVATION_REQUIRED），还原动作根本不会发生。
+    /// </para>
+    /// <para>
+    /// 卸载流程因此改用 <c>ShellExec('runas', ...)</c> 拉起（弹一次 UAC），代价是
+    /// **拿不到退出码**。所以约定：用 <c>--result-file &lt;路径&gt;</c> 把退出码写进文件，
+    /// 卸载器起完进程后回读该文件 —— D22「非 0 就中止卸载」的保证靠它维持。
+    /// </para>
+    /// </remarks>
+    private static int RunRestoreAll(CliServices services, string[] args)
     {
         var outcome = services.Takeover.RestoreAll();
 
@@ -208,7 +226,49 @@ internal static class CliHost
             Console.Error.WriteLine("⚠ 存在未还原的条目 —— 卸载流程**必须中止**，否则这些程序将永久失去自启动且用户毫不知情。");
         }
 
+        WriteResultFile(args, outcome.ExitCode);
+
         return outcome.ExitCode;
+    }
+
+    /// <summary>
+    /// 把退出码写进 <c>--result-file &lt;路径&gt;</c> 指定的文件（D61）。
+    /// </summary>
+    /// <param name="args">原始命令行。</param>
+    /// <param name="exitCode">本次执行的退出码。</param>
+    /// <remarks>
+    /// 供"以提升权限拉起、拿不到退出码"的调用方（Inno 卸载器）回读。
+    /// 没传参数、或写盘失败都**静默忽略** —— 本命令的主职责是还原系统启动项，
+    /// 结果文件只是给卸载器的旁路通道，绝不能因为它挡掉退出码。
+    /// 文件内容就是十进制整数（无换行），卸载器按 <c>StrToIntDef</c> 解析。
+    /// </remarks>
+    private static void WriteResultFile(string[] args, int exitCode)
+    {
+        // 只在本方法用到，就近声明（选项名与 iss 的 InitializeUninstall 必须同步）。
+        const string ResultFileOption = "--result-file";
+
+        var index = Array.FindIndex(
+            args,
+            arg => string.Equals(arg, ResultFileOption, StringComparison.OrdinalIgnoreCase));
+
+        // 约定：选项后面紧跟路径；缺路径就当没传过。
+        if (index < 0 || index + 1 >= args.Length)
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(args[index + 1], exitCode.ToString(CultureInfo.InvariantCulture));
+        }
+        catch (IOException)
+        {
+            // 结果文件写不了不影响退出码。
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // 同上。
+        }
     }
 
     private static int RunReinstallTask(CliServices services)
@@ -220,7 +280,7 @@ internal static class CliHost
 
     private static int PrintHelp()
     {
-        Console.WriteLine("延时启动管理器 — 命令行工具");
+        Console.WriteLine("DelayStart — 命令行工具");
         Console.WriteLine();
         Console.WriteLine("用法：DelayStart.exe <命令> [参数]");
         Console.WriteLine();
@@ -229,6 +289,7 @@ internal static class CliHost
         Console.WriteLine("  --takeover <主键> [秒数]     接管指定条目，默认 30 秒");
         Console.WriteLine("  --release <主键>             移出延时启动，恢复系统原状");
         Console.WriteLine("  --restore-all               还原全部接管项并删除计划任务（卸载时调用）");
+        Console.WriteLine("  --result-file <路径>         把退出码写到该文件（供提权拉起方回读，见 D61）");
         Console.WriteLine("  --reinstall-task            幂等注册 / 更新调度计划任务");
         Console.WriteLine("  --help                      显示本帮助");
         Console.WriteLine();

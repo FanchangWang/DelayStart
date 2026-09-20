@@ -129,7 +129,7 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
         using var definition = service.NewTask();
 
         definition.RegistrationInfo.Description =
-            "延时启动管理器的调度端。登录后按用户配置的延时逐个拉起被接管的程序。";
+            "DelayStart 的调度端。登录后按用户配置的延时逐个拉起被接管的程序。";
 
         definition.Principal.RunLevel = TaskRunLevel.Highest;
         definition.Principal.LogonType = TaskLogonType.InteractiveToken;

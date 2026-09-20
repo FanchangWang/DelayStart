@@ -83,6 +83,11 @@ internal static class ServiceRegistration
         // 因此属 Management 层而不是 Core —— 与 TakeoverService 同理。
         services.AddSingleton<ConfigEditService>();
 
+        // 首启初始化（D63）：装完第一次打开管理端时自动注册调度计划任务。
+        // Singleton 而不是静态调用 —— "只做一次"这个语义由它读配置里的标记决定，
+        // 不靠调用次数，所以不需要额外保证只解析一次。
+        services.AddSingleton<FirstRunBootstrap>();
+
         // 主窗口句柄。unpackaged 的文件选择器必须知道自己的宿主窗口，
         // 否则 PickSingleFileAsync 直接抛异常。
         services.AddSingleton<WindowHandleProvider>();

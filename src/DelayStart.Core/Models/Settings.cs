@@ -43,7 +43,12 @@ public sealed class Settings
     /// 默认预设（秒）：预设列表中处于「选中」状态的项，接管条目时编辑器预选它。
     /// 必须是 <see cref="DelayPresets"/> 的成员，加载时由规范化兜底修正。
     /// </summary>
-    public int DefaultPreset { get; set; } = 30;
+    /// <remarks>
+    /// 默认值 2026-09-21 由 30 改为 **10**（用户要求「设置-延时 默认选中 10 秒」）。
+    /// ⚠️ 与 <see cref="DelayPresets"/> 同理：只影响新装 / 未改过该项的配置 ——
+    /// 已落盘的 <c>config.json</c> 里存的是用户当时的值，加载不会拿新默认值覆盖它。
+    /// </remarks>
+    public int DefaultPreset { get; set; } = 10;
 
     /// <summary>完成时的通知策略（FR-6.3 / FR-9.7）。</summary>
     public NotifyMode NotifyMode { get; set; } = NotifyMode.FailuresOnly;
@@ -56,4 +61,25 @@ public sealed class Settings
 
     /// <summary>最近一次运行的 <c>runId</c>，供管理端总览页横幅使用（FR-6.7）。从未运行时为 <see langword="null"/>。</summary>
     public string? LastRunId { get; set; }
+
+    /// <summary>
+    /// 首启自动注册调度计划任务是否**已经做过**（D63，2026-09-21 用户要求）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 装完第一次打开管理端时自动注册 <c>\DelayStartScheduler</c>，省得用户不知道
+    /// 要去总览页拨那个开关。判据就是本字段：一旦为 <see langword="true"/>，
+    /// 之后的每次启动都完全不再碰计划任务。
+    /// </para>
+    /// <para>
+    /// 🔴 **这是语义要求，不是优化。** 总览页的开关（D3：开 = 注册，关 = 删除）
+    /// 表达的是用户意图；自动动作只允许发生在他表达意图**之前**。
+    /// 若每次启动都"发现没注册就补上"，用户关掉开关的意愿会被无声地推翻。
+    /// </para>
+    /// <para>
+    /// ⚠️ 本字段是后加的：升级上来的老配置没有它，因此下一次启动会补做一次自动注册
+    /// （仅此一次）。理由是这个字段之前根本不存在，无从区分"没做过"和"用户关掉了"。
+    /// </para>
+    /// </remarks>
+    public bool SchedulerTaskInitialized { get; set; }
 }

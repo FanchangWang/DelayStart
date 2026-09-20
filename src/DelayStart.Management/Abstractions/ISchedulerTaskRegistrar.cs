@@ -29,7 +29,8 @@ public interface ISchedulerTaskRegistrar
     /// 幂等注册或更新计划任务：已存在则更新，不存在则创建（FR-3.3 / FR-11.2）。
     /// </summary>
     /// <remarks>
-    /// 幂等是硬要求 —— 管理端每次启动都会调它（D22 的「首启幂等注册」），
+    /// 幂等是硬要求 —— 调用点有三个，且都可能重复执行：管理端的首启自动注册（<c>D63</c>，
+    /// 只做一次）、接管流程的第 4 步（每次接管）、以及命令行 <c>--reinstall-task</c>。
     /// 不能因为任务已存在就报错，也不能每次都删除重建（会把上次运行时间等统计清零）。
     /// </remarks>
     /// <exception cref="StartupOperationException">创建或更新失败时抛出（E12）。</exception>

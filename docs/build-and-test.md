@@ -482,27 +482,52 @@ warning IL2026 / IL3050 / IL3053
 | 安装目录**只读** | 程序运行时不向安装目录写任何东西 | 保证覆盖升级与卸载不留残留（NFR-6.7） |
 | 计划任务注册 | **管理端首次启动时自动注册**（`--reinstall-task`，幂等），**不由安装器负责** | 注册必须提权，而 per-user 安装刻意不弹 UAC。把提权点收敛到"用户第一次打开程序"这唯一一次（NFR-6.5） |
 
-**发布与目录组装**：
+**发布与目录组装**（D60 起由脚本驱动，不再手敲 `dotnet publish`）：
 
-```bash
-dotnet publish src/DelayStart.App       -c Release -r win-x64 -o dist/app
-dotnet publish src/DelayStart.Scheduler -c Release -r win-x64 -o dist/scheduler
-
-dist/DelayStart/
-├─ DelayStart.exe              # 管理端（unpackaged，manifest 已嵌进 exe）
-├─ DelayStart.Scheduler.exe    # 调度端（NativeAOT）
-├─ LICENSE
-└─ README.md
+```powershell
+.\installer\build-all.ps1                          # 本机 win-x64：自包含 + 精简版
+.\installer\build-all.ps1 -Rids win-x64,win-arm64  # 加 arm64（需 ARM64 工具集，见 installer\README.md）
 ```
 
-**自包含 vs 框架依赖 —— 由 Phase 0 的 R9 结果决定**（`architecture.md` 第九节 R9）：
+脚本内部：`dotnet publish` 管理端 → `dotnet publish` 调度端（NativeAOT）→ 调 `ISCC` 编译安装包。
+产物落 `dist\DelayStart-Setup-<版本>-<Rid>[-slim].exe`。安装目录内容：
 
-| R9 结果 | 属性 | 体积 | 运行时依赖 |
-|---|---|---|---|
-| 通过 | `WindowsAppSDKSelfContained=true` | 约 100–150 MB | 零 |
-| 不通过（走 R9 降级路径①） | `WindowsAppSDKSelfContained=false` | 约 10–15 MB | 由**安装器**部署 Windows App Runtime |
+```
+{app}\
+├─ DelayStart.exe              # 管理端（unpackaged，manifest 已嵌进 exe）
+├─ DelayStart.Scheduler.exe    # 调度端（NativeAOT 单文件）
+└─ （其余为 .NET 与 Windows App SDK 的运行时文件 —— 精简版不含它们）
+```
 
-> 有安装器之后，框架依赖这条路的唯一代价（"让用户自己装运行时"）就消失了 —— 安装器随包带 `WindowsAppRuntimeInstall.exe` 并在 `[Run]` 段静默执行。**所以 R9 不通过并不是坏结局。**
+**两种形态都交付（D60）**：
+
+| 形态 | 交付属性 | 实测体积（win-x64） | 运行时依赖 | 安装器行为 |
+|---|---|---|---|---|
+| 自包含 | `--self-contained` + `WindowsAppSDKSelfContained=true` | 安装包 **60.4 MB**（publish 217.0 MB / 536 文件） | 零 | — |
+| 精简版 | `--no-self-contained` + `-p:WindowsAppSDKSelfContained=false` | 安装包 **9.8 MB**（publish 41.7 MB / 72 文件） | .NET 10 **Runtime** + Windows App Runtime 1.8 | 安装前检测并提示，**不阻断安装** |
+
+> ⚠️ 精简版要的是 **.NET Runtime**（`Microsoft.NETCore.App`），**不是** Desktop Runtime ——
+> 它的 `runtimeconfig.json` 里 framework 只有 `Microsoft.NETCore.App 10.0.0`（2026-09-20 实测）。
+> 安装器按 `Microsoft.NETCore.App` 探测，装了 Desktop Runtime 的机器同样能识别（其内含 NETCore Runtime）。
+>
+> 调度端**两种形态都保持 AOT** —— 它不依赖 .NET 运行时，否则精简版用户得补三个运行时。
+>
+> 自包含与提权 manifest 的兼容性（R9）见 `architecture.md` 第九节；本机已通过，故自包含为默认交付形态。
+
+> 🔴 **publish 目录不自动包含 XAML 产物与资源包（D61 实测，2026-09-21）**
+>
+> `dotnet publish` 的输出比 `bin` 少 **11 个** App 自己的文件：`App.xbf` / `MainWindow.xbf` /
+> `Views\*.xbf`（6 个）/ `Dialogs\DelayEditorDialog.xbf` / `DelayStart.pri` / `Assets\AppIcon.ico`。
+> 原因：unpackaged 转换按官方清单删掉了 `EnableMsixTooling`（见 2.1），而这些文件原本是靠
+> MSIX 工具链进 publish 清单的。**症状**：装出来的程序一启动就在 `Microsoft.UI.Xaml.dll` 里
+> `0xc000027b`（内部 `E_FAIL`）秒崩，窗口完全不出现 —— 而**同一份产物在 `bin` 里双击一切正常**
+> （R9 与历次真机验收都是在 `bin` 目录做的，所以这个缺口一直没暴露）。
+>
+> 两道防线：`DelayStart.App.csproj` 的 `CopyWinUIResourcesToPublishDir`（`AfterTargets="Publish"`）
+> 补齐文件；`build-installer.ps1` 在 publish 之后断言这些文件存在，缺一个就中止构建。
+>
+> ⚠️ 资源包名是 **`DelayStart.pri`（= 主模块名）**，不是 `resources.pri` —— MRT Core 对非打包
+> 应用按主模块名查找，`bin` 里能跑通靠的就是这个名字；改名会让程序起不来。
 
 ### 7.2 Inno Setup 脚本要点
 
@@ -510,17 +535,32 @@ dist/DelayStart/
 
 | 项 | 内容 |
 |---|---|
-| 提权 | 🔴 **`PrivilegesRequired=lowest`** —— per-user 安装，**安装全程零 UAC**。⚠️ **卸载会弹一次 UAC**：还原 HKLM 接管项与删除计划任务必须有管理员，这一次躲不掉（D23）。`ArchitecturesInstallIn64BitMode=x64compatible` |
-| 目录 | `DefaultDirName={localappdata}\Programs\DelayStart`、`DisableDirPage=auto`（用户可改，实际路径必须写进 `config.json`） |
-| 计划任务 | **安装器不注册**（NFR-6.5）。安装完成后提供可选勾选「立即运行 延时启动管理器」（`[Run]` `Flags: postinstall nowait skipifsilent`）—— 程序自提权并幂等注册，UAC 只弹这一次 |
-| 快捷方式 | `[Icons]` 开始菜单；桌面快捷方式做成可选任务（`Tasks: desktopicon`） |
+| 提权 | 🔴 **`PrivilegesRequired=lowest`** —— per-user 安装，**安装全程零 UAC**。⚠️ **卸载会弹一次 UAC**：还原 HKLM 接管项与删除计划任务必须有管理员，这一次躲不掉（D23） |
+| 架构防呆（D60） | `ArchitecturesAllowed`：x64 包用 `x64compatible`（arm64 可模拟运行 x64），arm64 包用 `arm64` —— 装错架构直接被拒 |
+| 目录 | `DefaultDirName={localappdata}\Programs\DelayStart`、**`DisableDirPage=yes`** —— 固定路径、用户不可改（计划任务按此路径注册，改目录会让升级后的任务指向旧位置） |
+| 计划任务 | **安装器不注册**（NFR-6.5）—— 它只有 `lowest` 权限，注册任务需要管理员。落点是**管理端第一次启动**：`FirstRunBootstrap`（D63）自动注册并落一个"已初始化"标记，之后再不插手（详见 7.7）。安装完成后提供可选勾选「立即运行 DelayStart」（`[Run]` `Flags: postinstall nowait skipifsilent shellexec`），UAC 只弹这一次 |
+| 🔴 首启勾选运行（D61） | **必须带 `shellexec`**。`DelayStart.exe` 的 manifest 是 `requireAdministrator`，而安装器是 `PrivilegesRequired=lowest`；不带 `shellexec` 的默认 CreateProcess 路径会以 **740（`ERROR_ELEVATION_REQUIRED`）** 失败 —— 表现为"勾选启动、点确定后弹报错框，程序根本没起来"。`shellexec` 让外壳按 manifest 弹 UAC |
+| 快捷方式 | `[Icons]` 开始菜单项 + **桌面项**（D61 补：原脚本只建了开始菜单项）。两者都用 `{autoprograms}` / `{autodesktop}` —— `lowest` 模式下都落在**当前用户**目录，与"程序装进 `%LOCALAPPDATA%`"的定位一致，不碰 all users |
+| 🔴 桌面项改为可选任务（D62） | `[Tasks] Name: "desktopicon"`，桌面 `[Icons]` 项挂 `Tasks: desktopicon`（开始菜单项不受影响）。不写 `Flags: unchecked` → **默认勾选**。⚠️ **静默安装不自动勾选任何任务**：`/VERYSILENT` 要出桌面图标必须显式加 `/MERGETASKS="desktopicon"` |
+| 图标来源（D61 / D62） | 快捷方式与「应用和功能」的图标都取自 **exe 内嵌资源**（`UninstallDisplayIcon` 也指向 exe）→ `App.csproj` 的 `<ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>` 是必需品，只声明 `<Content>` 不够。安装程序**自身**的图标由 iss 的 `SetupIconFile={#AppIconFile}` 指定，同一个 ico 文件。生成方式见 7.6 |
+| 🔴 publish 资源守门（D61） | 安装包用的是 **publish** 目录，而 XBF / PRI / Content 资源**不会自动进 publish**（详见 7.1 的两形态表下方⚠️）。守门有两道：① `DelayStart.App.csproj` 的 `CopyWinUIResourcesToPublishDir`（`AfterTargets="Publish"`）补齐；② `build-installer.ps1` 在 publish 之后断言 `App.xbf` / `MainWindow.xbf` / `DelayStart.pri` / `Assets\AppIcon.ico` 存在且 `*.xbf` ≥ 2 个，缺一个就 `throw` —— **绝不把注定崩溃的包发出去** |
 | 卸载入口 | per-user 模式自动写 `HKCU\...\Uninstall`，**在"应用和功能"里可卸载且不要求管理员** |
-| 🔴 卸载顺序<br>**必须用 `[Code]`，不能用 `[UninstallRun]`** | `[UninstallRun]` 段**读不到子进程退出码**，无法实现"还原失败即中止"。正确做法是在 `[Code]` 的 `InitializeUninstall()` 里执行：<br>`ShellExec('runas', ExpandConstant('{app}\DelayStart.exe'), '--restore-all', '', SW_SHOW, ewWaitUntilTerminated, R)`<br>要点：① `runas` 动词 → 触发 UAC；② 🔴 必须 `ewWaitUntilTerminated`，否则文件先被删、还原还没跑完；③ `R <> 0` 时 `Result := False` —— **返回 False 会中止卸载** |
-| 🔴 卸载失败处理 | `InitializeUninstall` 返回 `False` → 卸载中止、安装目录文件保留、弹窗列出失败项（`--restore-all` 的标准输出需落盘供展示） |
+| 🔴 卸载顺序<br>**必须用 `[Code]`，不能用 `[UninstallRun]`** | `[UninstallRun]` 段**读不到子进程退出码**，无法实现"还原失败即中止"。实现是在 `[Code]` 的 `InitializeUninstall()` 里拉起 `--restore-all` 并检查退出码：① 退出码 `<> 0` → `Result := False`（**返回 False 会中止卸载**），并弹二次确认允许用户强行跳过；② 程序文件已不在（用户手工删过）时直接放行 |
+| 🔴 卸载怎么拉起（D61） | **不能用 `Exec`** —— 它与首启运行同因（740），还原动作根本不会发生而卸载照常进行，直接违反 D22。改用 **`ShellExec('runas', ...)`** 提权拉起（弹一次 UAC），代价是 **ShellExec 拿不到退出码**；因此约定 `--result-file <路径>` 由程序把退出码回写进文件，卸载器**轮询**该文件（`Sleep(250)` × 240 ≈ 60 s，覆盖用户看 UAC 的时间）。⚠️ 不用 `ewWaitUntilTerminated`：提权启动能否拿到进程句柄并不确定，"文件出现了没有"才是确定性判据 |
+| 🔴 卸载失败处理 | `InitializeUninstall` 返回 `False` → 卸载中止、安装目录文件保留，提示用户先打开程序把条目逐一移出。**三种失败都要走到这条路上**：ShellExec 起不来、轮询超时（用户取消 UAC / 程序损坏）、退出码非 0 —— 后两种按"还原未完成"处理并给知情的放行/中止选择 |
 | 卸载清理 | 删除 `DelayStartScheduler` 计划任务由 `--restore-all` 内部完成；删除失败必须提示用户手动删，不能静默忽略 |
-| 数据保留 | 默认**只删程序目录**。`%APPDATA%\DelayStart` 与 `%LOCALAPPDATA%\DelayStart` 在 `InitializeUninstall` 里**询问后**才删（重装可保留配置） |
-| 覆盖升级 | 识别已装版本 → 升级模式；**保留 `%APPDATA%\DelayStart\config.json`** |
-| 实际安装路径 | 用户可能改目录，**必须把实际路径写进 `config.json`**，供计划任务重新注册使用 |
+| 数据保留（D62 修订） | 默认**只删程序目录**；`%APPDATA%\DelayStart` 与 `%LOCALAPPDATA%\DelayStart` **默认保留**，卸载时用 `SuppressibleMsgBox(..., MB_YESNO, IDNO)` 问一次「是否一并删除配置与日志」，**选「是」才 `DelTree`**。🔴 **静默卸载一律按「否」**（`SuppressibleMsgBox` 的 Default 参数）—— 删用户数据不能在用户没看见提示时发生。询问时机 = `CurUninstallStepChanged(usUninstall)`，即**确认卸载之后**（用户在确认页反悔时数据还在；此时 `--restore-all` 已跑完，顺序天然正确）。选「否」或删不干净（文件被占用）时，完成页把目录位置与手动清除方式说清楚 |
+| 覆盖升级 | 同一 `AppId` → 覆盖安装，**保留 `%APPDATA%\DelayStart\config.json`**。⚠️ 自包含与精简版**共用同一 `AppId` 与安装目录**，装后者会覆盖前者 |
+| 🔴 装前清空安装目录（**D64-1**） | `[Code] PrepareToInstall` 递归清空 `{app}` 里的程序文件（**不动用户数据**：配置在 `%APPDATA%`、日志在 `%LOCALAPPDATA%`、计划任务在目录外）。<br>**为什么必须清**：两形态同目录 + 覆盖安装只覆盖同名文件 → "先装 full 再装 slim" 会留下 full 的 `hostfxr.dll` / `coreclr.dll`，而 **.NET 的 apphost 只要在自己目录里看到 `hostfxr.dll`，就把"运行时根"当作程序目录本身**，转而去 `<程序目录>\shared\Microsoft.NETCore.App\10.x` 找共享框架（自包含布局是平铺的、那里没有）→ 精简版弹 `You must install or update .NET`，**哪怕机器上装着 10.0.12**（报错框还会列出一份 x86 的 10.0.12 来自证"确实装了"）。2026-09-21 本机 1:1 复现：把 `hostfxr.dll` + `hostpolicy.dll` 放进目录即可复现，卸载清空目录后重装即消失。<br>**为什么放在 `PrepareToInstall`**：Inno 文档保证它早于 Setup 的"文件占用检查"（Restart Manager）执行；而安装器是 `lowest` 权限，删不掉**提权进程**（管理端 / 托盘里的调度端）占用的文件，占用者只能交给 Restart Manager（脚本显式设 `CloseApplications=yes` / `RestartApplications=yes`，两者都是 Inno 默认值）。顺序不会互相抢：Windows 上没带 `FILE_SHARE_DELETE` 打开的文件**删都删不掉**，所以凡是被运行中程序占着的文件必然还在原地，一定被随后那次"文件占用检查"发现 —— 我们提前清掉的只是本来就没人在用的文件。⚠️ 但 RM **不会把关掉的应用自动重启回来**（`RestartApplications` 只对调用过 `RegisterApplicationRestart` 的程序生效），详见 7.8 末尾。<br>**唯一中止安装的情况**：精简版发现 `hostfxr.dll` 删不掉（＝自包含形态的管理端还在运行）—— 中止优于装出一个起不来的程序；探测放在清理**之前**，所以中止时一个文件都还没删、旧安装保持完整。`unins*`（旧卸载器）刻意保留，安装失败时用户仍能卸干净 |
+| 缺运行时的下载入口（**D64-2**） | `MissingRuntimeLinks()` + `OpenRuntimeDownloads()` 由安装前提示与安装后提示共用：**只列、只打开实际缺的那几项**（两项都缺则 .NET 在前）。🔴 原实现无论缺什么都把两个地址全列、点「是」却只开 .NET 下载页 —— 而现实中最常见的恰恰是"装着 .NET、只缺 Windows App Runtime"（本机实测即如此），用户被引去装一个已经装好的东西，装完回来还是缺 |
+| 应用名（D61） | 安装器里**只此一处**名字 = `AppName` = **`DelayStart`**（英文，不带中文）。快捷方式名同为 `DelayStart`，窗口标题同步（`MainWindow.xaml` 的 `Window.Title` / `TitleBar.Title`） |
+| 🔴 「设置 → 应用」的显示名取 `AppVerName`（**D63**） | 不是 `AppName`。Inno 的缺省值是 `AppName + " version " + AppVersion` 一类的拼接，D60 起又按形态拼了后缀 → 真机注册表实测 `DisplayName = DelayStart 0.1.0`（slim 档为 `DelayStart 0.1.0-slim`）。D63 起固定 `AppVerName={#AppName}` → 只显示裸 `DelayStart`。版本号仍由 `DisplayVersion` 承载（系统自己会显示），**形态后缀只留在产物文件名里** |
+| 精简版运行时检测（D60 / **D61 修正**） | `[Code] InitializeSetup` 两项检测，**每项都是多判据"任一命中即算装了"**：<br>· **.NET**：① `{pf64}` / `{pf32}` 下 `dotnet\shared\Microsoft.NETCore.App\10.*` 目录（主判据，用 `FindFirst` 通配，不必预知版本号）；② **32 位注册表视图**（`HKLM` 常量）`...\InstalledVersions\{x64,arm64,x86}\sharedfx\Microsoft.NETCore.App`；③ **64 位视图**（`HKLM64`）同三条路径。<br>· **Windows App Runtime 1.8**：`HKCU` → `HKLM` → `HKLM64` 三处的包仓库里找 `Microsoft.WindowsAppRuntime.1.8` **且架构段匹配**（`_x64__` / `_arm64__`，由 `/DWinAppRuntimeArch` 注入）。<br>缺失时 `MsgBox(MB_YESNOCANCEL)`，**不阻断安装**。<br>🔴 **教训**：最初两项各只查一个位置（都在 `HKLM64`），在**已装 .NET 10.0.12 + WindowsAppRuntime 1.8** 的机器上双双误报缺失。`.NET` 的记录落在 **32 位视图**（`HKLM\SOFTWARE\WOW6432Node\dotnet\...`，.NET 安装器是 32 位进程），Windows App Runtime 框架包则**按用户注册在 `HKCU`**。**误报比不检测更糟** —— 用户明明装了却被劝去下载 |
+| 检测自检出口（D61） | 设环境变量 `DELAYSTART_RUNTIME_CHECK=<结果文件路径>` 后运行精简版安装包：两项检测结果写进该文件后**直接退出、不安装**（`InitializeSetup` 返回 `False`）。用途是让"检测会不会误报"可**自动化回归** —— 原先结果只出现在一个要人点确定的 MsgBox 里，只能人肉装一遍。见 7.5 |
+| 🔴 缺运行时就不再自动启动（D62） | `[Run]` 的 postinstall 项挂 `Check: RuntimeReadyForApp`：精简版要求两个运行时都齐（自包含恒真），缺任一项时完成页的「启动 DelayStart」**整项消失**，并由 `CurStepChanged(ssPostInstall)` 给出一次性说明（缺什么 + 两条下载链接 + 说明为什么没自动启动 + 可直接打开下载页）。🔴 原行为：用户在检测提示里选「先装程序、稍后补装」之后照样被自动拉起 → 得到 apphost 的 `You must install or update .NET to run this application` 报错框（指不到安装器、也没有解法）—— **提示与处置必须配套** |
+| 检测自检出口扩展（D62） | 自检文件新增 `ready=`（= `[Run]` 那个 `Check` 的**实际取值**）与 `forced=` 两行；配合 `DELAYSTART_FAKE_MISSING=1` 可在**装了运行时的开发机**上强制走完"缺运行时"整条分支（实测：不设 `ready=1 forced=0`；设了 `ready=0 forced=1`）。详见 7.5 |
+| 版本号（D60） | 唯一来源 `Directory.Build.props` 的 `<Version>`，由 `build-installer.ps1` 注入 `/DAppVersion`，产物名同源 |
+| 🔴 三条硬约束（D60 / D61 实测） | ① **任何一行不得以 `[` 开头**（含 `[Code]` 段内、含缩进后的 `[`）—— ISCC 报 `Invalid section tag`，哪怕那是合法的 Pascal 数组字面量；② `TaskDialogMsgBox` 的 `Shields` 参数是集合类型 `TMsgBoxShields`，传整数 `0` 报 `Type mismatch`；③ **`FILE_ATTRIBUTE_DIRECTORY` 是 Inno Pascal 自带的**，重复声明报 `Duplicate identifier` |
 
 🔴 **卸载可逆性是本节最高优先级要求，高于任何视觉与体积优化。** 用户卸载后所有程序必须恢复自启动 —— 做不到就是本项目最严重的缺陷（`requirements.md` NFR-6.4 / 9.4 验收清单）。
 
@@ -533,6 +573,203 @@ Compress-Archive -Path dist/DelayStart -DestinationPath dist/DelayStart-dev-<版
 ```
 
 ⚠️ **不要用它验收计划任务链路**：zip 解压路径随用户选择而变，计划任务会指向一个可能被随手删掉的路径 —— 这正是 D22 要解决的问题。计划任务相关验收一律走安装器装出来的固定路径。
+
+### 7.4 CI 出包：GitHub Release（D60）
+
+`.github\workflows\release.yml`，两种触发：
+
+| 触发 | 行为 |
+|---|---|
+| 推 `v*` 标签 | 出 4 个包（2 架构 × 2 形态）并**创建 Release**，附上全部安装包 |
+| 手动 `workflow_dispatch` | 只出包、留 artifact（可选填版本号），**不建 Release** —— 避免每次试构建都多出一个版本 |
+
+要点：
+
+- 矩阵 `fail-fast: false` —— 某个架构失败不拖累其余三个；
+- arm64 两组先跑一步 **ARM64 工具集检测**（`vswhere -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64`）：runner 缺组件时立刻给出可读结论，而不是等 NativeAOT 链接阶段抛一个看不懂的 LNK 错；
+- 版本号：标签触发以**标签**为准（`v0.2.0` → `0.2.0`）；手动触发可填 `version` 输入；都为空则读 `Directory.Build.props`；
+- NuGet 缓存以 `Directory.Packages.props` 为键（`actions/setup-dotnet` 的 `cache: true`）；
+- Release 用 `gh release create --generate-notes --verify-tag`（`gh` 在 runner 上预装）。
+
+> 🔴 本机与 CI 的差异只有一处：**arm64 的 AOT 链接器**。本机未装 ARM64 工具集，所以
+> `build-all.ps1` 在本机只跑 win-x64；arm64 只能在 CI 出 —— **也因此 arm64 包没有本地验收**，
+> 首次发布前需要在 arm64 设备上过一遍 9.8 的安装/卸载清单。
+
+### 7.5 精简版运行时检测的自检（D61）
+
+检测结果原先只出现在一个**要人点确定**的 `MsgBox` 里，没法自动化验证 —— 而这项检测在首次真机
+安装时**两项各误报一次**（本机已装 .NET 10.0.12 与 WindowsAppRuntime 1.8，却双双报"缺失"）。
+为此留了一个环境变量出口：**设了就只写结果文件、直接退出、不安装任何东西**。
+
+```powershell
+$env:DELAYSTART_RUNTIME_CHECK = "$env:TEMP\rt.txt"
+.\dist\DelayStart-Setup-0.1.0-win-x64-slim.exe /VERYSILENT /SUPPRESSMSGBOXES
+Get-Content "$env:TEMP\rt.txt"
+# dotnet=1               ← 1 = 判定为已安装（本机确实装了 .NET 10.0.12）
+# winappruntime=1
+# ready=1                ← D62：= [Run] 那个 Check 的实际取值（1 = 完成页会出现「启动 DelayStart」）
+# forced=0               ← D62：是否被 DELAYSTART_FAKE_MISSING 强制
+# pf64=C:\Program Files
+# needdll=C:\Program Files\dotnet\shared\Microsoft.NETCore.App\-10.x
+```
+
+`dotnet` / `winappruntime` 为 `1` 表示**判定为已安装**（`IntToStr(Ord(布尔))`）。装运行时前后各跑一次，
+两项都应从 `0` 变 `1`；若机器上明明装了运行时却仍是 `0`，说明判据位置又选错了（D61 的教训：
+`.NET` 的记录在 **32 位注册表视图** `HKLM\SOFTWARE\WOW6432Node\dotnet\...`，
+Windows App Runtime 框架包**按用户注册在 `HKCU`**，两者都不在 `HKLM64`）。
+
+#### 缺运行时那条分支怎么在"装了运行时的机器"上验（D62）
+
+D62 修的正是这条分支（缺运行时时不再自动启动程序），但开发机装了运行时 → `MissingRuntimeList()`
+恒为空，这条路**永远走不到**。为此加了第二个诊断开关：
+
+```powershell
+$env:DELAYSTART_RUNTIME_CHECK = "$env:TEMP\rt2.txt"
+$env:DELAYSTART_FAKE_MISSING  = '1'      # 强制两项都判为"缺失"
+.\dist\DelayStart-Setup-0.1.0-win-x64-slim.exe /VERYSILENT /SUPPRESSMSGBOXES
+Get-Content "$env:TEMP\rt2.txt"
+# dotnet=1              ← 真实检测结果不变
+# winappruntime=1
+# ready=0               ← 闸门已关闭：完成页不会出现「启动 DelayStart」
+# forced=1
+```
+
+去掉 `DELAYSTART_FAKE_MISSING` 立刻恢复 `ready=1 / forced=0`（实测值）。正常用户永远不会碰到这个开关
+（不设环境变量即完全不生效），它的唯一用途就是让这条分支可**自动化回归**，而不必找一台干净机器人肉装一遍。
+
+👉 想看带提示的真机效果（不自动化）：设 `DELAYSTART_FAKE_MISSING=1` 后**正常双击运行**该安装包 ——
+安装前的缺运行时对话框、装完的说明框、完成页上消失的启动勾选框会一起出现，退出安装即可，不会留下任何文件。
+
+### 7.6 图标（D61 / D62 / D63）
+
+图标是「**一张源图 → 三份多尺寸 ico**」，全程脚本化：
+
+```powershell
+# 源图：assets\icon\delay.png（正方形、带 alpha，推荐 256x256）
+uv run tools\make-icon.py                 # 三份一起生成（默认 --roles app,tray）
+uv run tools\make-icon.py --roles app     # 只生成管理端
+uv run tools\make-icon.py --roles tray    # 只生成调度端两枚
+uv run tools\make-icon.py --info          # 只看源图信息，不写文件
+```
+
+| 产物 | 档位 | 谁在用 |
+|---|---|---|
+| `src\DelayStart.App\Assets\AppIcon.ico` | 10 | ① exe 内嵌资源（`<ApplicationIcon>` → 快捷方式 / 任务栏 /「设置 → 应用」）② 窗口图标（`AppWindow.SetIcon("Assets/AppIcon.ico")`，靠 `<Content>` 随程序发布）③ 安装程序自身与卸载入口（iss 的 `SetupIconFile`） |
+| `src\DelayStart.Scheduler\Assets\Scheduler.ico` | 10 | ① 调度端 exe 内嵌图标（`<ApplicationIcon>`）② 托盘（正常态，`EmbeddedResource`） |
+| `src\DelayStart.Scheduler\Assets\SchedulerWarning.ico` | 10 | 托盘「完成但有失败」的红色告警角标态（D31），只有 `EmbeddedResource` |
+
+🔴 **脚本自己拼 ICO 容器**，不用 `PIL.Image.save(format="ICO", sizes=[...])` —— 后者对**所有**尺寸都写 PNG
+条目，小尺寸在部分外壳路径（缩略图、某些文件对话框）会取不到图标而显示空白。本脚本的阈值是
+**≥ 96 用 PNG、其余用 BMP/DIB（32bpp BGRA + AND 掩码）**：16~48 才是有兼容风险的那一档，96/128
+只服务"大图标 / 超大图标"这些现代外壳路径，用 PNG 能把单份文件从 154 KB 压到 71 KB。
+
+🔴 **托盘不是"取第一个条目"**：`IconResources` 按目标尺寸（32）挑条目并把 cx/cy 显式传给
+`CreateIconFromResourceEx`。原先取首个条目 + `LR_DEFAULTSIZE` 的写法，在多尺寸容器上会拿到 16×16、
+被系统放大到 32、再被外壳缩回 16 —— 两次重采样。**改了 `DEFAULT_SIZES` 的顺序或档位时留意这一点**
+（挑条目是按尺寸而不是按顺序，所以顺序无关；但档位里必须存在 ≤ 32 的档）。
+
+⚠️ 图标是**编译期**（exe 内嵌）或**构建期**（嵌入资源）进去的：换了源图必须重跑脚本**并重新
+publish/构建**，否则开始菜单图标不会变（`bin` 里旧 exe 与安装目录里已装的旧 exe 都不会自动更新）。
+
+---
+
+### 7.7 首启自动注册与默认延时（D63）
+
+**计划任务**：管理端**第一次启动**时自动注册 `\DelayStartScheduler`（`FirstRunBootstrap`，
+在 `App.OnLaunched` 解析主窗口之前执行）。之后每次启动都只读一个布尔值就返回。
+
+```powershell
+# 验证「首次运行确实注册了」
+schtasks /query /tn DelayStartScheduler            # 注册后应能查到
+Get-Content "$env:APPDATA\DelayStart\config.json"  # 应含 "schedulerTaskInitialized": true
+Select-String -Path "$env:LOCALAPPDATA\DelayStart\manager.log" -Pattern '首启初始化'
+```
+
+🔴 **只在首次运行做一次**，判据是 `config.json` 里的 `schedulerTaskInitialized`。总览页那个开关
+（D3：开 = 注册，关 = 删除）表达的是**用户意图**，自动动作只允许发生在他表达意图**之前** ——
+所以"关掉开关后再重启程序，任务不会被自动装回来"是有意设计，不是遗漏。
+
+三种失败/边界语义：
+
+| 情形 | 行为 |
+|---|---|
+| 注册失败（组策略、临时故障） | **不落标记** → 下次启动重试。日志里有一条带完整栈的 `Error` |
+| 已存在任务（用户自己开过开关 / 跑过 `--reinstall-task`） | `IsRegistered()` 命中 → 只补标记，不重复注册 |
+| 标记落盘失败 | 任务照常生效，只记 `Warn`；代价是下次启动重查一遍 |
+| ⚠️ 升级上来的老配置（**没有**该字段） | 会补做一次自动注册。此前有意关掉开关的用户会被重新打开一次 —— **仅此一次** |
+
+**默认延时**：`Settings.DefaultPreset` = **10 秒**（D63 前是 30）。⚠️ 与 D50 的预设列表同理 ——
+**已落盘的 `config.json` 原样保留**，默认值只影响新装 / 未改过该项的配置。想验证默认值需要
+先删掉 `%APPDATA%\DelayStart\config.json`（或在卸载时选「一并删除配置与日志」）。
+
+---
+
+### 7.8 两形态混装 / 装前清空安装目录（D64）
+
+**缺陷定性**：不是"缺运行时"，是**两种形态装进了同一个目录**。装完 full 再装 slim，Inno 只覆盖
+同名文件、不清理对方形态的残留 → 程序目录里留着自包含形态的 `hostfxr.dll` → 精简版的 apphost
+按"程序目录就是运行时根"去找共享框架，找不到就报缺 .NET。
+
+**根因复现**（不必真装两遍，扔两个文件进去即可）：
+
+```powershell
+$d = "$env:TEMP\apphost-probe"; New-Item -ItemType Directory $d -Force | Out-Null
+Copy-Item "$env:LOCALAPPDATA\Programs\DelayStart\*" $d -Recurse -Force
+Copy-Item artifacts\publish\win-x64\full\hostfxr.dll    $d -Force   # 自包含形态的两个关键文件
+Copy-Item artifacts\publish\win-x64\full\hostpolicy.dll $d -Force
+& "$d\DelayStart.exe"     # 未加之前：正常；加上之后：apphost 报「必须安装 .NET」
+```
+
+报错里 `Required Microsoft.NETCore.App version 10.0.0 x64` + `.NET location: <程序目录>` +
+`No frameworks were found.` 是这套机制的指纹 —— **`.NET location` 指向程序目录本身**而不是
+`C:\Program Files\dotnet`。
+
+**回归怎么测**（安装目录里放的全是程序文件，随便造）：
+
+```powershell
+$app = "$env:LOCALAPPDATA\Programs\DelayStart"
+New-Item -ItemType File "$app\hostfxr.dll" -Force            # 伪造上一次形态的残留
+"X" | Set-Content "$app\OldFlavorOnly.dll"
+
+.\dist\DelayStart-Setup-0.1.0-win-x64-slim.exe /VERYSILENT /SUPPRESSMSGBOXES /LOG="$env:TEMP\ds.log"
+
+Test-Path "$app\hostfxr.dll"        # 期望 False（被清掉）
+Test-Path "$app\OldFlavorOnly.dll"  # 期望 False
+Test-Path "$app\DelayStart.exe"     # 期望 True（程序文件都装回来了）
+Select-String -Path "$env:TEMP\ds.log" -Pattern '安装目录已清理|残留文件删不掉'
+```
+
+`/LOG` 里 `安装目录已清理：删除 N 个文件` 一行给的是实际删除数；`残留文件删不掉（被占用）` 一行
+给的是交给 Restart Manager 的文件（正常只有正在运行的调度端 exe）。
+
+想验**中止**分支：另开一个进程把 `hostfxr.dll` 占住（`[IO.File]::Open($p,'Open','ReadWrite','None')`
+且不放句柄），再跑同一条命令 —— 安装会在"准备安装"页停下并显示中文说明，且 `{app}` 里其他文件
+**一个都没被删**（探测先于清理）。
+
+**验收标准（真实场景）**：`装 full → 装 slim → 运行 DelayStart.exe` 不再弹缺 .NET。
+
+**✅ 2026-09-21 用户真机复测通过**：① 装 full → 启动正常；② **装 slim 覆盖 full → 启动正常**
+（＝ 装前清空生效，残留 `hostfxr.dll` 已被清掉）；③ 在 slim 目录里手工丢回一个 full 的
+`hostfxr.dll` → 立即复现"必须安装 .NET"（＝ 反向确认病根就是这一个文件，也说明修复效果来自
+清理而非环境巧合）。
+
+| 诊断开关 | 作用 |
+|---|---|
+| `DELAYSTART_SKIP_PURGE=1` | 跳过"清空安装目录 + hostfxr 残留探测"，用于排查"清目录是否与某个安装场景冲突" |
+| `DELAYSTART_RUNTIME_CHECK` / `DELAYSTART_FAKE_MISSING` | 见 7.5（运行时检测自检） |
+
+> ⚠️ **托盘程序会不会挡住安装？** 调度端 exe 在安装时通常正在运行、文件被锁 —— 这**不是** D64
+> 引入的问题（任何一次升级都要替换它）。交给 Windows Restart Manager：它列出正在占用待替换文件的
+> 应用、征得同意后关掉（`CloseApplications=yes` / `RestartApplications=yes`，Inno 的默认值）。
+> 若用户拒绝关闭，Inno 会走到它自己的"重试 / 忽略 / 放弃"提示，最坏结果是保留旧调度端 exe
+> （程序仍可正常使用，只是调度端没升级）。
+>
+> 🔴 **但 Restart Manager 不会把被关掉的程序自动重启回来。** Inno 文档原文：`RestartApplications`
+> 只对调用过 Windows `RegisterApplicationRestart` API 的程序生效，而 DelayStart 与调度端都没有调用。
+> 实际后果：安装时调度端被关掉后，**托盘图标要到下次登录才回来**（它的计划任务只在登录时触发），
+> 本次登录尚未到点的延时条目也随之下次登录一并补上 —— 与"关机早于延时到点"是同一套语义，不丢数据。
+> 🔴 **这是已知缺口，2026-09-21 用户已明确定性：什么都不做，维持现状。** 并且**明确禁止**
+> "管理端启动调度端"这条修法 —— 调度端进程的生死只由计划任务决定，管理端不代管。
 
 ---
 

@@ -18,6 +18,17 @@
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
+    <!--
+      ★ D61：把应用图标嵌进 exe。
+      原先只声明了 <Content Include="Assets\AppIcon.ico" />（供 MainWindow.xaml.cs 的
+      AppWindow.SetIcon("Assets/AppIcon.ico") 在运行期设置窗口图标），**没有** <ApplicationIcon>，
+      于是 DelayStart.exe 自带的是 .NET 默认图标 —— 开始菜单 / 桌面快捷方式、任务栏、
+      Alt-Tab、「应用和功能」里的卸载图标全是通用空白图标（用户回报的"缺少桌面图片"）。
+      ⚠️ 与 <Content> 是两回事：Content 管"文件随程序发布"，ApplicationIcon 管"图标写进 exe 资源"。
+      两者都要有。
+    -->
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
 
     <UseWinUI>true</UseWinUI>
@@ -102,7 +113,7 @@
   -->
   <Target Name="CopySchedulerPublishOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <_SchedulerPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Scheduler\bin\$(Configuration)\net10.0-windows\win-x64\publish\DelayStart.Scheduler.exe</_SchedulerPublishExe>
+      <_SchedulerPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Scheduler\bin\$(Configuration)\net10.0-windows\$(RuntimeIdentifier)\publish\DelayStart.Scheduler.exe</_SchedulerPublishExe>
     </PropertyGroup>
     <Copy
       SourceFiles="$(_SchedulerPublishExe)"
@@ -112,6 +123,58 @@
       Text="DelayStart.Scheduler 尚未 publish（缺少 $(_SchedulerPublishExe)），App bin 里的调度器 exe 可能不可运行 —— 先跑 dotnet publish src/DelayStart.Scheduler"
       Condition="!Exists($(_SchedulerPublishExe))"
       Importance="high" />
+  </Target>
+
+  <!--
+    🔴 D61（2026-09-21 真机实测）：**publish 输出缺 XAML 产物与资源包**。
+
+    背景：unpackaged 转换时按官方改造清单删掉了 <EnableMsixTooling>true</EnableMsixTooling>
+    （见 docs/build-and-test.md 2.1），而 XBF / PRI / Content 资源原本是靠 MSIX 工具链
+    进 publish 清单的。结果这些东西只落在 build 输出（bin），publish 目录一个都没有。
+
+    实测证据（Compare-Object bin\...\win-x64 与 artifacts\publish\win-x64\full，
+    按 .pdb/.xml 过滤后 11 项差异，全部是 App 自己的资源）：
+      App.xbf · MainWindow.xbf · Dialogs\DelayEditorDialog.xbf · Views\*.xbf（8 个）
+      DelayStart.pri · Assets\AppIcon.ico
+
+    症状：装出来的程序一启动就在 Microsoft.UI.Xaml.dll 里 0xc000027b（内部 E_FAIL）
+    秒崩，窗口完全不出现（事件日志 Application Error 1000 + WER APPCRASH 1000/组合
+    combase.dll 0x80004005）。而**同一份产物在 bin 里双击完全正常** —— R9 与历次真机
+    验收都是在 bin 目录做的，所以这个缺口一直没暴露。
+
+    🔴 不要改用 <EnableMsixTooling>true</EnableMsixTooling> 来"修"：那会把整套 MSIX
+    打包工具链拉回来（还牵连已移除的 Microsoft.Windows.SDK.BuildTools.WinApp），
+    与 D22「不做 MSIX」直接冲突。这里只把缺的文件显式挂到 publish 落盘阶段。
+
+    ⚠️ 用 AfterTargets="Publish" + Copy 而不是往 ResolvedFileToPublish 里塞条目：
+    publish 条目收集由 SDK 内部目标决定，而本 target 的职责单一 —— "确保这些文件
+    出现在 publish 目录"，落盘最直接也最好验证。
+  -->
+  <Target Name="CopyWinUIResourcesToPublishDir" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <!-- XBF：XAML 编译产物，按 XAML 的目录结构分层（根 / Views\ / Dialogs\）。
+           ⚠️ 用 ** 通配而不是逐个列文件 —— 以后加页面/对话框不用回来改这里。 -->
+      <_WinUIXbfToPublish Include="$(TargetDir)**\*.xbf" />
+      <!-- 资源包：MRT Core 对非打包应用按「主模块名.pri」查找（bin 里就是 DelayStart.pri）。
+           ⚠️ 不要改名成 resources.pri —— 那是打包应用的约定，bin 里能跑通靠的就是这个名字。 -->
+      <_WinUIXbfToPublish Include="$(TargetDir)$(AssemblyName).pri"
+                          Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+      <!-- Content 资源：窗口图标（MainWindow.xaml.cs 的 AppWindow.SetIcon("Assets/AppIcon.ico")） -->
+      <_WinUIAppAssetsToPublish Include="$(TargetDir)Assets\**\*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(_WinUIXbfToPublish)"
+      DestinationFiles="@(_WinUIXbfToPublish->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="@(_WinUIAppAssetsToPublish)"
+      DestinationFiles="@(_WinUIAppAssetsToPublish->'$(PublishDir)Assets\%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+    <!-- ⚠️ 这里刻意不写 @(...->'%(Filename)') 之类的项变换：Message 的 Text 里
+         混用项变换容易踩 MSB4095（未指定项名称），静态文案足够说明问题。 -->
+    <Message
+      Text="已补充 publish 的 XAML 产物与资源包（D61）：*.xbf + $(AssemblyName).pri + Assets\*"
+      Importance="normal" />
   </Target>
 
 </Project>

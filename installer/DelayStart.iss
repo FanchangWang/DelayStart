@@ -1,9 +1,25 @@
-; DelayStart.iss —— Inno Setup 6 安装脚本（D22）
+; DelayStart.iss —— Inno Setup 6 安装脚本（D22 决策 / D60 多形态多架构扩展 / D61·D62 真机修复）
 ;
-; 编译：ISCC.exe installer\DelayStart.iss
-; 前置：先发布两个产物（见 installer\README.md）：
-;   1) 管理端（自包含）：dotnet publish src\DelayStart.App -c Release -r win-x64 --self-contained
-;   2) 调度端（AOT）：  dotnet publish src\DelayStart.Scheduler -c Release
+; ★ 正式构建请用 installer\build-installer.ps1（它先 publish 两个产物、再从
+;   Directory.Build.props 取版本号，最后调用本脚本）。手工编译见下方缺省值。
+;
+; 编译参数（全部可选，缺省值 = 本地 win-x64 自包含）：
+;   /DAppVersion=0.1.0            安装程序版本（唯一来源：Directory.Build.props 的 <Version>）
+;   /DRid=win-x64                 目标架构，仅用于产物命名
+;   /DSlim                        传入即"精简版"（框架依赖，不含运行时）——
+;                                 ⚠️ 判据是"有没有定义"，不要传 /DSlim=0 表达"否"，不传即可
+;   /DPublishDir=<绝对路径>        管理端 publish 目录
+;   /DSchedulerDir=<绝对路径>      调度端 publish 目录
+;   /DTargetArch=x64compatible    允许安装的架构（arm64 包传 arm64）
+;   /DWinAppRuntimeUrl=<url>      Windows App Runtime 下载链接（按架构不同）
+;   /DWinAppRuntimeArch=x64       框架包名字里的架构段（x64 / arm64），与 {#Rid} 同步
+;
+; 产物：dist\DelayStart-Setup-<版本>-<Rid>[-slim].exe
+;
+; 🔴 本文件有一处 Inno 的硬约束：**任何一行都不能以 `[` 开头**（含 [Code] 段内、
+;    含缩进后的 `[`）—— ISCC 的解析器在需要 section 头的位置看到行首 `[`
+;    就报 "Invalid section tag"，即使那行是合法的 Pascal 数组字面量。
+;    所以数组字面量必须跟在别的记号后面同一行（见 InitializeSetup 末尾）。
 ;
 ; D22 决策要点（详见 docs/requirements.md 决策表）：
 ;   · 固定安装路径 %LOCALAPPDATA%\Programs\DelayStart，不允许用户改（计划任务按固定路径注册，
@@ -11,26 +27,114 @@
 ;   · 不做 MSIX。首启的调度任务注册是幂等的，由程序自己完成，安装器只放文件。
 ;   · 卸载必须可逆：InitializeUninstall 里跑 --restore-all，退出码非 0 直接中止卸载
 ;     （🔴 不能写在 [UninstallRun] —— 那里读不到退出码，失败也照删文件）。
-;   · 默认保留配置与日志：不加任何 [UninstallDelete]，卸载只动安装目录。
+;   · **默认保留**配置与日志；D62 起在卸载时询问用户是否一并清除（默认"否"）。
+;
+; D61（2026-09-21 第一轮真机）：应用名去中文、[Run] 加 shellexec（740）、
+;   卸载改 ShellExec('runas') + --result-file 回读退出码、精简版运行时检测修误报。
+;
+; D63（2026-09-21 第三轮真机 / 用户反馈）：
+;   ① "设置 → 应用"里的显示名回归裸 `DelayStart`（原为 `DelayStart <版本>[-slim]`）——
+;      见 [Setup] 里 AppVerName 的说明。
+;   ② 计划任务不归安装器管（NFR-6.5），但也不再依赖用户自己找开关：管理端**首次运行**
+;      自动注册（D63 的 FirstRunBootstrap）。安装器仍然只放文件。
+;
+; D62（2026-09-21 第二轮真机）：
+;   ① 精简版在**缺运行时**的机器上不再自动启动（[Run] 的 Check 直接隐藏该项），
+;      改为安装结束时给出可读说明 + 下载链接 —— 原先用户选了"先装程序"，装完
+;      自动拉起的还是那个 apphost 的 ".NET not found" 报错框，等于白提示一次。
+;   ② 桌面快捷方式改为**可选任务**（D61 时是强制创建），安装向导里给勾选框。
+;   ③ 卸载时询问"是否一并删除配置与日志"，默认否；静默卸载一律按"否"处理。
+;   ④ SetupIconFile 指向应用图标，安装程序自身与卸载入口都显示 DelayStart 图标。
+;
+; D64（2026-09-21 第四轮真机 / 用户批复 D64-1=A、D64-2=A）：
+;   ① **装之前清空安装目录**（[Code] 的 PrepareToInstall）。两种形态（自包含 / 框架依赖）
+;      共用同一个 AppId 与同一个安装目录，覆盖安装只覆盖同名文件、**不清理对方形态的残留**
+;      —— 实测"先装 full 再装 slim"会把 full 的 hostfxr.dll / coreclr.dll 留在目录里，
+;      而 .NET 的 apphost **只要在自己目录里看到 hostfxr.dll，就把"运行时根"当成程序目录**，
+;      于是精简版报 "You must install or update .NET"（哪怕机器上装着 10.0.12，报错里
+;      还会列出一份 x86 的 10.0.12 来自证"真的装了"）。清掉的只有程序文件：配置在
+;      %APPDATA%、日志在 %LOCALAPPDATA%、计划任务在目录外，**不动用户任何数据**。
+;      🔴 清理放在 PrepareToInstall 里是有原因的 —— Inno 文档保证它早于 Setup 的
+;      "文件占用检查"（CloseApplications / Restart Manager）执行；而安装器是 lowest
+;      权限，删不掉**提权进程**占用的文件（管理端与调度端都是提权跑的），真正还在运行的
+;      占用者只能交给 Restart Manager 关掉 —— 🔴 但**它不会把它们自动重启回来**（重启只对
+;      调用过 RegisterApplicationRestart 的程序生效，我们没调），详见 [Setup] 段那段说明。
+;      🔴 唯一会**中止安装**的情况：精简版发现 hostfxr.dll 删不掉（＝自包含形态的管理端
+;      还在运行）。此时中止比装出一个起不来的程序好；且这一步在清理之前，中止时尚未
+;      删除任何文件，旧安装保持完整可用。
+;   ② 缺运行时的下载入口**按缺哪项决定**（原来两个地址无条件全列、点「是」也只开 .NET
+;      下载页）—— 只缺 Windows App Runtime 的用户被引去装一个已经装好的 .NET，装完
+;      回来还是缺，等于把"误导"从报错框搬到了安装器里。
 
 #define AppName "DelayStart"
-#define AppNameZh "延时启动管理器"
-#define AppVersion "0.1.0"
 #define AppPublisher "DelayStart"
 #define AppExe "DelayStart.exe"
 #define SchedulerExe "DelayStart.Scheduler.exe"
 
+#ifndef AppVersion
+  #define AppVersion "0.1.0"
+#endif
+#ifndef Rid
+  #define Rid "win-x64"
+#endif
+#ifndef PublishDir
+  #define PublishDir "..\src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish"
+#endif
+#ifndef SchedulerDir
+  #define SchedulerDir "..\src\DelayStart.Scheduler\bin\Release\net10.0-windows\win-x64\publish"
+#endif
+#ifndef TargetArch
+  #define TargetArch "x64compatible"
+#endif
+#ifndef DotNetUrl
+  #define DotNetUrl "https://dotnet.microsoft.com/download/dotnet/10.0"
+#endif
+#ifndef WinAppRuntimeUrl
+  #define WinAppRuntimeUrl "https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe"
+#endif
+; 应用图标：既给安装程序自身（SetupIconFile），也是卸载入口的图标来源。
+; 相对路径按本脚本所在目录（installer\）解析。
+#ifndef AppIconFile
+  #define AppIconFile "..\src\DelayStart.App\Assets\AppIcon.ico"
+#endif
+; Windows App Runtime 框架包全名形如 Microsoft.WindowsAppRuntime.1.8_<版本>_<架构>__8wekyb3d8bbwe，
+; 检测时要连架构一起匹配 —— arm64 机器上只装了 x64 框架包时，arm64 版程序照样起不来。
+#ifndef WinAppRuntimeArch
+  #define WinAppRuntimeArch "x64"
+#endif
+
+; 形态后缀**只用于产物文件名**（DelayStart-Setup-<版本>-<Rid>-slim.exe）——
+; 两种形态的 AppId 相同、装在同一个目录，用户不该同时装两个。
+; 🔴 它刻意不参与 AppVerName：那一项决定"设置 → 应用"列表里的显示名，
+;    而那里只该出现 DelayStart（D63）。
+#ifdef Slim
+  #define FlavorSuffix "-slim"
+#else
+  #define FlavorSuffix ""
+#endif
+
 [Setup]
 AppId={{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}
-AppName={#AppNameZh}
+AppName={#AppName}
 AppVersion={#AppVersion}
+; 🔴 "设置 → 应用"（原"应用和功能"）里的**显示名**取的就是 AppVerName，不是 AppName。
+;    缺省值是 `AppName + " version " + AppVersion`，所以不显式写就会看到
+;    "DelayStart 0.1.0"；D60 起还拼过形态后缀变成 "DelayStart 0.1.0-slim"（2026-09-21 实测）。
+;    D63 起固定为裸 AppName —— 版本号由 DisplayVersion 单独承载（系统自己会显示），
+;    形态后缀只留在产物文件名里。
+AppVerName={#AppName}
 AppPublisher={#AppPublisher}
 DefaultDirName={localappdata}\Programs\{#AppName}
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 ; 固定路径：禁止 "为所有用户安装"，也不允许改目录
 PrivilegesRequired=lowest
-OutputBaseFilename=DelayStart-Setup-{#AppVersion}
+; 架构防呆：x64 包的 x64compatible 允许 arm64（arm64 可模拟运行 x64）；
+; arm64 包传 arm64，装到别的架构上会被直接拒绝。
+ArchitecturesAllowed={#TargetArch}
+; 安装程序自身 / 卸载入口的图标 = 应用图标（D62）
+SetupIconFile={#AppIconFile}
+OutputBaseFilename=DelayStart-Setup-{#AppVersion}-{#Rid}{#FlavorSuffix}
 OutputDir=..\dist
 Compression=lzma2
 SolidCompression=yes
@@ -38,82 +142,653 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExe}
 ; 关闭系统重启提示：本软件没有锁文件，重启无关紧要
 RestartIfNeededByRun=no
+; D64-1：安装前 [Code] 会尽力清空 {app} 里的旧文件；但管理端与调度端都是**提权**运行的，
+; 非提权的安装器删不掉它们占用的文件 —— 那部分交给 Windows Restart Manager：它会列出
+; 正在占用待替换文件的应用，征得用户同意后关掉它们。
+; 🔴 两条必须知道的边界（都是查 Inno 文档确认的，别照直觉假设）：
+;   ① `RestartApplications` **只对调用过 Windows `RegisterApplicationRestart` API 的程序
+;      生效**（Inno 文档原文），而 DelayStart 与调度端都没有调用 → 装完后它们**不会**被
+;      自动重启回来。实际后果：调度端在安装时被关掉的话，托盘图标要到**下次登录**才会
+;      回来（它的计划任务只在登录时触发），本次登录尚未到点的延时条目也随之下次登录补上。
+;      ⚠️ 这不是 D64 引入的：任何一次升级都要替换调度端 exe，而它一直在运行。
+;   ② CloseApplications 的"文件占用"检查发生在 [Code] 的 PrepareToInstall **之后**，
+;      两者不会互相抢：被占用的文件我们的清理删不掉，它必然还在原地等着 Restart Manager 发现。
+CloseApplications=yes
+RestartApplications=yes
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
+[Tasks]
+; D62：桌面快捷方式改成可选。不写 Flags → 默认勾选（Inno 的默认就是勾选，
+; 只有 Flags: unchecked 才是默认不勾）。
+; ⚠️ 静默安装（/VERYSILENT）**不会**自动勾选任何任务 —— 要建桌面图标必须显式
+;    传 /MERGETASKS="desktopicon"（详见 installer\README.md）。
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
+
 [Files]
-; 管理端：自包含发布目录整个放入（~135 MB，239 文件）
-Source: "..\src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; 调度端：AOT 单文件，放在安装根（调度任务按此路径注册）
-Source: "..\src\DelayStart.Scheduler\bin\Release\net10.0-windows\win-x64\publish\{#SchedulerExe}"; DestDir: "{app}"; Flags: ignoreversion
+; 管理端：自包含（≈217 MB / 536 文件）或框架依赖（≈15 MB）整个放入
+; ⚠️ D61：publish 目录里必须含 App.xbf / MainWindow.xbf / Views\*.xbf / Dialogs\*.xbf /
+;    DelayStart.pri / Assets\AppIcon.ico —— 少了它们程序一启动就在 Microsoft.UI.Xaml.dll
+;    里 0xc000027b 秒崩。这些文件原本不进 publish，由 App.csproj 的
+;    CopyWinUIResourcesToPublishDir 补上；若这里装出来的程序崩溃，先查那 11 个文件在不在。
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 调度端：AOT 单文件，放在安装根（调度任务按此路径注册）。
+; ⚠️ 调度端两种形态都用 AOT —— 它不依赖 .NET 运行时，精简版用户因此只需补两个运行时而不是三个。
+Source: "{#SchedulerDir}\{#SchedulerExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; （D40：普通用户代理 DelayStart.Agent 已删除 —— 普通条目由调度端亲自降权启动，不再需要第二个 exe）
 
 [Icons]
-Name: "{autoprograms}\{#AppNameZh}"; Filename: "{app}\{#AppExe}"
+; 开始菜单恒建；桌面项由 [Tasks] 的 desktopicon 控制（D62）。
+; {autoprograms} / {autodesktop} 在 lowest 安装模式下都落在**当前用户**的目录里，
+; 与"程序装在 %LOCALAPPDATA%"的定位一致，不会去碰 all users。
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-; 首启勾选项：装完直接打开管理端（调度任务由程序首启幂等注册，不归安装器管）
-Filename: "{app}\{#AppExe}"; Description: "启动 {#AppNameZh}"; Flags: nowait postinstall skipifsilent
+; 首启勾选项：装完直接打开管理端（调度任务由程序首启幂等注册，不归安装器管）。
+; 🔴 必须带 shellexec：DelayStart.exe 声明了 requireAdministrator，而安装器是 lowest 权限，
+;    默认的 CreateProcess 路径会以 **740（ERROR_ELEVATION_REQUIRED）** 失败
+;    —— 表现为"勾选启动、点确定后弹报错框，程序根本没起来"。
+;    shellexec 让 Windows 外壳按 manifest 弹 UAC，用户同意后再以管理员身份启动。
+; 🔴 D62 的 Check：精简版在缺运行时的机器上**直接隐藏这一项**。否则用户点了"启动"，
+;    得到的是 apphost 那句 "You must install or update .NET to run this application"
+;    —— 一个没有任何上下文、也指不到安装器的报错框。改由 CurStepChanged 给可读说明。
+Filename: "{app}\{#AppExe}"; Description: "启动 {#AppName}"; Flags: nowait postinstall skipifsilent shellexec; Check: RuntimeReadyForApp
 
 [Code]
+// ⚠️ 不要在这里重复声明 FILE_ATTRIBUTE_DIRECTORY —— Inno 的 Pascal 自带这个常量
+//    （重复声明报 "Duplicate identifier"，2026-09-21 实测踩过一次）。
+
+var
+  // 卸载时的用户数据处置说明：'' 表示没清（保留）；非空则是完成页要显示的结果文案。
+  UserDataNote: String;
+
+#ifdef Slim
+// ---------------------------------------------------------------------------
+// 精简版（框架依赖）的运行时检测（D60-3，D61 修正判据，D62 补齐后续动作）
+//
+// 精简版不含任何运行时，缺运行时程序会直接起不来。检测放在 InitializeSetup，
+// 目的是**在安装前**就告知，而不是等用户双击图标拿到一个没有上下文的报错。
+// 🔴 不阻断安装：用户完全可以选择先装程序、稍后补装运行时 —— 但那时必须
+//    **跳过自动启动**（见 [Run] 的 Check），否则等于白提示一次（D62 的教训）。
+//
+// 🔴 D61 教训：最初两项检测**各错一次**，在已经装了 .NET 10 Runtime 与
+//    Windows App Runtime 1.8 的机器上双双误报"缺失"。根因是查错了注册表位置：
+//    ① .NET 记录落在 **32 位视图**（WOW6432Node）；只查 HKLM64 读不到。
+//    ② Windows App Runtime 是**按用户**注册的框架包，在 HKCU；HKLM 下同名键
+//       只有几条系统内置项。只查 HKLM64 读不到。
+//    误报比不检测更糟：用户明明装了运行时，却被劝去下载安装包。
+// ---------------------------------------------------------------------------
+
+// ── 判据 ① 共享框架目录：文件在不在，才是运行时能不能用的最终事实 ──────────
+// 用通配找 10.* 子目录，因此不必预先知道具体版本号（10.0.12、10.0.13… 都认）。
+function DotNetSharedFxDirHasMajor10(const SharedFxRoot: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := False;
+  if FindFirst(SharedFxRoot + '\10.*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          Result := True;
+          Exit;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+// ── 判据 ②③ 注册表：两种视图都要读 ────────────────────────────────────────
+// 2026-09-21 实测本机：数据在
+//   HKLM\SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\...
+// 而 64 位视图下只有一条 x64\sharedhost —— .NET 安装器是 32 位进程，写的是 32 位视图。
+function DotNetSharedFxHasMajor10(RootKey: Integer; const SubKey: String): Boolean;
+var
+  Names: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  if not RegGetSubkeyNames(RootKey, SubKey, Names) then
+    Exit;
+  for I := 0 to GetArrayLength(Names) - 1 do
+    // 主版本必须匹配：NET 9 的运行时跑不了 net10.0 的目标
+    if Pos('10.', Names[I]) = 1 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+// ⚠️ 查的是 **Microsoft.NETCore.App**（.NET Runtime），不是 Microsoft.WindowsDesktop.App。
+//    依据是精简版 publish 出来的 DelayStart.runtimeconfig.json 实测（2026-09-20）：
+//    framework 只有 "Microsoft.NETCore.App" 10.0.0 —— WinUI 3 这一层并不要求 Desktop Runtime。
+//    而 Desktop Runtime 的安装包里**含** NETCore Runtime，所以查 NETCore.App 能同时覆盖
+//    "只装了 .NET Runtime" 与 "装了 Desktop Runtime" 两种机器，不会误报。
+function HasDotNetRuntime(): Boolean;
+begin
+  Result :=
+    // ① 文件系统（主判据）：{pf64} 恒指 64 位 Program Files
+    DotNetSharedFxDirHasMajor10(ExpandConstant('{pf64}\dotnet\shared\Microsoft.NETCore.App'))
+    or DotNetSharedFxDirHasMajor10(ExpandConstant('{pf32}\dotnet\shared\Microsoft.NETCore.App'))
+    // ② 32 位注册表视图（HKLM 常量 = 安装器所在视图，实测数据就在这里）
+    or DotNetSharedFxHasMajor10(HKLM, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App')
+    or DotNetSharedFxHasMajor10(HKLM, 'SOFTWARE\dotnet\Setup\InstalledVersions\arm64\sharedfx\Microsoft.NETCore.App')
+    or DotNetSharedFxHasMajor10(HKLM, 'SOFTWARE\dotnet\Setup\InstalledVersions\x86\sharedfx\Microsoft.NETCore.App')
+    // ③ 64 位注册表视图（HKLM64）：部分安装方式（MSI / VS 附带）写这里
+    or DotNetSharedFxHasMajor10(HKLM64, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App')
+    or DotNetSharedFxHasMajor10(HKLM64, 'SOFTWARE\dotnet\Setup\InstalledVersions\arm64\sharedfx\Microsoft.NETCore.App')
+    or DotNetSharedFxHasMajor10(HKLM64, 'SOFTWARE\dotnet\Setup\InstalledVersions\x86\sharedfx\Microsoft.NETCore.App');
+end;
+
+// ── Windows App Runtime：MSIX 框架包 ──────────────────────────────────────
+// 注册路径：<Hive>\SOFTWARE\Classes\Local Settings\...\AppModel\Repository\Packages\
+//             Microsoft.WindowsAppRuntime.<版本>_<包版本>_<架构>__<发布者哈希>
+// 🔴 实测（2026-09-21）：框架包在 **HKCU**（按用户注册），HKLM 下同名键只有 3 条
+//    系统内置项 —— 只查 HKLM 会误报缺失。安装器以当前用户身份运行，HKCU 可读。
+function PackagesRepoHasWindowsAppRuntime(RootKey: Integer): Boolean;
+var
+  Names: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  if not RegGetSubkeyNames(RootKey,
+       'SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages',
+       Names) then
+    Exit;
+  for I := 0 to GetArrayLength(Names) - 1 do
+    // ⚠️ ① 用 Pos 而不是 Copy —— 包名后缀长度不定，固定长度前缀比较写错一个字符
+    //       就会恒为假（装了运行时也误报缺失）。
+    //    ② 架构段必须一起匹配：arm64 机器上只有 x64 框架包时，arm64 程序照样起不来。
+    if (Pos('Microsoft.WindowsAppRuntime.1.8', Names[I]) > 0)
+       and (Pos('_{#WinAppRuntimeArch}__', Names[I]) > 0) then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+function HasWindowsAppRuntime(): Boolean;
+begin
+  Result :=
+    PackagesRepoHasWindowsAppRuntime(HKCU)     // 主判据：按用户注册
+    or PackagesRepoHasWindowsAppRuntime(HKLM)  // 32 位视图（预置包 / 组策略部署）
+    or PackagesRepoHasWindowsAppRuntime(HKLM64) // 64 位视图
+end;
+
+// ── 诊断开关：强制把两项检测当作"缺失" ────────────────────────────────────
+// 存在的理由：开发机装了运行时，"缺运行时"那条分支在本地永远走不到 —— 提示文案、
+// [Run] 是否隐藏、安装结束提示都只能靠人肉在干净机器上验一遍。
+// 设了 DELAYSTART_FAKE_MISSING 就让 MissingRuntimeList 恒报缺，从而能在装了
+// 运行时的机器上走完整条分支（自检文件里 ready 会变成 0）。
+// 🔴 不设这个环境变量时完全不生效，正常用户永远碰不到。
+function ForceMissingRuntime(): Boolean;
+begin
+  Result := GetEnv('DELAYSTART_FAKE_MISSING') <> '';
+end;
+
+// 两项分开判断 —— D64-2 起"打开哪个下载页"要按缺哪项决定，不能再合并成一个布尔。
+function MissingDotNet(): Boolean;
+begin
+  Result := ForceMissingRuntime() or (not HasDotNetRuntime());
+end;
+
+function MissingWinAppRuntime(): Boolean;
+begin
+  Result := ForceMissingRuntime() or (not HasWindowsAppRuntime());
+end;
+
+// 缺失清单：'' = 运行时齐全。安装前提示与安装后提示共用，避免两处文案不同步。
+function MissingRuntimeList(): String;
+begin
+  Result := '';
+  if MissingDotNet() then
+    Result := Result + '  · .NET 10 Runtime' #13#10;
+  if MissingWinAppRuntime() then
+    Result := Result + '  · Windows App Runtime 1.8' #13#10;
+end;
+
+// 只列**缺失项**的下载地址（D64-2）。
+// 原先无论缺哪项都把两个地址全列、点「是」还只开 .NET 下载页 —— 只缺 Windows App
+// Runtime 的用户（本机实测就是这种：.NET 10.0.12 装着、缺的只是框架包）被引去装
+// 一个已经装好的东西，装完回来仍然缺。
+function MissingRuntimeLinks(): String;
+begin
+  Result := '';
+  if MissingDotNet() then
+    Result := Result + '  .NET 10 Runtime：' #13#10 +
+                        '    {#DotNetUrl}' #13#10;
+  if MissingWinAppRuntime() then
+    Result := Result + '  Windows App Runtime 1.8：' #13#10 +
+                        '    {#WinAppRuntimeUrl}' #13#10;
+end;
+
+// 打开下载页：缺哪项开哪项；两项都缺则 .NET 在前。
+procedure OpenRuntimeDownloads();
+var
+  ErrorCode: Integer;
+begin
+  if MissingDotNet() then
+    ShellExec('open', '{#DotNetUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+  if MissingWinAppRuntime() then
+    ShellExec('open', '{#WinAppRuntimeUrl}', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Missing: String;
+  Answer: Integer;
+  SelfCheckFile: String;
+  SelfCheckText: String;
+begin
+  Result := True;
+
+  // ── 自检出口：把两项检测结果写进文件后**直接退出，不安装** ──────────────
+  // 用法（本地 / CI 回归"检测逻辑有没有误报"）：
+  //   $env:DELAYSTART_RUNTIME_CHECK = "$env:TEMP\rt.txt"
+  //   .\dist\DelayStart-Setup-<版本>-win-x64-slim.exe /VERYSILENT
+  // 存在的理由：2026-09-21 首次真机安装时，两项检测**各误报一次**（查错了注册表
+  // 位置），而检测结果只出现在一个要人点确定的 MsgBox 里 —— 没有这个出口就无法
+  // 自动化验证，只能靠人肉装一遍。诊断入口是环境变量，不设就不生效。
+  SelfCheckFile := GetEnv('DELAYSTART_RUNTIME_CHECK');
+  if SelfCheckFile <> '' then
+  begin
+    SelfCheckText :=
+      'dotnet=' + IntToStr(Ord(HasDotNetRuntime())) + #13#10 +
+      'winappruntime=' + IntToStr(Ord(HasWindowsAppRuntime())) + #13#10 +
+      // ready = [Run] 自动启动项的可见条件（1 = 会显示"启动 DelayStart"勾选框）。
+      // 设 DELAYSTART_FAKE_MISSING 时这里必须变 0 —— 那是"缺运行时"分支的自动化验证点。
+      'ready=' + IntToStr(Ord(MissingRuntimeList() = '')) + #13#10 +
+      'forced=' + IntToStr(Ord(ForceMissingRuntime())) + #13#10 +
+      'pf64=' + ExpandConstant('{pf64}') + #13#10 +
+      'needdll=' + AddBackslash(ExpandConstant('{pf64}\dotnet\shared\Microsoft.NETCore.App')) + '-10.x' + #13#10;
+    SaveStringToFile(SelfCheckFile, SelfCheckText, False);
+    Result := False; // 自检模式绝不落地任何文件
+    Exit;
+  end;
+
+  Missing := MissingRuntimeList();
+  if Missing = '' then
+    Exit; // 运行时齐全，静默继续
+
+  // 🔴 这里刻意用 MsgBox 而不是 TaskDialogMsgBox，两个坑都绕开：
+  //    ① TaskDialogMsgBox 的第 5 个参数 Shields 是 `TMsgBoxShields`（**集合类型**），
+  //       传整数 0 会报 "Type mismatch"（6.7.3 实测）；
+  //    ② 用自定义按钮标签就必须写数组字面量，而 `[` 出现在行首会被 ISCC
+  //       当成 section 标记（"Invalid section tag"）。
+  //    MsgBox 的 Buttons 是纯整数常量，没有集合类型，也没有数组字面量。
+  //    SuppressibleMsgBox 与它签名兼容，但静默安装时不再弹框、直接返回 Default
+  //    （这里是 IDNO＝继续安装，自动化装包不会被卡住）。
+  Answer := SuppressibleMsgBox(
+    '本安装包不含运行时，当前系统缺少：' #13#10 + Missing + #13#10 +
+    '缺少运行时时程序无法启动。' #13#10 #13#10 +
+    '选「是」打开下载页（只打开上面缺的那几项）；选「否」先装程序、稍后补装' #13#10 +
+    '（装完不会自动启动程序）；选「取消」放弃安装。' #13#10 #13#10 +
+    '下载地址：' #13#10 +
+    MissingRuntimeLinks(),
+    mbConfirmation, MB_YESNOCANCEL, IDNO);
+
+  case Answer of
+    IDYES:
+      OpenRuntimeDownloads();
+    IDCANCEL:
+      Result := False;
+  end;
+end;
+#endif
+
+// ═══════════════════════════════════════════════════════════════════════════
+// D64-1：安装前清空安装目录
+//
+// 两种形态共用同一个 AppId 与同一个安装目录，覆盖安装只覆盖同名文件 —— 于是
+// "先装 full 再装 slim" 会在目录里留下 full 的 hostfxr.dll / coreclr.dll，而 .NET 的
+// apphost 只要在自己目录里看到 hostfxr.dll，就把"运行时根"当成程序目录本身，转而去
+// <程序目录>\shared\Microsoft.NETCore.App\10.x 找共享框架 —— 那里当然没有（自包含布局
+// 是平铺的），于是弹 "You must install or update .NET"，**哪怕机器上装着 10.0.12**。
+// 2026-09-21 在本机按同样顺序 1:1 复现（只把 hostfxr.dll + hostpolicy.dll 放进目录即可复现）。
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 当前编译的是不是精简版（两种形态共用本脚本，靠 ISPP 的 /DSlim 区分）。
+// 做成函数而不是把 #ifdef 散在判断里：PrepareToInstall 两种形态走同一段代码。
+function IsSlimFlavor(): Boolean;
+begin
+#ifdef Slim
+  Result := True;
+#else
+  Result := False;
+#endif
+end;
+
+// 诊断开关：跳过清理。仅在排查"清目录是否与某个安装场景冲突"时用，正常用户碰不到。
+function SkipPurge(): Boolean;
+begin
+  Result := GetEnv('DELAYSTART_SKIP_PURGE') <> '';
+end;
+
+// Inno 自己的卸载器（unins000.exe / .dat / .msg）。**刻意保留不删**：
+// 本次安装结束时新卸载器会覆盖它们；而万一安装中途失败（磁盘满、断电、用户取消），
+// 留着旧卸载器用户还能把烂摊子卸干净。
+function IsInnoUninstallerFile(const FileName: String): Boolean;
+begin
+  Result := CompareText(Copy(FileName, 1, 5), 'unins') = 0;
+end;
+
+// 尽力清空目录内容，返回删掉的文件数。
+// 🔴 单个文件删不掉（被占用）**不中止**，而且这里天然安全：Windows 上没带
+//    FILE_SHARE_DELETE 打开的文件**根本删不掉**（DeleteFile 返回 False），所以凡是
+//    Restart Manager 接下来要关心的文件（＝被运行中的程序占着的那几个）必然还在原地，
+//    一定被它的"文件占用"检查发现 —— 我们提前清空的只是那些本来就没人在用的文件。
+//    唯一需要"删不掉就中止"的是精简版遇上 hostfxr.dll —— 那一条在 PrepareToInstall 里
+//    **提前单独探测**。
+// 🔴 分两遍走：边枚举边删条目会让 FindNext 漏项（NTFS 上会跳），所以第一遍只删文件、
+//    第二遍才递归进子目录。
+function PurgeDirBestEffort(const Dir: String): Integer;
+var
+  FindRec: TFindRec;
+  Full, Name: String;
+begin
+  Result := 0;
+
+  if FindFirst(Dir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        Name := FindRec.Name;
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+        begin
+          if not IsInnoUninstallerFile(Name) then
+          begin
+            Full := Dir + '\' + Name;
+            if DeleteFile(Full) then
+              Result := Result + 1
+            else
+              Log('残留文件删不掉（被占用），留给 Restart Manager：' + Full);
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+
+  if FindFirst(Dir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        Name := FindRec.Name;
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          // 通配符枚举会带上这两个伪目录项
+          if (Name <> '.') and (Name <> '..') then
+          begin
+            Full := Dir + '\' + Name;
+            Result := Result + PurgeDirBestEffort(Full);
+            // 空目录顺手删掉；里面还有删不掉的文件时它会失败，无所谓。
+            RemoveDir(Full);
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+// 安装前清理。返回非空字符串 = 中止安装，并把它作为错误信息显示在"准备安装"页上。
+//
+// 🔴 只清**我们自己的固定安装目录**：DefaultDirName 虽然固定、DisableDirPage=yes 也挡不住
+//    命令行 /DIR= 覆盖，所以这里再核一次路径，不一致就一个文件都不碰。
+// 🔴 必须放在 PrepareToInstall 里：Inno 文档保证它早于 Setup 的"文件占用检查"执行。
+//    安装器是 lowest 权限，删不掉提权进程（管理端 / 托盘里的调度端）占用的文件，
+//    这些占用者随后由 Restart Manager 负责关掉；顺序若反过来，会留下
+//    "RM 已经关掉了程序、我们才开始清理"的空档（那时程序目录可能仍被判定为占用）。
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  AppDir, ExpectedDir, StaleHost: String;
+  Count: Integer;
+begin
+  Result := '';
+
+  AppDir := ExpandConstant('{app}');
+  ExpectedDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
+
+  if CompareText(AppDir, ExpectedDir) <> 0 then
+  begin
+    Log('跳过安装目录清理：{app} 指向 ' + AppDir + '，不是固定目录 ' + ExpectedDir);
+    Exit;
+  end;
+
+  if SkipPurge() then
+  begin
+    Log('DELAYSTART_SKIP_PURGE 已设置，跳过安装目录清理与残留探测（诊断用）');
+    Exit;
+  end;
+
+  if not DirExists(AppDir) then
+    Exit; // 全新安装，没有可清理的东西
+
+  // ── 精简版：先确认 hostfxr.dll 删得掉，删不掉就中止 ──────────────────────
+  // 它是"上一次装的是自包含形态"的指纹，也是唯一会让精简版**起不来**的残留。
+  // 它被占用 = 自包含形态的管理端还在运行（调度端不加载它）。
+  // 🔴 探测放在清理之前：中止时尚未删任何其他文件，旧安装保持完整可用，
+  //    用户只要关掉程序重跑安装程序即可，不会卡在半删状态。
+  if IsSlimFlavor() then
+  begin
+    StaleHost := AppDir + '\hostfxr.dll';
+    if FileExists(StaleHost) then
+    begin
+      DeleteFile(StaleHost);
+      if FileExists(StaleHost) then
+      begin
+        Result :=
+          '上一次安装残留的运行时文件正在被占用，无法移除：' #13#10 +
+          '  ' + StaleHost + #13#10 #13#10 +
+          '这个文件会让本次安装得到一个无法启动的程序（.NET 宿主会误以为运行时' #13#10 +
+          '就在程序目录里，于是报"必须安装 .NET"）。' #13#10 #13#10 +
+          '请先完全退出 DelayStart（如果任务栏托盘里还有 DelayStart 图标，也请一并退出），' #13#10 +
+          '然后重新运行安装程序。';
+        Exit;
+      end;
+    end;
+  end;
+
+  Count := PurgeDirBestEffort(AppDir);
+  Log('安装目录已清理：删除 ' + IntToStr(Count) + ' 个文件（' + AppDir + '）');
+end;
+
+// 安装结束后（仍是安装进程内，[Run] 的 postinstall 项尚未执行）：
+// 精简版若仍缺运行时，给一次可读的说明 + 下载入口，并说明**为什么**没有自动启动。
+// 🔴 用 SuppressibleMsgBox：静默安装不该被提示框卡住。
+procedure CurStepChanged(CurStep: TSetupStep);
+#ifdef Slim
+var
+  Missing: String;
+#endif
+begin
+// ⚠️ 变量声明也要跟着 #ifdef：自包含形态下这段逻辑整体被裁掉，变量留着会让
+//    ISCC 报 "[Hint] Variable 'MISSING' never used" —— 本项目的验收标准是零警告。
+#ifdef Slim
+  if CurStep = ssPostInstall then
+  begin
+    Missing := MissingRuntimeList();
+    if Missing = '' then
+      Exit;
+    if SuppressibleMsgBox(
+        'DelayStart 已安装，但本机仍缺少以下运行时，程序暂时无法启动：' #13#10 +
+        Missing + #13#10 +
+        '（这正是"安装完成后启动"没有出现的原因 —— 此时拉起程序只会弹出一个' #13#10 +
+        ' 没有上下文、也指不出解决方法的报错框。）' #13#10 #13#10 +
+        '装好下面缺失的运行时后，从开始菜单/桌面启动 DelayStart 即可：' #13#10 +
+        MissingRuntimeLinks() + #13#10 +
+        '现在就打开下载页吗？',
+        mbConfirmation, MB_YESNO, IDNO) = IDYES then
+      OpenRuntimeDownloads();
+  end;
+#endif
+end;
+
+// 非精简版（自包含）永远为真；精简版要求两个运行时都在。
+// ⚠️ 这个函数必须在两种形态下都存在 —— [Run] 的 Check 参数无条件引用它。
+function RuntimeReadyForApp(): Boolean;
+begin
+#ifdef Slim
+  Result := (MissingRuntimeList() = '');
+#else
+  Result := True;
+#endif
+end;
+
 // 卸载前的恢复动作（D22 / FR-2.7 / 9.3）。
 // 🔴 必须在 InitializeUninstall 里同步等待并检查退出码：
 //    --restore-all 失败说明还有条目没能还原成系统默认状态，此时删掉管理端
 //    用户就永远失去"移出延时"的入口了 —— 所以中止卸载，让用户先手动处理。
+//
+// 🔴 D61：**不能再用 Exec**。DelayStart.exe 的 manifest 是 requireAdministrator，
+//    而卸载器是 PrivilegesRequired=lowest，Exec（CreateProcess）会以 740
+//    （ERROR_ELEVATION_REQUIRED）失败 —— 还原动作根本不会发生，卸载却照常进行，
+//    这是 D22 明令禁止的"用户毫不知情地永久失去自启动"。
+//    改用 ShellExec('runas') 弹一次 UAC，代价是**拿不到退出码**；
+//    因此约定程序用 --result-file 把退出码写到文件里，这里回读。
 function InitializeUninstall(): Boolean;
 var
+  AppExe: String;
+  ResultFile: String;
   ResultCode: Integer;
+  ShellError: Integer;
+  Waited: Integer;
+  Text: AnsiString;
 begin
   Result := True;
 
-  if not FileExists(ExpandConstant('{app}\{#AppExe}')) then
+  AppExe := ExpandConstant('{app}\{#AppExe}');
+  if not FileExists(AppExe) then
     Exit; // 文件都不在了（手工删除过），无从恢复，照常卸载
 
-  if Exec(
-      ExpandConstant('{app}\{#AppExe}'),
-      '--restore-all',
+  // 结果文件放 {tmp}（当前用户的临时目录）：提权后的进程还是同一个用户，写得进去。
+  ResultFile := ExpandConstant('{tmp}\DelayStart-restore-result.txt');
+  DeleteFile(ResultFile);
+
+  if not ShellExec(
+      'runas',
+      AppExe,
+      '--restore-all --result-file "' + ResultFile + '"',
       ExpandConstant('{app}'),
-      SW_SHOW,
-      ewWaitUntilTerminated,
-      ResultCode) then
+      SW_SHOWNORMAL,
+      ewNoWait,
+      ShellError) then
   begin
-    if ResultCode <> 0 then
-    begin
-      Result := False;
-      if MsgBox(
-          '恢复自启动项时出现问题（退出码 ' + IntToStr(ResultCode) + '）。' #13#10 +
-          '为避免数据丢失，卸载已中止。请打开程序把「延时启动」页的条目逐一移出，' #13#10 +
-          '或使用命令行 DelayStart.exe --restore-all 查看具体失败原因。' #13#10 #13#10 +
-          '仍要强行卸载（跳过恢复，自启动项保持接管状态）吗？',
-          mbConfirmation, MB_YESNO) = IDYES then
-        Result := True;
-    end;
-  end
-  else
-  begin
-    // Exec 本身失败（进程起不来）。给用户知情权，但默认放行卸载 ——
+    // UAC 被拒（用户点了"否"）/ 起不来。还原没发生，但默认放行卸载 ——
     // 程序已损坏时强行中止只会把用户锁死。
     if MsgBox(
-        '无法运行恢复程序，卸载将继续。' #13#10 +
-        '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。继续吗？',
+        '无法以管理员身份启动恢复程序（ShellExecute 错误 ' + IntToStr(ShellError) + '）。' #13#10 +
+        '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。' #13#10 #13#10 +
+        '继续卸载吗？',
         mbConfirmation, MB_YESNO) = IDNO then
       Result := False;
+    Exit;
+  end;
+
+  // 轮询等结果文件（最长约 60 秒：还要算上用户看 UAC 弹窗的时间）。
+  // 🔴 不用 ewWaitUntilTerminated：提权启动能否拿到进程句柄并不确定，
+  //    而"文件出现了没有"是确定性判据。
+  Waited := 0;
+  while (Waited < 240) and (not FileExists(ResultFile)) do
+  begin
+    Sleep(250);
+    Waited := Waited + 1;
+  end;
+
+  if not FileExists(ResultFile) then
+  begin
+    // 没有结果文件 = 用户取消了 UAC，或程序没跑到写文件那一步。
+    // 两者都意味着"还原没完成"，按失败处理（给用户知情权，默认放行）。
+    if MsgBox(
+        '恢复程序没有返回结果（可能取消了 UAC 提权，或程序已损坏）。' #13#10 +
+        '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。' #13#10 #13#10 +
+        '继续卸载吗？',
+        mbConfirmation, MB_YESNO) = IDNO then
+      Result := False;
+    Exit;
+  end;
+
+  if not LoadStringFromFile(ResultFile, Text) then
+  begin
+    // 理论上到不了这里（刚确认文件存在）。读不了就放行，不拿用户的卸载冒险。
+    Exit;
+  end;
+
+  DeleteFile(ResultFile);
+  // 解析失败按 1（失败）处理 —— 宁可多问一次，也不要静默删掉一个还原失败的安装。
+  ResultCode := StrToIntDef(Trim(String(Text)), 1);
+
+  if ResultCode <> 0 then
+  begin
+    if MsgBox(
+        '恢复自启动项时出现问题（退出码 ' + IntToStr(ResultCode) + '）。' #13#10 +
+        '为避免数据丢失，卸载已中止。请打开程序把「延时启动」页的条目逐一移出，' #13#10 +
+        '或使用命令行 DelayStart.exe --restore-all 查看具体失败原因。' #13#10 #13#10 +
+        '仍要强行卸载（跳过恢复，自启动项保持接管状态）吗？',
+        mbConfirmation, MB_YESNO) = IDYES then
+      Result := True;
   end;
 end;
 
-// 默认保留配置与日志（%APPDATA%\DelayStart 与 %LOCALAPPDATA%\DelayStart）：
-// 卸载重装后延时列表还在。用户要彻底清除时手动删这两个目录即可，
-// 卸载完成页的提示负责把这件事说清楚。
+// 配置与日志的默认策略：**保留**（%APPDATA%\DelayStart 与 %LOCALAPPDATA%\DelayStart），
+// 这样卸载重装后延时列表还在。D62 起在真正删文件之前问一次，用户可主动要求彻底清除。
+//
+// 🔴 时机选 usUninstall 而不是 InitializeUninstall：
+//    ① usUninstall 在"确认卸载"之后才触发 —— 用户如果在确认页反悔，不会已经删了数据；
+//    ② 此时 --restore-all 已经跑完（它在 InitializeUninstall 里），顺序天然正确。
+// 🔴 用 SuppressibleMsgBox + Default=IDNO：静默卸载（/VERYSILENT）一律按"保留"处理，
+//    删用户数据这种事绝不能在用户没看见提示的情况下发生。
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  RoamingDir: String;
+  LocalDir: String;
 begin
-  if CurUninstallStep = usPostUninstall then
+  if CurUninstallStep = usUninstall then
   begin
-    MsgBox(
-      '配置与日志已保留：' #13#10 +
-      '  %APPDATA%\DelayStart（延时列表与设置）' #13#10 +
-      '  %LOCALAPPDATA%\DelayStart（日志与运行记录）' #13#10 #13#10 +
-      '如需彻底清除，请手动删除上述目录。',
-      mbInformation, MB_OK);
+    RoamingDir := ExpandConstant('{userappdata}\DelayStart');
+    LocalDir := ExpandConstant('{localappdata}\DelayStart');
+
+    if SuppressibleMsgBox(
+        '是否一并删除配置与日志？' #13#10 #13#10 +
+        '  ' + RoamingDir + #13#10 +
+        '    延时列表与设置（config.json）' #13#10 +
+        '  ' + LocalDir + #13#10 +
+        '    日志与运行记录' #13#10 #13#10 +
+        '选「是」＝ 彻底清除：下次安装是全新状态，延时列表不再存在。' #13#10 +
+        '选「否」＝ 保留（默认）：重装后仍是原来的延时列表。' #13#10 #13#10 +
+        '⚠ 若调度端仍在运行，日志文件可能被占用而删不干净。',
+        mbConfirmation, MB_YESNO, IDNO) <> IDYES then
+      Exit;
+
+    DelTree(RoamingDir, True, True, True);
+    DelTree(LocalDir, True, True, True);
+
+    if DirExists(RoamingDir) or DirExists(LocalDir) then
+      UserDataNote :=
+        '⚠ 配置与日志未能完全删除（文件可能仍被占用）。请手动检查：' #13#10 +
+        '  ' + RoamingDir + #13#10 +
+        '  ' + LocalDir
+    else
+      UserDataNote := '配置与日志已一并删除。';
+  end
+  else if CurUninstallStep = usPostUninstall then
+  begin
+    if UserDataNote = '' then
+      SuppressibleMsgBox(
+        '配置与日志已保留：' #13#10 +
+        '  %APPDATA%\DelayStart（延时列表与设置）' #13#10 +
+        '  %LOCALAPPDATA%\DelayStart（日志与运行记录）' #13#10 #13#10 +
+        '如需彻底清除，请手动删除上述目录。',
+        mbInformation, MB_OK, IDOK)
+    else
+      SuppressibleMsgBox(UserDataNote, mbInformation, MB_OK, IDOK);
   end;
 end;

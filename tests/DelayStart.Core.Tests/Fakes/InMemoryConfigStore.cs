@@ -52,7 +52,7 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
         _config = Copy(config);
     }
 
-    /// <summary>取当前存储内容的浅拷贝副本，供断言读取。</summary>
+    /// <summary>取当前存储内容的副本，供断言读取。</summary>
     /// <returns>配置副本。</returns>
     public AppConfig Snapshot() => Copy(_config);
 
@@ -60,6 +60,25 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
     {
         Version = source.Version,
         Items = [.. source.Items],
-        Settings = source.Settings,
+        Settings = CopySettings(source.Settings),
+    };
+
+    /// <summary>深拷贝 <c>settings</c> 节点。</summary>
+    /// <remarks>
+    /// 🔴 <see cref="AppConfig.Items"/> 的元素是不可变记录，浅拷贝列表就够；
+    /// 但 <see cref="Settings"/> 是**可变类**，共享引用会让"调用方改了手里的配置"
+    /// 与"存储里的配置被改"变成同一件事 —— 于是「Save 抛异常时标记不该落盘」
+    /// 这类断言会假通过（2026-09-21 实测踩到，<c>FirstRunBootstrapTests</c>）。
+    /// 新增 Settings 字段时必须同步补在这里。
+    /// </remarks>
+    private static Settings CopySettings(Settings source) => new()
+    {
+        DelayPresets = [.. source.DelayPresets],
+        DefaultPreset = source.DefaultPreset,
+        NotifyMode = source.NotifyMode,
+        RetryCount = source.RetryCount,
+        Theme = source.Theme,
+        LastRunId = source.LastRunId,
+        SchedulerTaskInitialized = source.SchedulerTaskInitialized,
     };
 }

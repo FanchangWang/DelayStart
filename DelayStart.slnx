@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/DelayStart.Agent/DelayStart.Agent.csproj" />
     <Project Path="src/DelayStart.App/DelayStart.App.csproj" />
     <Project Path="src/DelayStart.Core/DelayStart.Core.csproj" />
     <Project Path="src/DelayStart.Management/DelayStart.Management.csproj" />

@@ -5,18 +5,19 @@ namespace DelayStart.Core.Abstractions;
 
 /// <summary>
 /// 进程启动抽象（机制 6）。实现按条目的 <see cref="DelayedItem.RunAsAdmin"/> 分流：
-/// 管理员条目继承调度端令牌直接启动；普通用户条目走
-/// <c>WTSQueryUserToken</c> → <c>CreateEnvironmentBlock</c> → <c>CreateProcessAsUser</c> 降权启动
+/// 管理员条目继承调度端提权令牌直接启动；普通用户条目经**普通用户代理进程**
+/// （<c>DelayStart.Agent.exe</c>，D38）启动 —— 代理由独立计划任务以普通用户身份运行，
+/// 天然持有交互用户令牌，调度端（提权）绝不亲自降权创建进程
 /// （NFR-3.3 / FR-5.6 / FR-5.8）。
 /// </summary>
 /// <remarks>
 /// <para>
 /// 抽象成接口有两个目的：一是让调度引擎可以注入假实现做逻辑测试，
-/// 二是把 P/Invoke 与"什么时候启动哪个条目"的调度决策解耦。
+/// 二是把"经代理启动"的 IPC 细节与"什么时候启动哪个条目"的调度决策解耦。
 /// </para>
 /// <para>
-/// TODO(Phase 4): 具体实现 <c>ProcessLauncher</c> 与 <c>TokenHelper</c> 随调度引擎一起落地。
-/// 按 <c>coding-standards.md</c> §14.1，"进程实际启动"属于真机手工验证范围，不进单元测试。
+/// D38（2026-09-20）：放弃提权进程直接降权（<c>CreateProcessWithTokenW</c> 经
+/// seclogon 服务中转，真机实测 ACCESS_DENIED(5) 且会无响应挂起）。
 /// </para>
 /// </remarks>
 public interface IProcessLauncher

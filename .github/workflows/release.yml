@@ -63,7 +63,10 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          # build-installer.ps1 自己会探测路径；这里只做一次可见性确认
+          # build-installer.ps1 自己会探测路径；这里只做一次可见性确认。
+          # D65：中文语言文件随仓库分发（installer\languages\ChineseSimplified.isl），不再依赖 Inno
+          #   安装目录里有没有 ChineseSimplified.isl；编译器版本与随包语言文件若有差异，最坏只是
+          #   ISCC 警告、不会失败 —— 实际用的版本看编译日志里的 `Compiler engine version: Inno Setup x.y.z`。
           Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" | Select-Object -ExpandProperty FullName
 
       - name: 构建安装包

@@ -324,7 +324,7 @@ public enum StartupScope { None, Hkcu, Hklm, HklmWow, UserFolder, SystemFolder }
 | Registry + HklmWow | 同上 | 同上 | `HKLM\...\Explorer\StartupApproved\Run32` ⚠️ |
 | StartupFolder + UserFolder | 同上 | 同上 | `HKCU\...\StartupApproved\StartupFolder` |
 | StartupFolder + SystemFolder | 同上 | 同上 | `HKLM\...\StartupApproved\StartupFolder` |
-| ScheduledTask | `task.Enabled = false` | `task.Enabled = true` | 任务定义本身 |
+| ScheduledTask | 单触发器：`task.Enabled = false`；**多触发器（D67）：只切登录 / 启动触发器的 `Enabled`** | 反向（多触发器先开任务级、再开触发器） | 任务定义本身 |
 | Uwp | `State = 0` (DWord) | `State = 2` | `...\AppModel\SystemAppData\<PFN>\<TaskId>` |
 | Manual | **无动作** | **无动作** | — |
 
@@ -942,7 +942,7 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | 🔴 **包名勘误** | 本文与 `api-analysis.md` 1.4 早先写的包 id `Microsoft.Win32.TaskScheduler` 是**另一个同名旧包**（最新 2.2.0.3，2016 年，只带 `.NETFramework4.0` 资产，**对 .NET 10 不可用**）。真正在维护的是 **`TaskScheduler` 2.12.2**。已按后者落地并回写 `api-analysis.md` 1.4 |
 | 新增本机坑 | ⚠️ `[LibraryImport]` 需要 `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`，否则 **SYSLIB1062 + CS0227**（`Management` / `App` 两处，是 `build-and-test.md` 坑 9 的完整形态）。⚠️ `[ComImport] class` **不能**显式转接口（**CS0030**），改走 `CoCreateInstance` + `Marshal.GetObjectForIUnknown`（`Interop/ComFactory.cs`）。⚠️ `lambda` 参数命名为 `_` 会让内部的 `_ = x` 变成给参数赋值（**CS0029**）。⚠️ `new App();` 裸调用触发 **CA1806** |
 | ⏳ **已知偏差 1** | UWP 显示名解析只做了 **FR-1.8 的第 1 / 2 / 4 步**（`SplashScreen\...\AppName` → `SHLoadIndirectString` → 回退包名前缀），**第 3 步（MrtCache 反查 `PackageFullName`）未实现**。理由：需解码 `resources.pri` 或改 TFM 引入 WinRT 的 `PackageManager`，代价明显高于收益，而第 4 步已给出可读兜底 |
-| ⏳ **已知偏差 2** | `ScheduledTaskSource` **整体跳过 `\Microsoft\*` 下的任务**，而不是"展示为只读"。理由：一台干净 Win11 上就有上百个系统任务，全部列出会把用户真正关心的十几项淹掉，且它们按 D20 提权也改不动。这是比 FR-1.9 更强的保证（"不可操作" → "不展示"），但确实是解释上的偏离 |
+| ⏳ **已知偏差 2** | `ScheduledTaskSource` **整体跳过 `\Microsoft\*` 下的任务**，而不是"展示为只读"。理由：一台干净 Win11 上就有上百个系统任务，全部列出会把用户真正关心的十几项淹掉，且它们按 D20 提权也改不动。这是比 FR-1.9 更强的保证（"不可操作" → "不展示"），但确实是解释上的偏离。🔴 **判据必须是"文件夹"而不是"名字"** —— 早期实现的常量少了尾部分隔符（`@"\Microsoft"`），把根级名叫 `\MicrosoftEdgeUpdateTaskMachineCore` 的**第三方**任务也当成系统任务过滤了（D66 修复，见 10.18）；判定细则见 `ScheduledTaskSource.IsProtectedFolderPath` |
 | **Phase 2 出口条件** | ✅ **已达成（2026-09-19 · D34 真机执行）**：`--scan` 37 项零误判 → `--reinstall-task` 注册成功 → `--takeover` ×4 → `--restore-all`（成功 4 / 失败 0）→ 前后全量快照 diff 中三个 `Run` 键**逐行 IDENTICAL**、其余 30+ 条目未出现于 diff → 回归扫描四项回到「启用」。详见 `build-and-test.md` 9.1 执行状态块 |
 | 🔴 **D34 缺陷 1（已修复）** | Phase 0 自行引入 `<InvariantGlobalization>true</InvariantGlobalization>`（**无对应决策**，理由写的是"省体积"）→ `TaskScheduler.Trigger..cctor` 里的 `CreateSpecificCulture("en")` 抛 `CultureNotFoundException`，**计划任务注册 100% 崩溃，并连带接管第 4 步全部回滚**。**单测与构建都发现不了**：单测注入的是 `FakeSchedulerTaskRegistrar`，真实的 `TaskRegistrationService` 从未被执行，构建也是 0 警告。**已改为 `false`**；体积代价实测 ≈ 0（Windows 用系统 `icu.dll`，产物 140.8 MB 不变）。已登记为 **R13** |
 | 🔴 **D34 缺陷 2（已修复）** | `Release` / `Rollback` 无条件调 `Enable`（删标记），而 `OriginalState.WasEnabled` **只有写入点、零读取点** —— 实现漏了 `DelayedItem.OriginalState` 注释里明写的"移除接管时据此精确还原（FR-2.7）"。后果：**接管前已被用户禁用的项，移出后会被变成启用**（违反 9.3 第 4 条）。**已修复**：恢复动作按 `WasEnabled` 分支；该字段默认值由 `false` 改为 `true`（安全侧：取"原本会自启动"，否则老配置条目释放后会永久不启动且无从解释）。新增 3 个单测钉住 |
@@ -1213,3 +1213,148 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 - 清理逻辑的判定顺序、路径防呆、`unins*` 保留、中止前不删文件四条**逐条读码复核**；
 - ✅ **2026-09-21 用户真机复测通过**：① 装 full → 启动正常；② **装 slim 覆盖 full → 启动正常**（＝ D64-1 生效的直接证据：残留 `hostfxr.dll` 已被装前清空）；③ 在 slim 目录里手工丢回一个 full 的 `hostfxr.dll` → **立刻复现"必须安装 .NET"**（＝ 反向确认这个文件就是唯一病根，也说明修复效果来自清理而非环境巧合）。
 
+### 10.17 D65 执行记录（2026-09-21，CI 首跑失败：语言文件不随官方 Inno 分发）
+
+**现象**：`.github/workflows/release.yml` 首次运行的 `构建安装包` 步骤 `ISCC 编译失败（exit 2）`，ISCC 日志末尾：
+
+```
+Determining language code pages
+Parsing [Languages] section, line 160
+Reading file: C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl
+```
+
+**定性**：不是代码缺陷，是 iss **依赖了一份既不在仓库、也不在官方 Inno 安装包里的文件**。
+
+| 事实 | 证据 |
+|---|---|
+| 官方 Inno Setup 6 **不带**中文 .isl | 本机语言目录里官方那批 `.isl` 时间戳统一为 `2026/5/22 8:00:00`（安装包载荷时间），而 `ChineseSimplified.isl` 是 `2026/6/27 3:05:33` —— 后来手工加入的痕迹 |
+| 它属"用户贡献翻译" | 文件头：`Maintainer: Zhenghan Yang (Kira)` + `github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation`；下载入口 <https://jrsoftware.org/files/istrans/> |
+| CI 用的是另一份 Inno | 工作流 `choco install innosetup`（当前 6.7.1）→ `C:\Program Files (x86)\Inno Setup 6`；本机是 winget 的 per-user 布局、6.7.3 |
+
+**修法**：语言文件入库 `installer\languages\ChineseSimplified.isl`（21436 B，sha256 `6753BE2C…78B0B0`），
+iss 改为 `Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"`。
+
+**否掉的方案**：① CI 里加一步把文件拷进 Inno 安装目录（要写 Program Files，且本机仍得手工备一份，
+没消除隐性前置条件）；② 构建时从 GitHub 拉语言文件（给构建引入网络依赖 + 版本漂移）；③ 钉死 CI 的
+Inno 版本（choco 当前只到 6.7.1，与本机 6.7.3 仍错位，且已实测错位不致命）。
+
+**实测结论（Inno 6.7.3 探针，脚本留在 `.workbuddy/tmp/langprobe/`）**：
+
+| 问题 | 实测结果 |
+|---|---|
+| 相对路径按什么解析 | **按 .iss 所在目录**，与当前工作目录无关 —— 路径只存在于脚本目录 → 编译通过（日志打印 `Reading file: <脚本目录>\reltest.isl`）；只存在于 cwd → exit 2 `Couldn't open include file "<脚本目录>\..."`（**与 CI 失败日志形态 1:1 吻合**，即 CI 就是"文件不存在"） |
+| 语言文件多出编译器不认识的 message 名 | 仅警告 `Message name "..." is not recognized by this version of Inno Setup. Ignoring.`，**exit 0** |
+| 语言文件缺 message | 仅警告 `... has not been defined ... Will use the English message from Default.isl.`，**exit 0** |
+| 垫 `compiler:Default.isl` 后 | **零警告**通过 |
+
+⇒ 语言文件与编译器版本错位**只会产生警告、不会失败**，故 CI 的 Inno 版本不必钉死；垫 `Default.isl`
+让"缺 message"那类警告也消失。
+
+**顺带加固 / 纠正**：
+
+- `build-installer.ps1` 增加语言文件缺失的**提前报错**（否则 ISCC 只抛难读的 `Couldn't open include file`），
+  并在编译前打印 `语言文件: <路径>`；
+- `installer\README.md` 纠正原先"中文语言包 = Inno 自带"的**错误记载** —— 那条错误事实正是不入库的根源；
+- 文档新增 `build-and-test.md` 7.9（本条的执行记录与回归判读表）。
+
+**验收**：iss 两种形态本地编译通过，ISCC 输出含 `Reading file: D:\...\installer\languages\ChineseSimplified.isl`
+（＝读的是仓库那份而非机器那份）；产物体积与 D64 一致（slim **10.0 MB** / full **60.8 MB**，文件数与内含不变）。
+⚠️ CI 侧的真验证要等下一次 push 触发工作流。
+
+@@@NEW@@@
+---
+
+### 10.18 D66 执行记录（2026-09-21，计划任务过滤误伤"名字带 Microsoft"的第三方任务）
+
+**症状**（用户报告）：计划任务子页里，**根级名字以 Microsoft 开头**的第三方任务不显示，典型是 Edge 自动更新的两条
+（`\MicrosoftEdgeUpdateTaskMachineCore`、`\MicrosoftEdgeUpdateTaskMachineUA`）。用户的表述就是判据本身：
+「过滤 Microsoft **文件夹下**的计划任务，不是过滤带有 Microsoft **字样**的计划任务」。
+
+**根因**：`ScheduledTaskSource.TryBuildEntry` 的受保护文件夹判据是
+`path.StartsWith(@"\Microsoft", StringComparison.OrdinalIgnoreCase)`，而 `path` 取的是 `task.Path` ——
+它是 **文件夹 + 任务名**的完整路径（`ItemKey` 的 `sourceKey` 也用它）。少一个尾部分隔符 ⇒ 前缀匹配退化成"名字以 Microsoft 开头"。
+
+| 形态 | `task.Path` | 旧判据 | 正确判定 |
+|---|---|---|---|
+| 系统自带任务 | `\Microsoft\Windows\Defrag\ScheduledDefrag` | 过滤 ✓（碰巧对） | 过滤 |
+| Edge 自动更新（**第三方**） | `\MicrosoftEdgeUpdateTaskMachineCore` | **过滤 ✗ 缺陷** | 展示 |
+| 根级任务，名字就叫 Microsoft | `\Microsoft` | 过滤 ✗ | 展示 |
+| 自建文件夹 | `\MyVendor\Microsoft\Foo` | 不过滤 ✓ | 展示 |
+
+**来源考证**：`api-analysis.md` 1.4 的示例代码用的是 `t.Folder?.Path?.StartsWith("\\Microsoft")` ——
+对根级任务 `Folder.Path` 返回 `\`，**碰巧不会踩坑**；实现时为了 `ItemKey` 改用 `task.Path`，判据却沿用原文，
+缺陷正是在这一次替换里产生的。已在 `api-analysis.md` 该代码块下补一条 `Path` vs `Folder.Path` 的辨析。
+
+**修法**：
+
+1. 前缀常量 `@"\Microsoft"` → `@"\Microsoft\"`，并在 XML 注释里写明"末尾那个反斜杠是承重的"；
+2. 判据抽成 `public static bool IsProtectedFolderPath(string? taskPath)` —— 与 `ResolveExecutable` /
+   `StartupApprovedStore.GetCandidateNames` 同款"纯逻辑可直接单测"形态（管理端类型的单测需要的是**可注入的纯函数**，
+   不是更多集成测试）；
+3. 语义钉死为**只认根级 `\Microsoft`** —— Windows 的保留文件夹只有这一个；`\Microsoft`（根级同名任务）、
+   `\MicrosoftX\Foo`、`\MyVendor\Microsoft\Foo` 一律照常展示。
+
+**回归**：`tests/DelayStart.Core.Tests/ScheduledTaskFolderFilterTests.cs`，3 组 `Theory` 共 **16 例**——
+文件夹内 5 例为真（含大小写不敏感）、名字类 8 例为假（含两个真机样本）、空白输入 3 例为假。
+
+**红/绿对照**（证明用例真的钉住了这个缺陷，而不只是"碰巧通过"）：把常量临时改回 `@"\Microsoft"` 后，
+过滤出的 16 例里 **5 例失败**（`\MicrosoftEdgeUpdateTaskMachineCore`、`...MachineUA`、`\Microsoft Edge Update Task`、
+`\Microsoft`、`\MicrosoftX\Foo`），退出码 1；还原后全绿。
+
+**验收**：`dotnet build DelayStart.slnx -c Release` **0 警告 0 错误**；
+`dotnet run --project tests/DelayStart.Core.Tests -c Release` → `Total: 279, Errors: 0, Failed: 0`。
+
+⚠️ **真机侧顺手确认一次**：计划任务子页应能看到 `\MicrosoftEdgeUpdateTaskMachineCore`（若机器装了 Edge 且该任务存在），
+同时**看不到** `\Microsoft\Windows\...` 下的系统任务。
+
+### 10.19 D67 执行记录（2026-09-21，接管计划任务连带着禁用了同一任务的每日定时触发器）
+
+**症状**（用户报告）：`\MicrosoftEdgeUpdateTaskMachineCore` 有多个触发器 —— 一个是"登录时"（要接管），
+一个是"每日定时"（不接管）。DelayStart 接管后**每日定时那一个也被禁用了**。用户的表述就是修法：
+"应该将禁用计划任务细分为 禁用任务 与 禁用某个触发器。触发器只有一个时直接禁用计划任务，多个触发器时禁用对应的触发器。"
+
+**根因**：`ScheduledTaskSource.Disable` 一律 `task.Enabled = false` —— 那是**任务级**开关，
+会把任务里**所有**触发器一起关掉。粒度错了。
+
+**真机取证（2026-09-21，`TaskScheduler` 2.12.2 直连，202 个任务）**：
+
+| 观测 | 数据 |
+|---|---|
+| 带登录 / 启动触发器的任务 | 49 个 |
+| 其中**多触发器** | **25 个** |
+| 第三方（非 `\Microsoft\`）且是"登录 + 每日定时"形状 | `\QuarkCloudDriveUpdaterUser\…`、`\GoogleUser\GoogleUpdater\…`（两者任务级 `Enabled` 都是 False） |
+| `Trigger.Enabled` 是不是逐触发器独立开关 | **是**。例：`\Microsoft\Windows\DirectX\DirectXDatabaseUpdater` 的登录触发器禁用、定制触发器启用，而任务级启用 |
+| `Trigger.Id` 能否当稳定标识 | **不能**。25 个多触发器任务里只有 5 个带 id，且全是 `\Microsoft\*` 系统任务（`Init` / `Resume` / `QueueReportingTimeTrigger` 这类） |
+
+📌 顺带更正一条**错的记载**：D66 的源码注释与测试注释里写"实测本机就有 `\MicrosoftEdgeUpdateTaskMachineCore`"，
+本次全量枚举（连"路径含 edge"的任务一起查）**在本机 0 命中** —— 该机器装了 Edge（`msedge.exe` 与 EdgeUpdate 目录都在），
+但没有 Edge 更新任务。判据本身与这台机器无关，故只改措辞、不动逻辑。
+
+**修法（D67）**：
+
+| 情况 | 落点 |
+|---|---|
+| 禁用时任务级开关已经是关的 | **什么都不做** —— "全部可逆"：否则会留下"我们动过、释放时无从判断原始值"的痕迹 |
+| 触发器总数 ≤ 1 | 切**任务级**开关（等价，且任务计划程序里也看得见） |
+| 触发器多于 1 个 | 只切**登录 / 启动触发器**的 `Enabled`（**全部**切，不是只切第一个）+ `RegisterChanges()` |
+| 启用时任务级开关是关的 | 先打开任务，再开触发器（任务级关着时改触发器等于点了没反应） |
+
+新增 `ScheduledTaskSource` 的三个纯逻辑判据（可单测）：`IsAutostartTrigger` / `ShouldToggleWholeTask` /
+`BuildSourceDetail`；落盘收敛到 `SetTriggersEnabled`（**没有触发器真的变化时不调 `RegisterChanges`** ——
+那是把整份定义重新注册，会刷新任务时间戳、并触发任务里可能存在的 `RegistrationTrigger`，幂等调用不该有这种副作用）。
+`SourceDetail` 增加"另有 N 个触发器"，让用户看出我们只接管了登录那一个。
+
+**连带项**：`StartupEntry.IsEnabled` 由 `task.Enabled` 改为 `ComputeIsEnabled`
+（任务级开关 **且** 至少一个自启动触发器启用）。不改的话，多触发器任务被接管后列表恒显"已启用"、
+「禁用」按钮永远可点、点完也不变 —— 界面上看就是坏的。
+
+**否掉的方案**：用 `Trigger.Id` 记账 + 释放时精确还原。理由见上表最后一行（id 普遍为空；厂商重写会抹掉改动）。
+
+**验收**：`dotnet run --project tests/DelayStart.Core.Tests -c Release` → `Total: 294, Errors: 0, Failed: 0`
+（D67 新增 15 例）；红/绿对照 = 把 `ShouldToggleWholeTask` 临时改成恒 `true` → 多触发器 **5 例变红**，还原后全绿。
+真机侧见 `build-and-test.md` 7.10 与 9.6。
+
+⚠️ 已被旧版本关掉的任务（任务级被整体禁用）**需要手工重新启用**：D67 的修法只保证"以后不再连带"，
+不会去猜哪些任务是被误关的 —— 那需要逐任务记录"谁关的"，而旧版本没记。
+
+---

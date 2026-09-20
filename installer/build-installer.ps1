@@ -75,7 +75,26 @@ $iscc = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Ob
 if (-not $iscc) {
     throw "找不到 ISCC.exe。请先安装 Inno Setup 6：winget install --id JRSoftware.InnoSetup`n探测路径：`n  $($isccCandidates -join "`n  ")"
 }
+# ⚠️ 别指望读 ISCC.exe 的版本信息 —— 它的 FileVersion 是 `0.0.0.0`（2026-09-21 实测），
+#    真正的编译器版本在 ISCC 自己的输出里：`Compiler engine version: Inno Setup x.y.z`
+#    （D65 判读"语言文件与编译器版本是否错位"时看的就是这一行）。
 Write-Host "ISCC: $iscc"
+
+# ---- 语言文件（D65）：必须随仓库分发 ----------------------------------------
+# 🔴 官方 Inno Setup 安装器**不带**简体中文 .isl（属用户贡献翻译），因此 DelayStart.iss 引用的是
+#    仓库内的 installer\languages\ChineseSimplified.isl —— 相对路径按 .iss 所在目录解析。
+#    文件缺失时 ISCC 只会抛一句难读的 "Couldn't open include file"，这里提前给出人话。
+$langFile = Join-Path $PSScriptRoot 'languages\ChineseSimplified.isl'
+if (-not (Test-Path -LiteralPath $langFile)) {
+    throw @"
+缺少安装器语言文件：$langFile
+它随仓库分发（D65）—— 官方 Inno Setup 不带中文 .isl，别指望 compiler:Languages\ 里有一份。
+任选一处取回后放回原路径：
+  https://jrsoftware.org/files/istrans/
+  https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation
+"@
+}
+Write-Host "语言文件: $langFile"
 
 # ---- 1) 管理端 publish ------------------------------------------------------
 # 输出目录按 <rid>\<形态> 分开，full 与 slim 各占一个目录，**不会互相污染**，

@@ -85,6 +85,12 @@ var tasks = ts.AllTasks.Where(t =>
     && !t.Name.Equals("DelayStartScheduler", StringComparison.OrdinalIgnoreCase));
 ```
 
+> 🔴 **`t.Path` 与 `t.Folder?.Path` 不是一回事**（D66 实测教训）：`t.Path` 是**文件夹 + 任务名**的完整路径，
+> 根级任务形如 `\MicrosoftEdgeUpdateTaskMachineCore`；`t.Folder?.Path` 只到文件夹，根级任务返回 `\`。
+> 上面那行示例用的是后者，**恰好**不会踩坑 —— 但本项目的实现为了 `ItemKey` 改用了 `t.Path`，
+> 判据若仍写 `@"\Microsoft"`（少一个尾部分隔符），就会把**名字**以 Microsoft 开头的第三方任务整批静默滤掉。
+> 用 `t.Path` 判定时前缀**必须**带尾部分隔符：`@"\Microsoft\"`（见 `ScheduledTaskSource.IsProtectedFolderPath`）。
+
 | 需要的信息 | 取法 |
 |---|---|
 | 名称 | `task.Name` |
@@ -94,10 +100,18 @@ var tasks = ts.AllTasks.Where(t =>
 | 触发时机 | `trigger is LogonTrigger ? "登录时" : "启动时"` |
 | 任务自带延迟 | `LogonTrigger.Delay` / `BootTrigger.Delay`（`TimeSpan?`） |
 | 启动身份 | `def.Principal?.RunLevel == TaskRunLevel.Highest` → 管理员 |
-| 启用状态 | `task.Enabled` |
+| 启用状态 | `task.Enabled` **且** 至少一个登录 / 启动触发器 `Enabled`（D67，见下） |
+| 触发器逐个的开关 | `def.Triggers[i].Enabled`（写入后需 `task.RegisterChanges()`） |
 | 原始 XML | `task.Xml`（需读 `<Principals><Principal><RunLevel>` 时用） |
 
-- **禁用** = `task.Enabled = false`；**启用** = `true`。
+- 🔴 **禁用 / 启用是分层的**（D67）**不能一律写 `task.Enabled = false`** —— 那是**任务级**开关，
+  会把同一任务里的所有触发器一起关掉。真实世界里第三方任务常见"登录触发 + 每日定时"两个触发器共存
+  （`\MicrosoftEdgeUpdateTaskMachineCore`、`\QuarkCloudDriveUpdaterUser\…`、`\GoogleUser\GoogleUpdater\…` 都是这个形状），
+  用户只想接管登录那一个。规则：触发器**总数 ≤ 1** → 切 `task.Enabled`；
+  **多于 1 个** → 只切登录 / 启动触发器的 `def.Triggers[i].Enabled` + `task.RegisterChanges()`。
+  见 `ScheduledTaskSource.ShouldToggleWholeTask` / `architecture.md` 10.19。
+- `Trigger.Id` **不能**当稳定标识：第三方任务里普遍是空串（2026-09-21 本机实测，25 个多触发器任务里只有 5 个带 id，
+  且全是 `\Microsoft\*` 系统任务）→ 释放时按规则重新推导，不做逐触发器记账。
 - `AllTasks` 会抛异常的任务要 try/catch 单独跳过，不能让一个坏任务打断整次枚举。
 
 > ⚠️ **坑 3**：`Regenerate` / 被 GPO 下发的任务、以及 `\Microsoft\Windows\*` 下的任务改不动或改了会被还原 —— 必须过滤或标记只读。

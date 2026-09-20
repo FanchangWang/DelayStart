@@ -1,4 +1,4 @@
-# 安装器构建说明（D22 / D60 / D61 / D62 / D63 / D64）
+# 安装器构建说明（D22 / D60 / D61 / D62 / D63 / D64 / D65）
 
 ## 一键构建
 
@@ -44,7 +44,7 @@
 |---|---|
 | .NET SDK 10 | `global.json` 钉在 `10.0.401`（`rollForward: latestFeature`） |
 | Inno Setup 6 | `winget install --id JRSoftware.InnoSetup`。⚠️ winget 装的是 **per-user** 布局：`%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`，**不在** `Program Files`。`build-installer.ps1` 会依次探三个候选路径 |
-| 中文语言包 | Inno 自带的 `Languages\ChineseSimplified.isl`，已确认存在于 per-user 布局下 |
+| 中文语言文件（**D65 修正**） | 🔴 **不是 Inno 自带的** —— 简体中文属"用户贡献翻译"，官方安装器**不带**这个文件（本机那份是手工放进 Inno 安装目录的）。D65 起它随仓库分发：`installer\languages\ChineseSimplified.isl`（iss 用相对路径引用）。🈲 别再写回 `compiler:Languages\ChineseSimplified.isl` —— 那在干净机器 / CI 上必挂（实测 ISCC exit 2），详见下节「中文语言文件的来源与更新」 |
 | ARM64 工具集 | 仅 arm64 需要：VS 组件 `Microsoft.VisualStudio.Component.VC.Tools.ARM64`。🔴 本机 2026-09-20 实测**未装** → 本地只出 x64，arm64 由 CI 出 |
 
 ## 构建脚本参数
@@ -152,7 +152,7 @@ BGRA + AND 掩码）**。阈值取 96 而不是 256 是 D63 的量：96/128 两�
 ⚠️ 换图标 = 替换 `assets\icon\delay.png` → 重跑脚本 → **重新构建**（管理端 exe 的图标是编译期
 嵌进去的，调度端的还要重新 publish；不重新构建不会变）。
 
-## 设计要点（对应 `docs/requirements.md` D22 / D60 / D61 / D62 / D63 / D64）
+## 设计要点（对应 `docs/requirements.md` D22 / D60 / D61 / D62 / D63 / D64 / D65）
 
 | 项 | 做法 |
 |---|---|
@@ -175,6 +175,7 @@ BGRA + AND 掩码）**。阈值取 96 而不是 256 是 D63 的量：96/128 两�
 | 两形态同 AppId | 装在同一个目录（用户不该同时装两个）——🔴 **代价是覆盖安装不会清理对方形态的文件**，见下一行 |
 | 🔴 装前清空安装目录（D64-1） | `[Code] PrepareToInstall` 递归清空 `{app}`（**只清程序文件**：配置在 `%APPDATA%`、日志在 `%LOCALAPPDATA%`、计划任务在目录外，不动用户任何数据）。<br>病根：两形态同目录 + 覆盖安装只覆盖同名文件 → "先装 full 再装 slim" 会留下 full 的 `hostfxr.dll`，而 **.NET 的 apphost 只要在自己目录看到 `hostfxr.dll` 就把"运行时根"当成程序目录**，转而去 `<程序目录>\shared\Microsoft.NETCore.App\10.x` 找共享框架（自包含布局是平铺的、那里没有）→ 精简版报 `You must install or update .NET`，**哪怕机器上装着 10.0.12**（2026-09-21 本机 1:1 复现：只把 `hostfxr.dll` + `hostpolicy.dll` 放进目录即可复现）。<br>🔴 清空放在 `PrepareToInstall` 是有原因的：Inno 文档保证它早于 Setup 的"文件占用检查"（Restart Manager）执行；而安装器是 `lowest` 权限，删不掉**提权进程**（管理端 / 托盘里的调度端）占用的文件 —— 这些占用者交给 Restart Manager 关掉（`CloseApplications=yes` / `RestartApplications=yes`，两项都是 Inno 默认值，脚本里显式写出来）。🔴 **但 Restart Manager 不会把它们自动重启回来** —— 实测文档原文：`RestartApplications` 只对调用过 `RegisterApplicationRestart` 的程序生效，DelayStart 与调度端都没有调用。所以调度端在安装时被关掉的话，托盘图标要到**下次登录**才回来（它的计划任务只在登录时触发）。<br>🔴 唯一**中止安装**的情况：精简版发现 `hostfxr.dll` 删不掉（= 自包含形态的管理端还在跑）。此时中止优于装出一个起不来的程序，且这一步在清理之前 → **中止时尚未删任何文件，旧安装保持完整**。异常路径下 `unins*`（旧卸载器）刻意保留 |
 | 缺运行时的下载入口（D64-2） | `InitializeSetup` / `CurStepChanged` 共用 `MissingRuntimeLinks()` + `OpenRuntimeDownloads()`：**只列、只打开缺的那几项**（两项都缺则 .NET 在前）。原实现无论缺什么都把两个地址全列、点「是」还只开 .NET 下载页 —— 本机实测正是"装着 .NET 10.0.12、只缺框架包"这种，用户被引去装一个已经装好的东西 |
+| 中文语言文件（D65） | iss 写 `MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"` —— 中文 .isl **随仓库分发**（`installer\languages\`），任何机器、任何 Inno 布局都找得到。🔴 相对路径按 **.iss 所在目录**解析（实测确认与当前工作目录无关）。前面垫 `compiler:Default.isl` 是给"语言文件与编译器版本不完全对齐"兜底：缺哪个 message 就静默回落英文（不垫底时 ISCC 会打印 `A message named "X" has not been defined ... Will use the English message` 警告）。详见下节 |
 | 配置与日志（D62 修订） | 默认保留（无 `[UninstallDelete]`）。卸载时在 `CurUninstallStepChanged(usUninstall)` 问一次「是否一并删除配置与日志」，选「是」才 `DelTree` 两个目录；🔴 **静默卸载一律按「否」**（`SuppressibleMsgBox` 的 Default 参数）。选「否」或删不干净（文件被占用）时，完成页给出手动清除指引 |
 | 版本号 | 唯一来源 `Directory.Build.props` 的 `<Version>`，由脚本注入 `/DAppVersion` |
 
@@ -259,6 +260,35 @@ Inno 会走到它自己的「重试 / 忽略 / 放弃」提示，最坏结果是
 ✅ **真实场景验收（2026-09-21 用户真机复测通过）**：装 full → 启动正常；**装 slim 覆盖 full →
 启动正常**（＝ 装前清空生效）；在 slim 目录里手工丢回一个 full 的 `hostfxr.dll` → 立即复现
 "必须安装 .NET"（＝ 反向确认病根就是这一个文件）。
+
+## 中文语言文件的来源与更新（D65）
+
+`installer\languages\ChineseSimplified.isl` **随仓库分发** —— 因为官方 Inno Setup 安装器不带简体中文：
+
+- 官方 Inno Setup 6 的 `Languages\` 只有官方翻译（实测本机 6.7.3：Arabic … Ukrainian 共 32 个），
+  **没有** `ChineseSimplified.isl`；简体与繁体中文都属"用户贡献翻译"，要单独下载；
+- 下载入口 <https://jrsoftware.org/files/istrans/>；上游维护者 Zhenghan Yang（Kira），
+  仓库 <https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation>；
+- 文件头写明目标版本（本仓库这份：`Inno Setup version 6.5.0+ Chinese Simplified messages`）。
+  实测体积 **21436 B**，sha256 `6753BE2C5E2740D859900FD902824DB2EC568DA5C5B52486524C9762D778B0B0`。
+
+🔴 **为什么必须入库**：iss 原先写 `compiler:Languages\ChineseSimplified.isl` —— 那句只在"本机碰巧手工
+往 Inno 安装目录放过这个文件"的机器上成立（本机那份的时间戳 `2026-06-27` 与官方载荷时间 `2026-05-22`
+明显不同，正是手工加入的痕迹）。2026-09-21 GitHub Actions 首次运行即因此失败：ISCC exit 2，日志停在
+`Reading file: C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl`。详见
+`docs/build-and-test.md` 7.9。
+
+**更新它**（Inno 升级或想刷新译文时）：从上面任一地址取回 `.isl`，覆盖本仓库该文件，再跑一遍
+`.\installer\build-installer.ps1 -Slim` 确认。判读 ISCC 输出：
+
+| ISCC 打印 | 含义 | 处置 |
+|---|---|---|
+| `Message name "..." is not recognized by this version of Inno Setup` | 语言文件比编译器**新**（多出若干 message 名） | 只是**警告**，编译仍 exit 0；可以不管，也可以换成与编译器版本对齐的那份 |
+| `A message named "..." has not been defined ... Will use the English message` | 语言文件比编译器**旧**（少若干 message） | 只是警告；本仓库已垫 `compiler:Default.isl`，**这类警告不会出现** |
+
+**怎么确认它真的被用上了**：`build-installer.ps1` 编译前会打印 `语言文件: <路径>`，ISCC 输出里会出现
+`Reading file: ...\installer\languages\ChineseSimplified.isl`。文件缺失时脚本会**提前抛人话错误**
+（否则 ISCC 只会抛难读的 `Couldn't open include file`）。
 
 ## GitHub Release（`.github/workflows/release.yml`）
 

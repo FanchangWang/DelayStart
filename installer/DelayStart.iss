@@ -157,7 +157,19 @@ CloseApplications=yes
 RestartApplications=yes
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; D65：中文语言文件**随仓库分发**（installer\languages\ChineseSimplified.isl）。
+; 🔴 不能用 "compiler:Languages\ChineseSimplified.isl"。官方 Inno Setup 安装器**不带**简体中文 .isl
+;    —— 它属于"用户贡献翻译"，要从 https://jrsoftware.org/files/istrans/ 单独下载
+;    （上游：github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation）。
+;    所以那句只在"本机碰巧手工往 Inno 安装目录里放过这个文件"的机器上成立：
+;    2026-09-21 GitHub Actions 首次运行即因此失败 —— ISCC exit 2，日志停在
+;    "Reading file: C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl"。
+; 相对路径按**本 .iss 所在目录**解析（实测确认，与 ISCC 的当前工作目录无关），故写成
+; installer\languages\ 下的仓库文件 —— 任何机器、任何 Inno 版本都不会再找不到。
+; 前面垫一个 compiler:Default.isl 是给"语言文件与编译器版本不完全对齐"兜底：
+; 缺哪个 message 就静默回落英文；不垫底的话 ISCC 会打印
+; "Warning: A message named "X" has not been defined ... Will use the English message"。
+Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"
 
 [Tasks]
 ; D62：桌面快捷方式改成可选。不写 Flags → 默认勾选（Inno 的默认就是勾选，

@@ -553,6 +553,7 @@ warning IL2026 / IL3050 / IL3053
 | 覆盖升级 | 同一 `AppId` → 覆盖安装，**保留 `%APPDATA%\DelayStart\config.json`**。⚠️ 自包含与精简版**共用同一 `AppId` 与安装目录**，装后者会覆盖前者 |
 | 🔴 装前清空安装目录（**D64-1**） | `[Code] PrepareToInstall` 递归清空 `{app}` 里的程序文件（**不动用户数据**：配置在 `%APPDATA%`、日志在 `%LOCALAPPDATA%`、计划任务在目录外）。<br>**为什么必须清**：两形态同目录 + 覆盖安装只覆盖同名文件 → "先装 full 再装 slim" 会留下 full 的 `hostfxr.dll` / `coreclr.dll`，而 **.NET 的 apphost 只要在自己目录里看到 `hostfxr.dll`，就把"运行时根"当作程序目录本身**，转而去 `<程序目录>\shared\Microsoft.NETCore.App\10.x` 找共享框架（自包含布局是平铺的、那里没有）→ 精简版弹 `You must install or update .NET`，**哪怕机器上装着 10.0.12**（报错框还会列出一份 x86 的 10.0.12 来自证"确实装了"）。2026-09-21 本机 1:1 复现：把 `hostfxr.dll` + `hostpolicy.dll` 放进目录即可复现，卸载清空目录后重装即消失。<br>**为什么放在 `PrepareToInstall`**：Inno 文档保证它早于 Setup 的"文件占用检查"（Restart Manager）执行；而安装器是 `lowest` 权限，删不掉**提权进程**（管理端 / 托盘里的调度端）占用的文件，占用者只能交给 Restart Manager（脚本显式设 `CloseApplications=yes` / `RestartApplications=yes`，两者都是 Inno 默认值）。顺序不会互相抢：Windows 上没带 `FILE_SHARE_DELETE` 打开的文件**删都删不掉**，所以凡是被运行中程序占着的文件必然还在原地，一定被随后那次"文件占用检查"发现 —— 我们提前清掉的只是本来就没人在用的文件。⚠️ 但 RM **不会把关掉的应用自动重启回来**（`RestartApplications` 只对调用过 `RegisterApplicationRestart` 的程序生效），详见 7.8 末尾。<br>**唯一中止安装的情况**：精简版发现 `hostfxr.dll` 删不掉（＝自包含形态的管理端还在运行）—— 中止优于装出一个起不来的程序；探测放在清理**之前**，所以中止时一个文件都还没删、旧安装保持完整。`unins*`（旧卸载器）刻意保留，安装失败时用户仍能卸干净 |
 | 缺运行时的下载入口（**D64-2**） | `MissingRuntimeLinks()` + `OpenRuntimeDownloads()` 由安装前提示与安装后提示共用：**只列、只打开实际缺的那几项**（两项都缺则 .NET 在前）。🔴 原实现无论缺什么都把两个地址全列、点「是」却只开 .NET 下载页 —— 而现实中最常见的恰恰是"装着 .NET、只缺 Windows App Runtime"（本机实测即如此），用户被引去装一个已经装好的东西，装完回来还是缺 |
+| 中文语言文件（**D65**） | iss 写 `MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"` —— 中文 .isl **随仓库分发**（`installer\languages\ChineseSimplified.isl`）。🔴 原因：官方 Inno Setup **不带**简体中文 .isl（属用户贡献翻译），所以 `compiler:Languages\ChineseSimplified.isl` 只在"本机手工放过这个文件"的机器上成立 —— 2026-09-21 CI 首跑即因此 ISCC exit 2。相对路径按 **.iss 所在目录**解析（实测与 cwd 无关）。垫 `compiler:Default.isl` 是版本错位兜底：缺 message 静默回落英文。详见 7.9 |
 | 应用名（D61） | 安装器里**只此一处**名字 = `AppName` = **`DelayStart`**（英文，不带中文）。快捷方式名同为 `DelayStart`，窗口标题同步（`MainWindow.xaml` 的 `Window.Title` / `TitleBar.Title`） |
 | 🔴 「设置 → 应用」的显示名取 `AppVerName`（**D63**） | 不是 `AppName`。Inno 的缺省值是 `AppName + " version " + AppVersion` 一类的拼接，D60 起又按形态拼了后缀 → 真机注册表实测 `DisplayName = DelayStart 0.1.0`（slim 档为 `DelayStart 0.1.0-slim`）。D63 起固定 `AppVerName={#AppName}` → 只显示裸 `DelayStart`。版本号仍由 `DisplayVersion` 承载（系统自己会显示），**形态后缀只留在产物文件名里** |
 | 精简版运行时检测（D60 / **D61 修正**） | `[Code] InitializeSetup` 两项检测，**每项都是多判据"任一命中即算装了"**：<br>· **.NET**：① `{pf64}` / `{pf32}` 下 `dotnet\shared\Microsoft.NETCore.App\10.*` 目录（主判据，用 `FindFirst` 通配，不必预知版本号）；② **32 位注册表视图**（`HKLM` 常量）`...\InstalledVersions\{x64,arm64,x86}\sharedfx\Microsoft.NETCore.App`；③ **64 位视图**（`HKLM64`）同三条路径。<br>· **Windows App Runtime 1.8**：`HKCU` → `HKLM` → `HKLM64` 三处的包仓库里找 `Microsoft.WindowsAppRuntime.1.8` **且架构段匹配**（`_x64__` / `_arm64__`，由 `/DWinAppRuntimeArch` 注入）。<br>缺失时 `MsgBox(MB_YESNOCANCEL)`，**不阻断安装**。<br>🔴 **教训**：最初两项各只查一个位置（都在 `HKLM64`），在**已装 .NET 10.0.12 + WindowsAppRuntime 1.8** 的机器上双双误报缺失。`.NET` 的记录落在 **32 位视图**（`HKLM\SOFTWARE\WOW6432Node\dotnet\...`，.NET 安装器是 32 位进程），Windows App Runtime 框架包则**按用户注册在 `HKCU`**。**误报比不检测更糟** —— 用户明明装了却被劝去下载 |
@@ -770,6 +771,95 @@ Select-String -Path "$env:TEMP\ds.log" -Pattern '安装目录已清理|残留文
 > 本次登录尚未到点的延时条目也随之下次登录一并补上 —— 与"关机早于延时到点"是同一套语义，不丢数据。
 > 🔴 **这是已知缺口，2026-09-21 用户已明确定性：什么都不做，维持现状。** 并且**明确禁止**
 > "管理端启动调度端"这条修法 —— 调度端进程的生死只由计划任务决定，管理端不代管。
+
+---
+
+### 7.9 CI 编译失败：语言文件不随官方 Inno 分发（D65）
+
+**症状**：GitHub Actions 上 `ISCC 编译失败（exit 2）`，ISCC 日志末尾是
+
+```
+Determining language code pages
+Parsing [Languages] section, line 160
+Reading file: C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl
+```
+
+**定性**：不是代码问题，是 **iss 依赖了一份既不在仓库、也不在官方 Inno 安装包里的文件**。官方
+Inno Setup 6 的 `Languages\` 只含官方翻译（实测本机 6.7.3 共 32 个，Arabic … Ukrainian），**没有**
+`ChineseSimplified.isl` —— 简体与繁体中文都属"用户贡献翻译"，要从
+<https://jrsoftware.org/files/istrans/> 单独下载。本机之所以一直能编译，是因为有人手工把它放进了
+Inno 安装目录：本机那份的时间戳 `2026-06-27 3:05:33` 与官方载荷时间 `2026/5/22 8:00:00` 明显不同。
+CI 用 `choco install innosetup`（当前 6.7.1）装到 `C:\Program Files (x86)\Inno Setup 6`，那份目录里
+没有中文文件 → ISCC 打不开 → exit 2。
+
+**修法**：语言文件入库 `installer\languages\ChineseSimplified.isl`（21436 B），iss 改为
+
+```pascal
+Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"
+```
+
+**ISCC 路径语义与版本错位的实测结论**（Inno 6.7.3，探针脚本留在 `.workbuddy/tmp/langprobe/`）：
+
+| 探针 | 结果 |
+|---|---|
+| 相对路径只存在于 **.iss 所在目录** | ✅ 编译成功，日志打印 `Reading file: <脚本目录>\reltest.isl` |
+| 相对路径只存在于**当前工作目录** | ❌ exit 2 `Couldn't open include file "<脚本目录>\.workbuddy\...cwdtest.isl"` —— **证明相对路径按脚本目录解析、与 cwd 无关**，且错误形态与 CI 日志 1:1 吻合 |
+| 语言文件多一个该编译器不认识的 message 名 | ⚠️ 仅警告 `Message name "..." is not recognized by this version of Inno Setup. Ignoring.`，**exit 0** |
+| 语言文件缺一个 message | ⚠️ 仅警告 `... has not been defined for the "probe" language. Will use the English message from Default.isl.`，**exit 0** |
+| 写成 `compiler:Default.isl,<文件>` 且文件缺 message | ✅ **零警告**通过 —— 这就是 iss 里垫 `Default.isl` 的理由 |
+
+**结论**：CI 的 Inno 版本（choco 6.7.1）与随包语言文件（6.7.3 时代）错位**只会产生警告、不会失败**，
+所以不必把 CI 的 Inno 版本钉死；垫上 `compiler:Default.isl` 后"缺 message"那类警告也消失。
+
+**怎么确认修好了**：`build-installer.ps1` 编译前打印 `语言文件: <路径>`；ISCC 输出里出现
+`Reading file: ...\installer\languages\ChineseSimplified.isl` 就说明读的是仓库那份。文件缺失时脚本
+会**提前抛人话错误**，不再让人面对难读的 `Couldn't open include file`。
+
+🔴 **别再写回 `compiler:Languages\ChineseSimplified.isl`** —— 那要求每台机器（含 CI runner）都手工往
+Inno 安装目录放一份文件，是不可复现的隐性前置条件。
+
+---
+
+### 7.10 计划任务的禁用粒度：任务级 vs 触发器级（D67）
+
+**症状**（用户报告）：`\MicrosoftEdgeUpdateTaskMachineCore` 这类任务有**多个触发器** ——
+一个"登录时"（要接管）、一个"每日定时"（不该动）。DelayStart 接管后**每日定时那一个也失效了**。
+
+**根因**：`ScheduledTaskSource.Disable` 一律写 `task.Enabled = false`。那是**任务级**开关，
+会把任务里所有触发器一起关掉 —— "禁用"的粒度错了。
+
+**规则（D67）**：
+
+| 情况 | 落点 |
+|---|---|
+| 禁用时任务级开关**已经是关的** | **什么都不做** —— 它本来就不会自启动（"全部可逆"：避免留下"我们动过、释放时无从判断原始值"的痕迹） |
+| 触发器**总数 ≤ 1** | 切**任务级**开关（此时两者等价、语义更明确） |
+| 触发器**多于 1 个** | 只切**登录 / 启动触发器**的 `Enabled`（`RegisterChanges()` 落盘），其余触发器原样保留 |
+| 启用时任务级开关是关的 | **先把任务打开**，再开触发器（任务级关着的时候，改触发器等于点了没反应） |
+
+🔴 **多于 1 个「登录 / 启动触发器」时是全部切掉，不是只切第一个** —— 只切一个的话程序照旧在登录时自启，
+再叠加延时启动 = 启动两次，比不修更糟。
+
+**顺带改掉的一项**：`StartupEntry.IsEnabled` 从 `task.Enabled` 改为 `ComputeIsEnabled`
+（任务级开关 **且** 至少一个自启动触发器启用）。不改的话，多触发器任务被接管后列表会一直显示「已启用」、
+「禁用」按钮永远可点、点完也不变 —— 界面上看就是坏的。
+
+**否掉的方案**：用 `Trigger.Id` 记账"动过哪几个触发器"、释放时精确还原。
+❌ 实测不可行：`Trigger.Id` 在第三方任务里**普遍是空串**（本机 25 个多触发器任务里只有 5 个带 id，且全是 `\Microsoft\*` 系统任务），
+而且厂商更新任务时会重写整份定义、把我们的改动一起抹掉。⇒ 释放路径**按规则重新推导**，不做逐触发器记账。
+
+**怎么验（单测，不动系统）**：
+
+```bash
+# 只跑 D67 新增的规则用例
+dotnet run --project tests/DelayStart.Core.Tests -c Release -- -method "*ShouldToggleWholeTask*"
+```
+
+`ScheduledTaskTriggerGranularityTests` 共 15 例：触发器分类 3 例 + 粒度规则 9 例 + 位置描述文案 3 例。
+**红/绿对照**（2026-09-21 实测）：把 `ShouldToggleWholeTask` 临时改成恒 `true` → 多触发器那 **5 例立刻变红**，
+还原后 **294 例全绿**。
+
+**怎么验（真机，会改系统状态）**：见 9.6 的 D67 条目。
 
 ---
 
@@ -1007,6 +1097,8 @@ schtasks /delete /tn DelayStartScheduler /f      # 删除测试残留的计划�
 - [ ] 100% / 150% / 200% DPI 下逐页检查，无错位、无文字截断
 - [ ] 明暗主题切换，检查对比度（特别是状态色与禁用态）
 - [ ] **不做**100% 缩放下的截图验收——必须在 150% 和 200% 下也看一遍
+- [ ] 计划任务子页的**列表内容**（D66）：能看到根级名叫 `\MicrosoftEdgeUpdateTaskMachineCore` / `\MicrosoftEdgeUpdateTaskMachineUA` 的**第三方**任务；同时**看不到** `\Microsoft\Windows\...` 下的系统任务
+- [ ] 计划任务的**禁用粒度**（D67）：挑一个"登录触发 + 每日定时"两个触发器的任务（本机可用 `\QuarkCloudDriveUpdaterUser\…`）→ 点「禁用」→ 打开任务计划程序核对：**任务本身仍是"已启用"、每日定时触发器仍是"已启用"，只有登录触发器变成"已禁用"**；再点「启用」→ 登录触发器恢复。位置列应显示「计划任务（登录时；另有 1 个触发器）」。⚠️ 若手上没有现成的多触发器任务，用第五节的两行命令自建一个（`schtasks /create` 加两个 `/sc logon` 与 `/sc daily`），验完删掉
 
 ### 9.7 模拟调度（Phase 6）
 
@@ -1126,6 +1218,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 | 🔴 卸载后所有程序不再自启 | 卸载未先还原接管项 | 见 7.2：必须在 `InitializeUninstall()` 里先跑 `--restore-all` 并 `ewWaitUntilTerminated` |
 | MSIX 装上后 HKCU 软禁用"成功"但任务管理器不认 | 打包应用的注册表虚拟化 | 本项目不用 MSIX（`design-spec.md` 6.4） |
 | 单项失败导致整批中止 | 缺少逐条 try/catch | 见 FR-1.4 / FR-5.5 |
+| 计划任务子页里看不到某些任务（尤其名字带 Microsoft 的） | 受保护文件夹判据把**名字**当成了**文件夹** —— `task.Path` 是"文件夹 + 任务名"，前缀常量少了尾部分隔符 | 见 D66 / `architecture.md` 10.18：`ScheduledTaskSource.IsProtectedFolderPath` 只认根级 `\Microsoft\` 文件夹 |
+| 接管计划任务后，同一任务里的**其他**触发器（每日定时等）也不跑了 | 禁用落在了**任务级**开关 `task.Enabled` 上，把整个任务关掉了 | 见 D67 / `architecture.md` 10.19：多触发器任务只切登录 / 启动触发器。⚠️ **已被旧版本整体关掉的任务需要手工重新启用**（在任务计划程序里对该任务点「启用」）—— 旧版本没记录"是谁关的"，程序不会去猜 |
+| 接管多触发器任务后列表仍显示「已启用」「禁用」按钮也点得动 | `IsEnabled` 只看 `task.Enabled`，而我们的禁用落在**触发器**上 | 见 D67：`ComputeIsEnabled` = 任务级开关 **且** 至少一个自启动触发器启用 |
 
 ---
 

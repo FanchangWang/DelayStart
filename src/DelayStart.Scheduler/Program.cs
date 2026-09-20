@@ -1,5 +1,4 @@
 using DelayStart.Core.Abstractions;
-using DelayStart.Core.Interop;
 using DelayStart.Core.Logging;
 using DelayStart.Core.Services;
 
@@ -47,7 +46,7 @@ internal static class Program
         var engine = new SchedulerEngine(
             new ConfigService(paths, log, SystemClock.Instance),
             new RunStateService(paths, log),
-            new ProcessLauncher(log),
+            new AgentProcessLauncher(paths, log),
             paths,
             log);
 

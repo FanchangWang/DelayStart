@@ -196,7 +196,9 @@ internal static unsafe partial class NativeMethods
 
     // ---- P/Invoke ----
 
-    [LibraryImport("user32.dll")]
+    // 🔴 GetModuleHandleW 在 kernel32.dll，不在 user32.dll（2026-09-20 真机踩坑：
+    //    托盘恒显示后首次踩到这条路径，EntryPointNotFoundException 直接闪退）。
+    [LibraryImport("kernel32.dll")]
     private static partial nint GetModuleHandleW(nint moduleName);
 
     /// <summary>本进程模块句柄（注册窗口类用）。</summary>

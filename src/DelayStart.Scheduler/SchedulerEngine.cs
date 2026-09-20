@@ -148,6 +148,10 @@ internal sealed class SchedulerEngine
             _items.Add(new RuntimeItem { Item = enabled[index], Result = _record.Items[index] });
         }
 
+        // D39（2026-09-20 用户批复）：存在普通用户条目就**立即**预热代理，
+        // 不等首条普通条目到点 —— 到点再拉要白等一个阈值。
+        (_launcher as IAgentOrchestrator)?.PreWarm(enabled);
+
         _stopwatch.Start();
         PersistState();
         _log.Info($"调度开始：{_record.RunId}，共 {_record.PlannedCount} 项。");
@@ -365,6 +369,9 @@ internal sealed class SchedulerEngine
 
     private void Quit()
     {
+        // D38：调度端退出时通知普通用户代理一并结束（代理收不到也会因管道断开自行退出）。
+        (_launcher as IAgentControl)?.Shutdown();
+
         _tray?.StopTimer();
         _tray?.Dispose();
         _tray = null;
@@ -465,12 +472,18 @@ internal sealed class SchedulerEngine
                 return;
             }
 
+            // 诊断日志（2026-09-20 气泡点击不唤起管理端问题）：接线正确但管理端未出现，
+            // 需要留下"点没点到、启动是否抛错、起了哪个进程"的痕迹来定位真实走向。
+            _log.Info($"正在启动管理端查看运行日志：{manager}");
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = manager,
                 Arguments = "--goto-log",
                 UseShellExecute = true,
             });
+            _log.Info(process is null
+                ? "管理端启动调用已发出（无进程句柄返回）。"
+                : $"管理端进程已创建：PID {process.Id}。");
         }
         catch (Exception ex)
         {

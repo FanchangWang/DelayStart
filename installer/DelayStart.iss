@@ -1,10 +1,9 @@
 ; DelayStart.iss —— Inno Setup 6 安装脚本（D22）
 ;
 ; 编译：ISCC.exe installer\DelayStart.iss
-; 前置：先发布三个产物（见 installer\README.md）：
+; 前置：先发布两个产物（见 installer\README.md）：
 ;   1) 管理端（自包含）：dotnet publish src\DelayStart.App -c Release -r win-x64 --self-contained
 ;   2) 调度端（AOT）：  dotnet publish src\DelayStart.Scheduler -c Release
-;   3) 代理（AOT）：    dotnet publish src\DelayStart.Agent -c Release
 ;
 ; D22 决策要点（详见 docs/requirements.md 决策表）：
 ;   · 固定安装路径 %LOCALAPPDATA%\Programs\DelayStart，不允许用户改（计划任务按固定路径注册，
@@ -20,7 +19,6 @@
 #define AppPublisher "DelayStart"
 #define AppExe "DelayStart.exe"
 #define SchedulerExe "DelayStart.Scheduler.exe"
-#define AgentExe "DelayStart.Agent.exe"
 
 [Setup]
 AppId={{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}
@@ -49,8 +47,7 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 Source: "..\src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 调度端：AOT 单文件，放在安装根（调度任务按此路径注册）
 Source: "..\src\DelayStart.Scheduler\bin\Release\net10.0-windows\win-x64\publish\{#SchedulerExe}"; DestDir: "{app}"; Flags: ignoreversion
-; 普通用户代理：AOT 单文件，放在安装根（独立计划任务 \DelayStart\Agent 指向它，D38）
-Source: "..\src\DelayStart.Agent\bin\Release\net10.0-windows\win-x64\publish\{#AgentExe}"; DestDir: "{app}"; Flags: ignoreversion
+; （D40：普通用户代理 DelayStart.Agent 已删除 —— 普通条目由调度端亲自降权启动，不再需要第二个 exe）
 
 [Icons]
 Name: "{autoprograms}\{#AppNameZh}"; Filename: "{app}\{#AppExe}"

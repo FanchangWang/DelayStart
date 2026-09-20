@@ -60,6 +60,7 @@ nunit-*.xml
 # 需求分析用的参考工程。仅用于提取 Win32 / 注册表 / 计划任务的调用方式，
 # 其中的代码不是本项目的范例，不纳入仓库。
 demo/
+demo2/
 
 # WorkBuddy 工作目录：项目记忆（.workbuddy/memory）与临时校验产物（.workbuddy/tmp）
 .workbuddy/

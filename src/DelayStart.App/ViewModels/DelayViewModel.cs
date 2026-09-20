@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
+using DelayStart.App.Services;
 using DelayStart.Core.Services;
 using DelayStart.Management.Models;
 using DelayStart.Management.Services;
@@ -31,6 +32,7 @@ public sealed partial class DelayViewModel : ObservableObject
     private readonly TakeoverService _takeover;
     private readonly ConfigEditService _editor;
     private readonly IconProvider _icons;
+    private readonly ScanCacheService _scanCache;
     private readonly ILogSink _log;
 
     /// <summary>最近一次后台刷新提取到的图标像素，键为条目引用。</summary>
@@ -65,6 +67,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <param name="takeover">接管 / 释放服务。</param>
     /// <param name="editor">条目级编辑服务（改延时 / 切开关 / 调顺序 / 手动添加）。</param>
     /// <param name="icons">图标提取服务（D30）。</param>
+    /// <param name="scanCache">扫描缓存（移出后标记对应来源过期，供来源页重扫，D41）。</param>
     /// <param name="log">日志接收端。</param>
     public DelayViewModel(
         IAppConfigStore configStore,
@@ -72,6 +75,7 @@ public sealed partial class DelayViewModel : ObservableObject
         TakeoverService takeover,
         ConfigEditService editor,
         IconProvider icons,
+        ScanCacheService scanCache,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(configStore);
@@ -79,6 +83,7 @@ public sealed partial class DelayViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(takeover);
         ArgumentNullException.ThrowIfNull(editor);
         ArgumentNullException.ThrowIfNull(icons);
+        ArgumentNullException.ThrowIfNull(scanCache);
         ArgumentNullException.ThrowIfNull(log);
 
         _configStore = configStore;
@@ -86,6 +91,7 @@ public sealed partial class DelayViewModel : ObservableObject
         _takeover = takeover;
         _editor = editor;
         _icons = icons;
+        _scanCache = scanCache;
         _log = log;
 
         Subtitle = "正在读取配置…";
@@ -224,6 +230,10 @@ public sealed partial class DelayViewModel : ObservableObject
         var outcome = _takeover.Release(row.Item);
         if (outcome.Succeeded)
         {
+            // D41：系统侧的接管状态也变回去了，而「自启动项」各页读的是扫描缓存 ——
+            // 不标过期的话，移出 UWP 后再进「自启动项 · UWP」页仍显示"已接管"。
+            // 手动条目没有系统对应物，标记同样无害（重扫结果里本来就没有它）。
+            _scanCache.Invalidate(row.Item.Source);
             Load();
         }
 
@@ -298,9 +308,10 @@ public sealed partial class DelayViewModel : ObservableObject
     {
         if (item.Source == StartupSource.Uwp)
         {
-            return string.IsNullOrWhiteSpace(item.SourceKey)
-                ? null
-                : $"shell:AppsFolder\\{item.SourceKey}";
+            // 🔴 用 Path（= 完整 AUMID `<PFN>!<TaskId>`），不能用 SourceKey ——
+            // SourceKey 只有 TaskId，拼出来的解析名缺包族名，图标必然解析失败（D41 修复）。
+            var parsingName = UwpParsingName.Build(item.Path);
+            return parsingName.Length == 0 ? null : parsingName;
         }
 
         return string.IsNullOrWhiteSpace(item.Path) ? null : item.Path;

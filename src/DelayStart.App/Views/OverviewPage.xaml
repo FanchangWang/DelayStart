@@ -284,11 +284,21 @@
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="{x:Bind DelayText}" />
+                                <!-- 🔴 结果列刻意放**两份**互斥的 TextBlock，不用「转换器返回 null」的写法：
+                                     显式把 Foreground 绑成 null 会切断前景的继承链，文字变成不可见
+                                     （真机表现：成功项整列空白，失败项因为拿到红刷反而看得见）。
+                                     非失败那份不设 Foreground，沿用控件默认前景，明暗主题都正确。 -->
+                                <TextBlock
+                                    Grid.Column="3"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind StateText}"
+                                    Visibility="{x:Bind IsFailed, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}" />
                                 <TextBlock
                                     Grid.Column="3"
                                     Foreground="{x:Bind IsFailed, Converter={StaticResource BoolToBrush}, Mode=OneWay}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind StateText}" />
+                                    Text="{x:Bind StateText}"
+                                    Visibility="{x:Bind IsFailed, Converter={StaticResource BoolToVisibility}, Mode=OneWay}" />
                             </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>

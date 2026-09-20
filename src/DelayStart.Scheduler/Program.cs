@@ -46,7 +46,7 @@ internal static class Program
         var engine = new SchedulerEngine(
             new ConfigService(paths, log, SystemClock.Instance),
             new RunStateService(paths, log),
-            new AgentProcessLauncher(paths, log),
+            new DeElevatedProcessLauncher(log),
             paths,
             log);
 

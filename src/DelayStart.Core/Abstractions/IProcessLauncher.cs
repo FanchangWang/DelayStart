@@ -4,20 +4,22 @@ using DelayStart.Core.Models;
 namespace DelayStart.Core.Abstractions;
 
 /// <summary>
-/// 进程启动抽象（机制 6）。实现按条目的 <see cref="DelayedItem.RunAsAdmin"/> 分流：
-/// 管理员条目继承调度端提权令牌直接启动；普通用户条目经**普通用户代理进程**
-/// （<c>DelayStart.Agent.exe</c>，D38）启动 —— 代理由独立计划任务以普通用户身份运行，
-/// 天然持有交互用户令牌，调度端（提权）绝不亲自降权创建进程
+/// 进程启动抽象（机制 6）。实现按条目的 <see cref="DelayedItem.RunAsAdmin"/> 与
+/// 目标形态分流：管理员条目继承调度端提权令牌直接启动；普通条目由调度端
+/// **亲自降权**启动（D40，方案 7：外壳令牌 → <c>DuplicateTokenEx</c> 主令牌 →
+/// <c>CreateProcessWithTokenW</c>）；<c>.lnk</c> / UWP 经外壳委托
 /// （NFR-3.3 / FR-5.6 / FR-5.8）。
 /// </summary>
 /// <remarks>
 /// <para>
 /// 抽象成接口有两个目的：一是让调度引擎可以注入假实现做逻辑测试，
-/// 二是把"经代理启动"的 IPC 细节与"什么时候启动哪个条目"的调度决策解耦。
+/// 二是把"怎么把进程起来"的系统调用细节与"什么时候启动哪个条目"的调度决策解耦。
 /// </para>
 /// <para>
-/// D38（2026-09-20）：放弃提权进程直接降权（<c>CreateProcessWithTokenW</c> 经
-/// seclogon 服务中转，真机实测 ACCESS_DENIED(5) 且会无响应挂起）。
+/// D40（2026-09-20）：删除 D38 的普通用户代理进程（<c>DelayStart.Agent.exe</c>）。
+/// 该代理本身也是经 explorer 委托拉起的 —— 与直接降权依赖同一个外壳，
+/// 却多一层进程、多一条管道、拿不到真实的失败原因；方案 7 在同一台机器上真机实测
+/// 子进程完整性 0x2000（普通用户），命令行参数原样送达。
 /// </para>
 /// </remarks>
 public interface IProcessLauncher

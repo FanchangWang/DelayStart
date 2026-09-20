@@ -2,6 +2,7 @@ using DelayStart.App.Interop;
 using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
+using DelayStart.Core.Services;
 using DelayStart.Management.Models;
 
 using Microsoft.UI.Xaml;
@@ -52,6 +53,13 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <summary>自定义延时是否已经过确认面板确认。</summary>
     private bool _manualDelayConfirmed;
 
+    /// <summary>
+    /// 启动身份固定为「普通身份」（D45 真机实测）：UWP 进程<b>恒为普通用户身份</b> ——
+    /// 即便按管理员身份委托外壳激活，起来的进程实测仍是普通用户（令牌由系统决定）。
+    /// 给它选管理员只会得到一个名不副实的条目，故不提供身份选择。
+    /// </summary>
+    private readonly bool _identityLockedToNormal;
+
     /// <summary>构造「加入系统项」形态：目标程序由扫描到的自启动项绑定，不可更改。</summary>
     /// <param name="entry">要接管的系统自启动项。</param>
     /// <param name="presets">延时预设值（秒），来自 <c>Settings.DelayPresets</c>。</param>
@@ -59,6 +67,10 @@ public sealed partial class DelayEditorDialog : ContentDialog
     public DelayEditorDialog(StartupEntry entry, int[] presets, int defaultPreset)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        // D45：UWP 进程恒为普通用户身份 —— 必须在 InitializeCommon 之前定好，
+        // 它里面的 BuildIdentityPills 会读这个标志。
+        _identityLockedToNormal = IsUwpTarget(entry.Source, entry.Path);
 
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
@@ -98,6 +110,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
         ArgumentNullException.ThrowIfNull(handles);
 
         _handles = handles;
+
+        // 同上：编辑形态下 UWP 条目同样不提供身份选择。
+        _identityLockedToNormal = IsUwpTarget(item.Source, item.Path);
 
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
@@ -302,14 +317,29 @@ public sealed partial class DelayEditorDialog : ContentDialog
         }
     }
 
-    /// <summary>填充启动身份胶囊（普通身份 / 管理员，一行两个）。</summary>
+    /// <summary>
+    /// 填充启动身份胶囊（普通身份 / 管理员，一行两个）。
+    /// </summary>
+    /// <remarks>
+    /// D45：UWP 条目<b>不给</b>「管理员」胶囊 —— 真机实测 UWP 进程恒为普通用户身份，
+    /// 选了管理员只会得到一个名不副实的条目（调度端会按普通用户启动并记一条说明）。
+    /// 让用户在界面上就选不出来，比事后在日志里解释更好。
+    /// </remarks>
     private void BuildIdentityPills()
     {
         IdentityChoices.Children.Add(
             CreatePill("普通身份", "normal", isChecked: false, OnIdentityNormalChecked));
-        IdentityChoices.Children.Add(
-            CreatePill("管理员", "admin", isChecked: false, OnIdentityAdminChecked));
+
+        if (!_identityLockedToNormal)
+        {
+            IdentityChoices.Children.Add(
+                CreatePill("管理员", "admin", isChecked: false, OnIdentityAdminChecked));
+        }
     }
+
+    /// <summary>是否为 UWP 条目（UWP 来源，或手工填了 <c>shell:AppsFolder\…</c> 解析名）。</summary>
+    private static bool IsUwpTarget(StartupSource source, string? path)
+        => source == StartupSource.Uwp || UwpParsingName.IsParsingName(path ?? string.Empty);
 
     /// <summary>造一个胶囊按钮。</summary>
     /// <remarks>
@@ -568,6 +598,12 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <param name="runAsAdmin">是否以管理员身份启动。</param>
     private void SetIdentity(bool runAsAdmin)
     {
+        // UWP 形态下管理员胶囊根本不存在，按 true 进来会出现"两个胶囊都没选中"。
+        if (_identityLockedToNormal)
+        {
+            runAsAdmin = false;
+        }
+
         _suppressSync = true;
         foreach (var child in IdentityChoices.Children)
         {
@@ -586,7 +622,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
     {
         IdentityHintText.Text = RunAsAdmin
             ? "由调度器在最高权限下启动，不会弹 UAC 确认框。"
-            : "以当前登录用户身份启动，拖拽、剪贴板、文件权限都正常。";
+            : _identityLockedToNormal
+                ? "UWP 应用进程恒为普通用户身份（实测：即便以管理员身份启动也一样），故不提供身份选择。"
+                : "以当前登录用户身份启动，拖拽、剪贴板、文件权限都正常。";
     }
 
     private void UpdateSummary()

@@ -34,6 +34,12 @@ public sealed class ScanCacheService : IDisposable
 
     private ScanSnapshot? _snapshot;
 
+    /// <summary>已过期的来源集合（<see cref="Invalidate"/> 写入，重扫成功后清除）。</summary>
+    private readonly HashSet<StartupSource> _staleSources = [];
+
+    /// <summary>守护 <see cref="_staleSources"/> 的锁（与信号量 <see cref="_gate"/> 分开，避免语义混淆）。</summary>
+    private readonly object _staleLock = new();
+
     /// <summary>构造扫描缓存。</summary>
     /// <param name="scanner">全量扫描服务。</param>
     /// <param name="sources">全部来源实例（按来源局部重扫时筛选用）。</param>
@@ -63,6 +69,59 @@ public sealed class ScanCacheService : IDisposable
     /// <summary>当前缓存快照；从未扫描过为 <see langword="null"/>。</summary>
     public ScanSnapshot? Current => _snapshot;
 
+    /// <summary>
+    /// 标记一个来源的数据已过期 —— 下次该来源的页面载入时重扫（D41：跨页刷新）。
+    /// </summary>
+    /// <param name="kind">要标记的来源。</param>
+    /// <remarks>
+    /// <para>
+    /// 🔴 **为什么需要它**：接管 / 移出会同时改动两处状态（系统的
+    /// <c>StartupApproved</c> 与 <c>config.json</c>），而行级局部刷新只改了**当前页的行对象**，
+    /// 缓存快照里的 <see cref="StartupEntry"/> 仍是旧值。页面每次导航都新建实例并读缓存，
+    /// 于是「在延时启动页移出 UWP → 进自启动项·UWP 页」看到的是移出前的状态
+    /// （2026-09-20 实测：必须手动刷新整页才对）。
+    /// </para>
+    /// <para>
+    /// 只标记**受影响的那一个来源**，其余来源的缓存继续命中 ——
+    /// 全量重扫会把图标重新提取一遍，代价没必要。
+    /// </para>
+    /// </remarks>
+    public void Invalidate(StartupSource kind)
+    {
+        lock (_staleLock)
+        {
+            _ = _staleSources.Add(kind);
+        }
+    }
+
+    /// <summary>判断指定来源是否需要重扫；<see langword="null"/> 表示"任意来源有过期即可"。</summary>
+    /// <param name="kind">来源；<see langword="null"/> 时只要有任一来源过期就返回 <see langword="true"/>。</param>
+    /// <returns>是否需要重扫。</returns>
+    public bool IsStale(StartupSource? kind)
+    {
+        lock (_staleLock)
+        {
+            return kind is { } specific ? _staleSources.Contains(specific) : _staleSources.Count > 0;
+        }
+    }
+
+    /// <summary>清掉过期标记（重扫成功后调用）。</summary>
+    /// <param name="kind">刚重扫的来源；<see langword="null"/> 表示全量重扫，清空全部标记。</param>
+    private void ClearStale(StartupSource? kind)
+    {
+        lock (_staleLock)
+        {
+            if (kind is { } specific)
+            {
+                _ = _staleSources.Remove(specific);
+            }
+            else
+            {
+                _staleSources.Clear();
+            }
+        }
+    }
+
     /// <summary>取缓存；没有就先做一次全量扫描（启动后的第一次进入）。</summary>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>扫描快照。</returns>
@@ -85,6 +144,7 @@ public sealed class ScanCacheService : IDisposable
         try
         {
             _snapshot = await Task.Run(() => ScanAllAsync(cancellationToken), cancellationToken).ConfigureAwait(false);
+            ClearStale(kind: null);
             return _snapshot;
         }
         finally
@@ -108,6 +168,7 @@ public sealed class ScanCacheService : IDisposable
         try
         {
             _snapshot = await Task.Run(() => RescanSourceAsync(kind, cancellationToken), cancellationToken).ConfigureAwait(false);
+            ClearStale(kind);
             return _snapshot;
         }
         finally

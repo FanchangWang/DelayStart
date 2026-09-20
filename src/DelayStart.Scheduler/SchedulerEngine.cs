@@ -148,10 +148,7 @@ internal sealed class SchedulerEngine
             _items.Add(new RuntimeItem { Item = enabled[index], Result = _record.Items[index] });
         }
 
-        // D39（2026-09-20 用户批复）：存在普通用户条目就**立即**预热代理，
-        // 不等首条普通条目到点 —— 到点再拉要白等一个阈值。
-        (_launcher as IAgentOrchestrator)?.PreWarm(enabled);
-
+        // D40：调度端亲自降权，没有代理进程，也就没有预热这一步。
         _stopwatch.Start();
         PersistState();
         _log.Info($"调度开始：{_record.RunId}，共 {_record.PlannedCount} 项。");
@@ -369,9 +366,7 @@ internal sealed class SchedulerEngine
 
     private void Quit()
     {
-        // D38：调度端退出时通知普通用户代理一并结束（代理收不到也会因管道断开自行退出）。
-        (_launcher as IAgentControl)?.Shutdown();
-
+        // D40：没有需要协同退出的代理进程（降权是进程内一次系统调用，无长生命周期对象）。
         _tray?.StopTimer();
         _tray?.Dispose();
         _tray = null;

@@ -15,10 +15,14 @@ namespace DelayStart.Management.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 🔴 **只有一条任务**（D39，2026-09-20 用户批复：Agent 由调度端按需经 explorer
-/// 委托预热拉起，不再单独注册计划任务，也就不需要 DelayStart 任务文件夹）。
-/// D38 的 <c>\DelayStart\Agent</c> / <c>\DelayStart\Scheduler</c> 文件夹双任务在
-/// 注册与删除时一并清理（迁移回根任务）。
+/// 🔴 **只有一条任务，且是根任务**（D39，2026-09-20 用户批复：Agent 由调度端按需经
+/// explorer 委托预热拉起，不再单独注册计划任务）。D40 起连普通用户代理进程都不再需要
+/// （调度端亲自降权），因此本程序**从不创建任何任务文件夹** —— 也就没有遗留清理这一说。
+/// </para>
+/// <para>
+/// 🔴 **不再保留 D38 遗留文件夹的清理代码**（D41，2026-09-20 用户批复）：用户已手工删除
+/// 残留任务，且现行代码不再产生文件夹结构。留着会在每次注册 / 删除时白跑一次枚举，
+/// 且那套"删不干净就记告警"的兜底逻辑已经没有对象。
 /// </para>
 /// <para>
 /// 🔴 **身份必须是当前交互用户**（<c>Interactive</c> 登录类型）+ <c>RunLevel = Highest</c>。
@@ -34,15 +38,6 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
 {
     /// <summary>调度端任务的根路径，作为唯一标识。</summary>
     public const string TaskPathConstant = @"\DelayStartScheduler";
-
-    /// <summary>D38 曾用过任务文件夹收纳双任务 —— 已废弃，注册/删除时清理。</summary>
-    public const string LegacyFolderName = "DelayStart";
-
-    /// <summary>D38 文件夹内的调度端任务名（清理用）。</summary>
-    public const string LegacyFolderSchedulerTaskName = "Scheduler";
-
-    /// <summary>D38 文件夹内的代理任务名（清理用）。</summary>
-    public const string LegacyFolderAgentTaskName = "Agent";
 
     /// <summary>登录后延迟多少秒启动调度端（FR-11.1）。留给桌面与资源管理器加载的时间。</summary>
     public const int LogonDelaySeconds = 3;
@@ -111,7 +106,6 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
         {
             using var service = new TaskService();
             RegisterSchedulerTask(service, schedulerPath, userId);
-            DeleteLegacyFolderTasks(service);
 
             _log.Info($"已注册调度计划任务：{TaskPathConstant}（登录后 {LogonDelaySeconds} 秒，身份 {userId}）");
         }
@@ -175,23 +169,6 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
             logonType: TaskLogonType.InteractiveToken);
     }
 
-    /// <summary>清理 D38 遗留的 <c>\DelayStart</c> 任务文件夹与其中双任务（不存在时静默跳过）。</summary>
-    private void DeleteLegacyFolderTasks(TaskService service)
-    {
-        var folderExists = service.RootFolder.SubFolders.Any(
-            candidate => string.Equals(candidate.Name, LegacyFolderName, StringComparison.OrdinalIgnoreCase));
-        if (!folderExists)
-        {
-            return;
-        }
-
-        using var folder = service.GetFolder(LegacyFolderName);
-        folder.DeleteTask(LegacyFolderSchedulerTaskName, exceptionOnNotExists: false);
-        folder.DeleteTask(LegacyFolderAgentTaskName, exceptionOnNotExists: false);
-        service.RootFolder.DeleteFolder(LegacyFolderName, exceptionOnNotExists: false);
-        _log.Info($"已清理旧版计划任务文件夹：\\{LegacyFolderName}（D39 还原为根任务）");
-    }
-
     /// <inheritdoc />
     public void Delete()
     {
@@ -204,9 +181,6 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
                 service.RootFolder.DeleteTask("DelayStartScheduler", exceptionOnNotExists: false);
                 _log.Info($"已删除调度计划任务：{TaskPathConstant}");
             }
-
-            // D38 文件夹双任务也要清（升级到 D39 前注册过的场景）。
-            DeleteLegacyFolderTasks(service);
         }
         catch (Exception ex)
         {

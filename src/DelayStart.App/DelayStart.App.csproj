@@ -103,7 +103,6 @@
   <Target Name="CopySchedulerPublishOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
       <_SchedulerPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Scheduler\bin\$(Configuration)\net10.0-windows\win-x64\publish\DelayStart.Scheduler.exe</_SchedulerPublishExe>
-      <_AgentPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Agent\bin\$(Configuration)\net10.0-windows\win-x64\publish\DelayStart.Agent.exe</_AgentPublishExe>
     </PropertyGroup>
     <Copy
       SourceFiles="$(_SchedulerPublishExe)"
@@ -112,14 +111,6 @@
     <Message
       Text="DelayStart.Scheduler 尚未 publish（缺少 $(_SchedulerPublishExe)），App bin 里的调度器 exe 可能不可运行 —— 先跑 dotnet publish src/DelayStart.Scheduler"
       Condition="!Exists($(_SchedulerPublishExe))"
-      Importance="high" />
-    <Copy
-      SourceFiles="$(_AgentPublishExe)"
-      DestinationFiles="$(OutDir)DelayStart.Agent.exe"
-      Condition="Exists($(_AgentPublishExe))" />
-    <Message
-      Text="DelayStart.Agent 尚未 publish（缺少 $(_AgentPublishExe)），App bin 里的普通用户代理 exe 可能不可运行 —— 先跑 dotnet publish src/DelayStart.Agent"
-      Condition="!Exists($(_AgentPublishExe))"
       Importance="high" />
   </Target>
 

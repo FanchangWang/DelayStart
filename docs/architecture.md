@@ -61,7 +61,9 @@ DelayStart/
         DelayStart.Scheduler ───────────┘
         (纯 Win32 + AOT)
 
-        DelayStart.Agent（普通用户代理，纯 AOT，零项目引用，D38）
+        ⛔ DelayStart.Agent（普通用户代理，D38）—— D40 起已彻底移除：
+           slnx 无引用、安装器不再打包、调用链已切到调度端亲自降权。
+           仅剩源码目录 src\DelayStart.Agent\ 待手工删除（不参与任何构建）。
 
         DelayStart.Core.Tests ──> DelayStart.Core (+ Management)
 ```
@@ -70,7 +72,8 @@ DelayStart/
 - `Core` 不引用任何 UI 框架
 - `Management` 只依赖 `Core`
 - `Scheduler` **绝不**引用 `Management`
-- `Agent` **不引用任何项目**（D38：与调度器刻意分码，协议模型自包含）；调度器与代理之间只有**命名管道 JSON 行协议**一条通道
+- ⛔ `Agent`（D38）：D40 起移除，不再属于分层（曾为"调度器 ↔ 代理"命名管道 JSON 行协议的两端）
+- 🔴 **D40（2026-09-20）**：调度端改为**亲自降权**（外壳令牌 → `DuplicateTokenEx` 主令牌 → `CreateProcessWithTokenW`），代理退出调用链。两版依赖对比：D39 的代理**本身也是经 explorer 委托拉起**，与直接降权依赖同一个外壳 —— 方案 7 不新增依赖，却少一层进程与一条管道。真机对照见 `requirements.md` D40
 
 ### 1.3 目标框架
 
@@ -80,7 +83,7 @@ DelayStart/
 | `DelayStart.Management` | `net10.0-windows` | 普通库 |
 | `DelayStart.App` | `net10.0-windows10.0.26100.0`<br>`TargetPlatformMinVersion=10.0.19041.0` | `UseWinUI=true`、`AssemblyName=DelayStart`、`WindowsPackageType=None`（unpackaged）、`ApplicationManifest=app.manifest`、`WindowsAppSDKSelfContained`（取值由 R9 结果定，见 `build-and-test.md` 7.1） |
 | `DelayStart.Scheduler` | `net10.0-windows` | `OutputType=WinExe`、`PublishAot=true`、`RuntimeIdentifier=win-x64`（D24=B 纯 Win32，无 UI 框架引用） |
-| `DelayStart.Agent` | `net10.0-windows` | `OutputType=WinExe`、`PublishAot=true`、`RuntimeIdentifier=win-x64`。**D38 新增**：普通用户代理（命名管道服务端，AOT 单文件），零项目引用 |
+| ~~`DelayStart.Agent`~~ | — | **D40 起移除**：普通用户代理（D38 新增，命名管道服务端，AOT 单文件，零项目引用）被调度端亲自降权取代。已从 slnx / 安装器 / 发布脚本摘除；源码目录 `src\DelayStart.Agent\` 待手工删除 |
 | `DelayStart.Core.Tests` | `net10.0-windows` | `IsPackable=false`、`OutputType=Exe`（xUnit v3 硬要求，缺了直接构建失败） |
 
 > **App 的 TFM 与初稿不同（Phase 0 实测修正）**：原写 `net10.0-windows10.0.19041.0`，实际模板产出 **`net10.0-windows10.0.26100.0`**。

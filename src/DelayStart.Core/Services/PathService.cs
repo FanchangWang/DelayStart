@@ -26,7 +26,6 @@ public sealed class PathService
     private const string FolderName = "DelayStart";
     private const string ManagerExecutableName = "DelayStart.exe";
     private const string SchedulerExecutableName = "DelayStart.Scheduler.exe";
-    private const string AgentExecutableName = "DelayStart.Agent.exe";
 
     /// <summary>用系统默认位置构造（正式运行路径）。</summary>
     public PathService()
@@ -87,17 +86,6 @@ public sealed class PathService
 
     /// <summary>调度端可执行文件完整路径 —— 计划任务 action 的目标（FR-11.1）。</summary>
     public string SchedulerExecutablePath => Path.Combine(InstalledRoot, SchedulerExecutableName);
-
-    /// <summary>普通用户代理可执行文件完整路径 —— 独立计划任务（D38）与调度端兜底拉起的共同目标。</summary>
-    public string AgentExecutablePath => Path.Combine(InstalledRoot, AgentExecutableName);
-
-    /// <summary>
-    /// 代理配对令牌文件完整路径（D39 修订）。
-    /// 🔴 令牌**不能走 explorer 命令行**下发 —— explorer.exe 不转发参数，
-    /// 带参调用会被它当成"打开第二个路径"而整体失败（2026-09-20 真机实锤）。
-    /// 改为：调度端写本文件 → Agent 启动时读取并**立即删除**（一次性交接）。
-    /// </summary>
-    public string AgentTokenFilePath => Path.Combine(LocalRoot, "agent-session.token");
 
     /// <summary>全部**允许写入**的根目录。安装目录不在此列，这是 NFR-6.7 的可执行表述。</summary>
     public IReadOnlyList<string> WritableRoots => [LocalRoot, ConfigRoot];

@@ -136,7 +136,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         try
         {
             LoadSettings();
-            var snapshot = await _cache.EnsureLoadedAsync().ConfigureAwait(true);
+            var snapshot = await LoadSnapshotAsync(CancellationToken.None).ConfigureAwait(true);
             Apply(snapshot);
         }
         catch (Exception ex)
@@ -148,6 +148,27 @@ public sealed partial class ItemsViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// 取列表快照：当前来源被标记为过期时重扫该来源，否则读缓存秒回。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>扫描快照。</returns>
+    /// <remarks>
+    /// D41：接管 / 移出只改了当前页的行对象，缓存快照仍是旧值；页面每次导航都新建实例，
+    /// 不认过期标记就会出现「在延时启动页移出 UWP → 进自启动项·UWP 页还是显示已接管」。
+    /// </remarks>
+    private Task<ScanSnapshot> LoadSnapshotAsync(CancellationToken cancellationToken)
+    {
+        if (!_cache.IsStale(SourceFilter))
+        {
+            return _cache.EnsureLoadedAsync(cancellationToken);
+        }
+
+        return SourceFilter is { } kind
+            ? _cache.RefreshSourceAsync(kind, cancellationToken)
+            : _cache.RefreshAsync(cancellationToken);
     }
 
     /// <summary>「刷新本页」：只重扫当前来源（bug#7），其余来源沿用缓存。</summary>
@@ -334,6 +355,10 @@ public sealed partial class ItemsViewModel : ObservableObject
         ReplaceIn(Rows, oldRow, newRow);
         ReplaceIn(FilteredRows, oldRow, newRow);
         OnPropertyChanged(nameof(IsEmpty));
+
+        // D41：本页的就地替换只改了行对象，缓存快照还是旧的 —— 标过期，
+        // 下次进入本来源（或总览读缓存）时重扫，否则离开再回来会看到移出前的状态。
+        _cache.Invalidate(updated.Source);
 
         // 替换后统一重算筛选：新状态可能让该行在当前筛选条件下出现 / 消失
         // （例如筛选"已启用"时禁用了唯一一条）。

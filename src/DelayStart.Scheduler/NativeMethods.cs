@@ -338,6 +338,139 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool Shell_NotifyIconW(uint message, ref NotifyIconDataW data);
 
+    // ---- 降权启动（D40，2026-09-20 用户批复）----
+    //
+    // 🔴 关键约束（demo2 七方案真机实测，本机结论）：
+    //   · 把 explorer 的**进程令牌**直接交给 CreateProcessWithTokenW → 必 Win32Error=5
+    //   · 先 DuplicateTokenEx 成主令牌再交给它 → 0x2000 Medium 降权成功
+    //   · CreateProcessAsUserW 走不通（1314，SeAssignPrimaryToken 只有 SYSTEM 有）
+    //   · COM Shell.Application.ShellExecute **不降权**（子进程仍是 0x3000 High），禁用
+
+    public const uint ProcessQueryLimitedInformation = 0x1000;
+
+    public const uint TokenAssignPrimary    = 0x0001;
+    public const uint TokenDuplicate        = 0x0002;
+    public const uint TokenQuery            = 0x0008;
+    public const uint TokenAdjustPrivileges = 0x0020;
+    public const uint TokenAdjustDefault    = 0x0080;
+    public const uint TokenAdjustSessionId  = 0x0100;
+
+    public const uint SePrivilegeEnabled = 0x00000002;
+
+    public const int SecurityImpersonation = 2;
+    public const int TokenPrimaryType = 1;
+
+    /// <summary>STARTUPINFOW。Desktop 用 <see cref="nint"/> 而非 string —— 降权时它必须是 NULL
+    /// （指定 winsta0\default 是失败诱因之一），同时让结构体保持 blittable，AOT 下零封送。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct StartupInfoW
+    {
+        public uint CbSize;
+        public nint Reserved;
+        public nint Desktop;
+        public nint Title;
+        public uint X;
+        public uint Y;
+        public uint XSize;
+        public uint YSize;
+        public uint XCountChars;
+        public uint YCountChars;
+        public uint FillAttribute;
+        public uint Flags;
+        public short ShowWindow;
+        public short Reserved2;
+        public nint Reserved2Pointer;
+        public nint StdInput;
+        public nint StdOutput;
+        public nint StdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ProcessInformation
+    {
+        public nint Process;
+        public nint Thread;
+        public uint ProcessId;
+        public uint ThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Luid
+    {
+        public uint LowPart;
+        public int HighPart;
+    }
+
+    /// <summary>TOKEN_PRIVILEGES（单元素）。AdjustTokenPrivileges 只需要一条。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TokenPrivileges
+    {
+        public uint PrivilegeCount;
+        public Luid Luid;
+        public uint Attributes;
+    }
+
+    [LibraryImport("user32.dll")]
+    public static partial nint GetShellWindow();
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static partial nint OpenProcess(
+        uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+        uint processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool CloseHandle(nint handle);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool OpenProcessToken(nint processHandle, uint desiredAccess, out nint tokenHandle);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DuplicateTokenEx(
+        nint existingToken,
+        uint desiredAccess,
+        nint tokenAttributes,
+        int impersonationLevel,
+        int tokenType,
+        out nint newToken);
+
+    /// <summary>
+    /// 以指定主令牌创建进程（真正的降权点）。
+    /// <c>commandLine</c> 走 <c>char*</c>：该参数对系统是可写缓冲区，不能传只读托管字符串。
+    /// </summary>
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static unsafe partial bool CreateProcessWithTokenW(
+        nint token,
+        uint logonFlags,
+        string applicationName,
+        char* commandLine,
+        uint creationFlags,
+        nint environment,
+        string? currentDirectory,
+        ref StartupInfoW startupInfo,
+        out ProcessInformation processInformation);
+
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool LookupPrivilegeValueW(nint systemName, string name, out Luid luid);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool AdjustTokenPrivileges(
+        nint tokenHandle,
+        [MarshalAs(UnmanagedType.Bool)] bool disableAll,
+        ref TokenPrivileges newState,
+        uint bufferLength,
+        nint previousState,
+        nint returnLength);
+
     // GDI —— 面板自绘用
 
     [LibraryImport("gdi32.dll")]

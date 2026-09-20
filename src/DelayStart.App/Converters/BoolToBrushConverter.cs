@@ -5,12 +5,20 @@ using Microsoft.UI.Xaml.Media;
 namespace DelayStart.App.Converters;
 
 /// <summary>
-/// 布尔 → 文字色：<c>true</c> 用警示红，<c>false</c> 返回 <see langword="null"/>（沿用控件默认前景）。
+/// 布尔 → 文字色：<c>true</c> 用警示红，<c>false</c> 返回 <see langword="null"/>。
 /// </summary>
 /// <remarks>
-/// 给"状态是否异常"类文字用（调度任务缺失 / 运行记录失败）。返回 null 而不是一份
-/// "普通颜色"：x:Bind 绑定 <c>Foreground</c> 得到 null 时控件退回默认前景，
-/// 明暗主题各自正确，不必在转换器里猜主题。
+/// <para>
+/// 给"状态是否异常"类文字用（运行记录失败等）。返回 null 而不是一份"普通颜色"，
+/// 是为了不在转换器里猜主题。
+/// </para>
+/// <para>
+/// 🔴 <b>只能用在"为真才显示"的那份控件上，不要单独拿它绑 <c>Foreground</c></b>
+/// （D42 真机教训）：<c>Foreground</c> 是可继承的依赖属性，显式设成 null 会<b>切断继承链</b>，
+/// 控件拿不到任何画刷 —— 文字直接不可见。总览「结果」列原先就这么写，
+/// 结果是成功项整列空白、失败项反而有红色文字。正确做法是拆成两份互斥的 TextBlock
+/// （见 <c>OverviewPage.xaml</c>）：失败那份用本转换器，其余那份不设 Foreground。
+/// </para>
 /// </remarks>
 public sealed class BoolToBrushConverter : IValueConverter
 {

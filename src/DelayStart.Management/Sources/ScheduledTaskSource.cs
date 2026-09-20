@@ -191,11 +191,16 @@ public sealed class ScheduledTaskSource : IStartupSource
         };
     }
 
-    /// <summary>判定是否为本程序自己的计划任务（根任务 / D38 遗留文件夹双任务）。</summary>
+    /// <summary>
+    /// 判定是否为本程序自己的计划任务（唯一一条根任务 <c>\DelayStartScheduler</c>）。
+    /// </summary>
+    /// <remarks>
+    /// D41：去掉了 D38 遗留文件夹的判定分支 —— 本程序不再创建任何任务文件夹，
+    /// 用户机器上的残留也已手工清除，保留分支只是让每个任务多一次字符串比较。
+    /// </remarks>
     private static bool IsOwnedTask(string path)
     {
-        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith(@"\" + TaskRegistrationService.LegacyFolderName + @"\", StringComparison.OrdinalIgnoreCase);
+        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>常见的"包装器"可执行文件名（小写）—— 它们只是拉起真正程序的跳板。</summary>

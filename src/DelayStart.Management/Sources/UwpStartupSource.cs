@@ -3,6 +3,7 @@ using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Management.Abstractions;
 using DelayStart.Management.Interop;
+using DelayStart.Management.Services;
 
 using Microsoft.Win32;
 
@@ -124,7 +125,12 @@ public sealed class UwpStartupSource : IStartupSource
                 continue;
             }
 
-            var aumid = $"{packageFamilyName}!{taskId}";
+            // 🔴 TaskId ≠ AppId（D41 真机修复）：AUMID 的 '!' 后段必须是清单里
+            // <Application Id="…"> 的 Id，而这里拿到的是 <StartupTask TaskId="…">。
+            // 实测 SnipDo：TaskId=PantherBarTask、Application Id=App —— 用 TaskId 拼出的
+            // AUMID 外壳解析不了，explorer 会退回打开"文档"目录。
+            var appId = UwpAppIdResolver.ResolveAppId(packageFamilyName, taskId, _log);
+            var aumid = $"{packageFamilyName}!{appId}";
             var id = ItemKeyBuilder.Build(Kind, Scope, taskId);
 
             entries.Add(new StartupEntry

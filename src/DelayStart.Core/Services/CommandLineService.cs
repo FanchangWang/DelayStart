@@ -22,7 +22,14 @@ public static class CommandLineService
 {
     private const char Quote = '"';
 
-    private static readonly string[] ExecutableExtensions = [".exe", ".com", ".bat", ".cmd"];
+    /// <summary>
+    /// 能被"路径 + 参数"形式拆分的可执行扩展名。
+    /// </summary>
+    /// <remarks>
+    /// D47 起加 <c>.ps1</c>：脚本已属于受支持的目标类型（由 <c>PowerShellHost</c> 承载），
+    /// 注册表 <c>Run</c> 值里 <c>C:\x\a.ps1 param</c> 这种不带 <c>-</c> 的写法也要能拆对。
+    /// </remarks>
+    private static readonly string[] ExecutableExtensions = [".exe", ".com", ".bat", ".cmd", ".ps1"];
 
     /// <summary>
     /// 把一行命令行拆成「程序路径」与「参数」。

@@ -102,6 +102,15 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <summary>列表内容，按「延时 → 顺序」排序（与调度端的发起顺序一致）。</summary>
     public ObservableCollection<DelayRow> Rows { get; } = [];
 
+    /// <summary>
+    /// 同一批内容的**分组视图**：按延时值分组，组标题就是延时本身（2026-09-20 用户批复）。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Rows"/> 仍是事实来源（顺序 / 计数 / 判空都用它），<see cref="Groups"/> 只是
+    /// 把它按延时切片。两份都灌：切片是纯内存操作，比让 XAML 侧做分组模板省事得多。
+    /// </remarks>
+    public ObservableCollection<DelayGroup> Groups { get; } = [];
+
     /// <summary>列表是否为空（用于区分两种空状态）。</summary>
     public bool IsEmpty => Rows.Count == 0;
 
@@ -186,6 +195,7 @@ public sealed partial class DelayViewModel : ObservableObject
             // 但界面必须把这件事说出来，否则用户看到的是"我的配置全没了"。
             _log.Error(ex, "配置无法加载");
             Rows.Clear();
+            Groups.Clear();
             Subtitle = "配置不可用";
             ErrorText = ex.Message;
             OnPropertyChanged(nameof(IsEmpty));
@@ -209,11 +219,47 @@ public sealed partial class DelayViewModel : ObservableObject
             Rows.Add(new DelayRow(item, stale, pixels) { Order = ++order });
         }
 
+        RebuildGroups();
+
         Subtitle = BuildSubtitle(config.Items);
         ErrorText = canJudgeStaleness
             ? null
             : "系统扫描未完全成功，暂时无法判断哪些条目已失效。";
         OnPropertyChanged(nameof(IsEmpty));
+    }
+
+    /// <summary>
+    /// 按延时值把已排好序的 <see cref="Rows"/> 切成组（2026-09-20 用户批复）。
+    /// </summary>
+    /// <remarks>
+    /// 顺序扫一遍切片而不是 <c>GroupBy</c>：列表本来就已经按「延时 → 顺序」排好，
+    /// 同一延时的行必然相邻 —— 再 <c>GroupBy</c> 反而会丢掉"组按延时升序"这个既有保证，
+    /// 还得重新排一次。
+    /// </remarks>
+    private void RebuildGroups()
+    {
+        Groups.Clear();
+
+        var start = 0;
+        while (start < Rows.Count)
+        {
+            var delay = Rows[start].Item.DelaySeconds;
+
+            var end = start;
+            while (end < Rows.Count && Rows[end].Item.DelaySeconds == delay)
+            {
+                end++;
+            }
+
+            var rows = new List<DelayRow>(end - start);
+            for (var index = start; index < end; index++)
+            {
+                rows.Add(Rows[index]);
+            }
+
+            Groups.Add(new DelayGroup(delay, rows));
+            start = end;
+        }
     }
 
     /// <summary>移除一个条目：恢复系统项 + 删除配置。</summary>

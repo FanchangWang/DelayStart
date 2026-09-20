@@ -23,6 +23,13 @@ namespace DelayStart.Scheduler;
 /// </list>
 /// </para>
 /// <para>
+/// 🔴 <b><c>.ps1</c> 走 PowerShell 宿主</b>（D47，2026-09-20 用户批复）：脚本不是 PE 映像，
+/// <c>CreateProcessWithTokenW</c> 直接报 <c>193 ERROR_BAD_EXE_FORMAT</c>；
+/// 也不能交给 <c>ShellExecute</c>（<c>.ps1</c> 的默认动词是"编辑"，脚本不会执行）。
+/// 故降权与管理员两条路都改为起 <c>pwsh.exe</c>（找不到则 <c>powershell.exe</c>）
+/// 传 <c>-File</c>，见 <see cref="PowerShellHost"/>。
+/// </para>
+/// <para>
 /// 🔴 <b>为什么 explorer 令牌必须过 DuplicateTokenEx</b>（demo2 七方案真机实测 2026-09-20）：
 /// 直接把 <c>OpenProcessToken</c> 拿到的 explorer 令牌交给 <c>CreateProcessWithTokenW</c>
 /// 必返回 Win32Error=5；转成主令牌后成功且子进程完整性 0x2000。
@@ -73,6 +80,9 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
 
     /// <summary>特权只需开一次，失败也不阻断后续尝试（记录告警即可）。</summary>
     private bool _privilegeAttempted;
+
+    /// <summary>宿主选择日志只写一次（每条 .ps1 都写一遍会把日志刷满）。</summary>
+    private bool _powerShellHostLogged;
 
     /// <summary>构造启动器。</summary>
     /// <param name="log">日志。</param>
@@ -133,7 +143,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         => item.Source == StartupSource.Uwp || UwpParsingName.IsParsingName(item.Path);
 
     /// <summary>管理员条目：继承调度端提权令牌直接启动（有意提权）。</summary>
-    private static LaunchOutcome LaunchDirect(DelayedItem item)
+    private LaunchOutcome LaunchDirect(DelayedItem item)
     {
         try
         {
@@ -143,6 +153,18 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
                 Arguments = item.Arguments,
                 UseShellExecute = true,
             };
+
+            // 🔴 .ps1 例外：ShellExecute 对脚本没有"打开"动词（默认是"编辑"），脚本不会执行。
+            // 必须显式起 PowerShell 宿主，并且不能经外壳（UseShellExecute=false）——
+            // 否则又绕回 ShellExecute。UseShellExecute=false 时子进程继承本进程的提权令牌，
+            // 正是管理员条目想要的结果。
+            if (LaunchTargetTypes.IsPowerShellScript(item.Path))
+            {
+                var host = ResolvePowerShellHost();
+                start.FileName = host;
+                start.Arguments = PowerShellHost.BuildArguments(item.Path, item.Arguments);
+                start.UseShellExecute = false;
+            }
 
             var workingDirectory = ResolveWorkingDirectory(item);
             if (workingDirectory.Length > 0)
@@ -194,11 +216,31 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
 
         try
         {
+            string application;
+            string commandLine;
+
+            if (LaunchTargetTypes.IsPowerShellScript(item.Path))
+            {
+                // .ps1：宿主承载（CreateProcess 直接起脚本报 193），宿主本身必须真实存在。
+                application = ResolvePowerShellHost();
+                commandLine = PowerShellHost.BuildCommandLine(application, item.Path, item.Arguments);
+
+                if (!File.Exists(application))
+                {
+                    return LaunchOutcome.Failure($"PowerShell 宿主不存在：{application}");
+                }
+            }
+            else
+            {
+                application = item.Path;
+                commandLine = CommandLineService.Build(item.Path, item.Arguments);
+            }
+
             var outcome = CreateWithToken(
                 item,
                 primaryToken,
-                item.Path,
-                CommandLineService.Build(item.Path, item.Arguments),
+                application,
+                commandLine,
                 ResolveWorkingDirectory(item));
 
             if (outcome.Created)
@@ -278,6 +320,29 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         {
             NativeMethods.CloseHandle(primaryToken);
         }
+    }
+
+    /// <summary>
+    /// 解析承载 <c>.ps1</c> 的 PowerShell 宿主（D47：<c>pwsh.exe</c> 优先，回落 <c>powershell.exe</c>）。
+    /// </summary>
+    /// <returns>宿主可执行文件路径。</returns>
+    /// <remarks>
+    /// 选择结果只记一次日志：一轮调度里可能有多个脚本条目，每条都写会把"选了哪个宿主"
+    /// 这条真正有用的信息淹掉；逐条的启动结果另有日志。
+    /// </remarks>
+    private string ResolvePowerShellHost()
+    {
+        var host = PowerShellHost.ResolveExecutable();
+
+        if (!_powerShellHostLogged)
+        {
+            _powerShellHostLogged = true;
+            _log.Info(PowerShellHost.IsPowerShell7(host)
+                ? $"已选用 PowerShell 7 承载 .ps1 条目（{host}）。"
+                : $"未找到 pwsh.exe，.ps1 条目将由 Windows PowerShell 承载（{host}）。");
+        }
+
+        return host;
     }
 
     /// <summary>

@@ -219,6 +219,8 @@ DelayStart.Core/
 │  ├─ ConfigService.cs             # 加载/校验/迁移/原子保存
 │  ├─ RunStateService.cs           # 状态与归档读写
 │  ├─ CommandLineService.cs        # 命令行解析 + 参数拼接（★ 纯逻辑，重点测试对象）
+│  ├─ LaunchTargetTypes.cs         # ★ D47 目标类型白名单（编辑器与调度端唯一事实来源）
+│  ├─ PowerShellHost.cs            # ★ D47 .ps1 宿主解析 + 命令行构造（★ 纯逻辑）
 │  ├─ DelayCalculator.cs           # 时序计算（★ 纯逻辑，重点测试对象）
 │  ├─ ItemKeyBuilder.cs            # 稳定主键生成（★ 纯逻辑）
 │  ├─ StartupSortComparer.cs       # (delay, sortOrder) 排序（★ 纯逻辑）
@@ -269,6 +271,8 @@ DelayStart.Core/
 | `ConfigService` | 加载 `config.json` → 校验 → 迁移（v1→v2）→ 原子保存 | 用 `JsonContext` 源生成 |
 | `RunStateService` | 读写 `state/current-run.json`、归档 `runs/<runId>.json`、清理超过 30 份的旧记录 | 同上 |
 | `CommandLineService` | ① 解析注册表值 / 快捷方式参数为 `(Path, Args)`；② 拼接最终命令行 | 纯字符串逻辑，无依赖 |
+| `LaunchTargetTypes` | D47 目标类型白名单（`.exe`/`.lnk`/`.bat`/`.cmd`/`.ps1`）。编辑器（选择器白名单、拖放校验）与调度端（启动路由）**共用同一份** —— 各写一份的后果是"选得进来却启不动"（旧 `.msi` 正是如此），且不会报错 | 纯字符串判断，无依赖 |
+| `PowerShellHost` | D47 `.ps1` 的宿主解析（`pwsh.exe` 优先 → `powershell.exe` 回落）与命令行构造（`-NoProfile -ExecutionPolicy Bypass -File "<脚本>" <参数>`） | 纯字符串 + `File.Exists` 探测；全部探测入口可注入假探针，测试不依赖本机装没装 PowerShell 7 |
 | `DelayCalculator` | `remaining = DelaySeconds - elapsed`；排序；计算调度器驻留时长 | 纯计算，注入 `IClock` |
 | `ItemKeyBuilder` | 生成稳定主键 `{source}:{scope}:{sourceKey}` | 纯计算 |
 | `LaunchResultEvaluator` | 依据"创建结果 + 1.5 秒后 `HasExited` + 退出码"判定成功/失败；UWP 因无 PID 而收到 `null` 快照时直接判成功（D28） | 纯逻辑，可注入假进程探针 |
@@ -544,18 +548,20 @@ public sealed class OriginalState
   "version": 2,
   "items": [ /* DelayedItem[] */ ],
   "settings": {
-    "delayPresets": [0, 10, 30, 60, 120],
-    "maxDelaySeconds": 86400,          // 0 = 不限制；仅输入校验用
-    "notifyMode": 0,                    // 0 仅失败 / 1 总是 / 2 从不
-    "retryCount": 1,                    // 同一次运行内的重试次数
-    "trayKeepSeconds": 3,
-    "showTrayIcon": true,
-    "preferDeElevatedLaunch": true,     // 普通用户条目优先降权启动
-    "fallbackOnDeElevationFailure": true,
+    "delayPresets": [0, 5, 10, 15, 20, 30, 60],   // D50：5 秒一档，覆盖登录后最拥挤的 30 秒区间
+    "defaultPreset": 30,               // 编辑器预选值；必须落在 delayPresets 内（加载时兜底到首项）
+    "notifyMode": "FailuresOnly",       // 字符串枚举：FailuresOnly / Always / Never
+    "retryCount": 1,                    // 同一次运行内的重试次数（0–5）
+    "theme": "FollowSystem",            // FollowSystem / Light / Dark
     "lastRunId": "20260919-084112"      // 管理端横幅用
   }
 }
 ```
+
+> ⚠️ **示例已按实现同步（2026-09-20）**：`maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` /
+> `preferDeElevatedLaunch` / `fallbackOnDeElevationFailure` 五项**已从模型删除**（用户批复：
+> 延时上限不再可配、托盘设置只属调度端、降权语义固定为"一定降权、绝不回退"）。
+> 枚举一律以**字符串**落盘（`ConfigService` 用 `JsonStringEnumConverter`），手写配置时不要写数字。
 
 **迁移规则（v1 → v2）**：读取 demo 格式时补齐 `Scope`（从 `source_detail` 字符串推断一次并固化）、`Enabled=true`、`OriginalState`（保守取 `{ WasEnabled: false }`，因为能被接管的项通常已被禁用）。
 
@@ -594,12 +600,12 @@ DelayStart.App/
 ├─ Views/
 │  ├─ OverviewPage.xaml               # 总览（含「最近一次开机调度」表、上次运行横幅）
 │  ├─ ItemsPage.xaml                  # 自启动项（按来源筛选）
-│  ├─ DelayPage.xaml                  # 延时启动（**仅列表**，时间轴已按 D37=B 删除）
+│  ├─ DelayPage.xaml                  # 延时启动（**仅列表**，时间轴已按 D37=B 删除；D51 起按延时分组，D52 版式 = 子标题 + 每组一张边框卡片）
 │  ├─ SystemPage.xaml                 # 系统启动项（只读）
 │  ├─ LogPage.xaml                    # 运行日志
 │  └─ SettingsPage.xaml               # 设置
 ├─ Dialogs/
-│  ├─ DelayEditorDialog.xaml          # 延时配置编辑器（4 步布局 × 3 形态，**手动添加与编辑共用**）
+│  ├─ DelayEditorDialog.xaml          # 延时配置编辑器（**子标题 + 卡片**的分节布局；目标程序块 = 只读卡片 / 「程序」+「UWP 应用」两颗分段页签，**手动添加与编辑共用**）
 │  ├─ ConfirmRemoveDialog.xaml        # 移除确认（两种变体文案）
 │  └─ SimulateDialog.xaml             # 模拟调度（0.5 倍速进度视图，D37=B 后不再有时间轴）
 ├─ ViewModels/
@@ -607,6 +613,7 @@ DelayStart.App/
 │  ├─ OverviewViewModel.cs
 │  ├─ ItemsViewModel.cs
 │  ├─ DelayViewModel.cs
+│  ├─ DelayGroup.cs                   # 延时分组（组标题 = 延时本身 + 行快照，D51）
 │  ├─ SystemViewModel.cs
 │  ├─ LogViewModel.cs
 │  └─ SettingsViewModel.cs
@@ -624,6 +631,12 @@ DelayStart.App/
 └─ Converters/
    └─ BoolToVisibilityConverter.cs    # bool → Visibility（x:Bind 不做该隐式转换）
 ```
+
+> **`Interop/`（实现期新增，5.1 原表未列）**：提权进程下必须绕行的原生互操作都收在这里 ——
+> `UipiMessageFilter`（放行拖放消息，R10）、`FileDropReceiver`（经典 `WM_DROPFILES` 接收，
+> 2026-09-19 批复 4）、`Win32FilePicker`（WinRT 选择器在提权进程里打不开）、
+> `WindowSizing`（默认宽高与最小尺寸，D49）。三者都用「子类化窗口过程/换消息过滤器 +
+> 按 HWND 记账 + 只转发不卸载」这一套写法，**可以叠加**（后装的把先前的过程当成自己的原过程）。
 
 > **组合根为什么放在 `Services/ServiceRegistration.cs` 而不是 `App.xaml.cs`**：
 > headless CLI（D32）与 GUI 必须装配**同一批实例** —— 两个 `FileLogger` 同时打开
@@ -958,7 +971,7 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 
 ### 10.5 R10 修复 + Phase 4 调度端执行记录（2026-09-19）
 
-**R10 修复（用户实测"拖进去鼠标变禁止"后落地）**：根因是 **UIPI** —— 中等完整性的 Explorer 向提权（`requireAdministrator`）窗口投递拖放消息被系统静默拦截。修复：新增 `App/Interop/UipiMessageFilter.cs`，在 `MainWindow` 构造期对主窗口句柄调 `ChangeWindowMessageFilterEx` 放行三条消息（`WM_DROPFILES 0x233` / `WM_COPYDATA 0x4A` / `WM_COPYGLOBALDATA 0x49`）；编辑器目标选择区恢复设计稿"拖入文件或点击选择"文案，实现 `DragOver` / `Drop`（接受 `.exe/.lnk/.bat/.cmd/.msi`，落 `ApplyPickedFile` 同一入口）。
+**R10 修复（用户实测"拖进去鼠标变禁止"后落地）**：根因是 **UIPI** —— 中等完整性的 Explorer 向提权（`requireAdministrator`）窗口投递拖放消息被系统静默拦截。修复：新增 `App/Interop/UipiMessageFilter.cs`，在 `MainWindow` 构造期对主窗口句柄调 `ChangeWindowMessageFilterEx` 放行三条消息（`WM_DROPFILES 0x233` / `WM_COPYDATA 0x4A` / `WM_COPYGLOBALDATA 0x49`）；编辑器目标选择区恢复设计稿"拖入文件或点击选择"文案，实现 `DragOver` / `Drop`（接受 `.exe/.lnk/.bat/.cmd/.ps1`，落 `ApplyPickedFile` 同一入口；白名单自 D47 起由 `Core.Services.LaunchTargetTypes` 统一提供）。
 
 **Phase 4（调度端，纯 Win32 + NativeAOT）**：
 
@@ -989,4 +1002,79 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 | Inno Setup | ✅ `installer/DelayStart.iss` + `installer/README.md`：固定路径 `{localappdata}\Programs\DelayStart`（`PrivilegesRequired=lowest` + `DisableDirPage`）、`InitializeUninstall` 同步跑 `--restore-all` + `ewWaitUntilTerminated` + 非 0 **中止卸载**（🈲 `[UninstallRun]` 读不到退出码）、默认保留配置与日志（无 `[UninstallDelete]`，完成页提示目录）。本机未装 Inno Setup，**编译与安装/卸载链路留用户验收** |
 | 管理端导航收口 | ✅ 六模块全接入（总览 / 自启动项 / 延时启动 / 系统启动项 / 运行日志 / 设置），`NavigationService` 六标签齐全，`MainWindow` 菜单不再有"分阶段增长"注释前置条件 |
 | ⏳ 待人工验收 | ① R10 拖放复测；② Inno 安装 → 升级 → 卸载链路（`--restore-all` 拦截路径）；③ 模拟调度与运行日志页真机核对；④ MSCONFIG / 任务管理器显示核对 |
+
+### 10.8 D40–D47 执行记录（2026-09-20）
+
+**D40–D45：调度端亲自降权 + UWP 启动链**（提交 `5d418ae`）
+
+| 项 | 结论 |
+|---|---|
+| 🔴 降权机制（D40） | ✅ 新增 `Scheduler/DeElevatedProcessLauncher.cs`：`GetShellWindow` → `OpenProcessToken(TOKEN_DUPLICATE)` → **`DuplicateTokenEx` 转主令牌** → `CreateProcessWithTokenW`（`lpDesktop` 留 NULL）。`NativeMethods` 补必要的 P/Invoke；`AgentProcessLauncher.cs` 与整个 `DelayStart.Agent` 工程删除（slnx / `.iss` / `publish.ps1` 同步摘除，D38/D39 的双进程方案作废）。真机七方案对照：直接交 explorer **进程令牌**必 `Win32Error=5`；`CreateProcessAsUserW`=1314；COM `Shell.Application.ShellExecute` **不降权**（子进程仍 0x3000 High） |
+| 🔴 UWP 解析名（D41） | ✅ `Core/Services/UwpParsingName.cs`（裸 AUMID → `shell:AppsFolder\…`，大小写不敏感、幂等）+ `Management/Services/UwpAppIdResolver.cs`（`Repository\Packages` → `PackageRootFolder` → `AppxManifest.xml` 建 `StartupTask.TaskId → Application.Id` 映射）。**根因是注册表子键名不是 AppId**：修前 `…!PantherBarTask` 解析不了，外壳回退打开"文档"目录 |
+| 跨页刷新（D42） | ✅ `App/Services/ScanCacheService` 增来源级过期标记（`Invalidate` / `IsStale` / `ClearStale`）：接管 / 移出 / 禁用后置脏，来源页载入命中即重扫该来源。删掉 D38/D39 遗留的 `\DelayStart` 任务文件夹清理代码 |
+| 总览结果列（D43） | ✅ `OverviewPage.xaml` 结果列拆两份互斥 `TextBlock` —— 真因是**画刷**：`Foreground` 是可继承属性，转换器把 `false` 绑成 `null` 会切断继承链，成功项因此不可见 |
+| 🔴 UWP 身份（D44 → D45） | ✅ 最终定性：**UWP 进程恒为普通用户身份**（打包应用进程的令牌由系统 / 激活服务决定，中转外壳用谁的令牌都不改结果）。故调度端 UWP 一律降权委托、`RunAsAdmin` 只记说明不判失败；编辑器对 UWP 不给「管理员」胶囊。⚠️ D43 ②/D44 的机制假设均已被推翻，历史记录保留在 `requirements.md` |
+
+**D46–D47：手动添加 UWP + 目标类型白名单**
+
+| 项 | 结论 |
+|---|---|
+| UWP 应用目录（D46-2） | ✅ `App/Services/UwpAppCatalog.cs`：`PackageManager.FindPackagesForUser("")` → `GetAppListEntriesAsync()`，只列**有应用清单条目**的包（≈ 开始菜单里能点开的那些）。显示名三级回退（条目 → 包 → 包族名），判据复用 `UwpNameResolver.LooksUnresolved`；单个包失败只跳过它。🔴 `AppListEntry` 在投影里**不作为可命名类型暴露**（写类型名报 CS0234），只能 `var` 迭代 |
+| 选择面板（D46-1） | ✅ `DelayEditorDialog` 新增同层覆盖层 `UwpPickerOverlay`（含筛选框 / 图标列表 / 14 行提示）。**不能叠第二个 ContentDialog**，故与自定义延时确认面板同一套路。选中后存**解析名**（`UwpParsingName.Build`）而非裸 AUMID —— 存裸 AUMID 会被调度端当普通 exe 判"目标不存在" |
+| 图标（D46-3） | ✅ 复用 `IconProvider` + `shell:AppsFolder\…` 解析名：`Task.Run` 后台批量提 `IconPixels`，回 UI 线程建 `WriteableBitmap`（与列表页同一套 `IconRenderer`） |
+| 参数框（D46-4） | ✅ **保留但置为禁用态**（`IsEnabled=false`）并附一行说明 —— 外壳委托不转发参数 |
+| 🔴 白名单收敛（D47） | ✅ 新增 `Core/Services/LaunchTargetTypes.cs` 作为**唯一事实来源**：`.exe / .lnk / .bat / .cmd / .ps1`（**移除 `.msi`** —— 非 PE 映像，`CreateProcess` 报 `193 ERROR_BAD_EXE_FORMAT`）。`CommandLineService.ExecutableExtensions` 同步补 `.ps1` |
+| 🔴 `.ps1` 宿主（D47） | ✅ 新增 `Core/Services/PowerShellHost.cs`：`pwsh.exe` 优先（`%ProgramFiles%\PowerShell\7` → `7-preview` → `PATH` → `%LOCALAPPDATA%\Microsoft\WindowsApps` 执行别名），回落 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`；命令行固定 `-NoProfile -ExecutionPolicy Bypass -File "<脚本>" <参数>`。调度端**降权与管理员两条路都走宿主** —— `ShellExecute` 对 `.ps1` 没有"打开"动词（默认"编辑"），管理员条目改用 `UseShellExecute=false` 继承提权令牌 |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**256 个用例全绿**（+44：`LaunchTargetTypesTests` / `PowerShellHostTests`）；Scheduler AOT 单文件 **3.6 MB** 发布通过并同步进 App bin |
+
+### 10.9 D48–D51 执行记录（2026-09-20，真机反馈后）
+
+**D48：编辑器目标区（用户 bug 1 + UWP 工作目录）**
+
+| 项 | 结论 |
+|---|---|
+| 🔴 「更换」分流 | ✅ `DelayEditorDialog` 的「更换」与"拖入文件，或点击选择程序"合并为 `OnChangeTarget`：目标已是 `shell:AppsFolder\…` 解析名 → 打开 **UWP 应用列表**；否则 → 打开文件选择器。真因是解析名不是文件路径，**文件选择器永远选不到 UWP 应用**，用户视角就是"UWP 条目换不了"。判据复用 `_identityLockedToNormal`（与 D45 的身份锁定同源，在 `RefreshTargetKind` 里与目标形态同步） |
+| 双向切换 | ✅ 「或选择一个 UWP 应用」这张卡片**双向工作**：目标不是 UWP → 指向 UWP 列表；目标已是 UWP → 文案改指文件选择器（`或改为选择一个普通程序`）。**没有这条回程就会出现"换了 UWP 后再也换不回普通程序"**（此时「更换」只回 UWP 列表）。两者都由 `ApplyTargetCapabilities` 统一刷新 |
+| 工作目录（UWP） | ✅ **UWP 没有"工作目录"概念**：打包应用由系统激活器拉起，当前目录由激活机制决定、调用方无从指定，应用也不允许依赖它（数据走 `ApplicationData`、资源走 `ms-appx`）。故工作目录框与参数框一样**置灰 + 一行说明**（`ApplyUwpState` 并入 `ApplyTargetCapabilities`，可重复调用以支持目标在 UWP / 普通程序之间来回换） |
+
+**D49：管理端默认宽高**
+
+| 项 | 结论 |
+|---|---|
+| 默认尺寸 | ✅ `App/Interop/WindowSizing.ApplyInitialSize`：**1400×900 DIP**（`AppWindow.ResizeClient` + `Move`），按 `GetDpiForWindow` 换算成像素、最多占工作区 **92%**、相对 `DisplayArea.GetFromWindowId(…, Nearest)` 居中。🔴 `AppWindow` 的单位是**物理像素**，本机 3840×2160 / 150% 下不换算会得到一个"只有半屏大"的窗口 |
+| 最小尺寸 | ✅ `WindowSizing.EnforceMinimum` 接原生 `WM_GETMINMAXINFO`（**960×600 DIP**，每次按当前显示器 DPI 重算）。原生 WinUI 没有最小尺寸 API（PowerToys 用的是 WinUIEx 的 `WindowEx`），本项目不引该包，改为与 `FileDropReceiver` 同款的子类化；两条链各自记账、依次转发，可共存。⚠️ `MINMAXINFO` 用显式布局**只声明 `ptMinTrackSize`** 一项：全写出来会有 4 个"只由系统填"的字段触发 **CS0649**，而 `TreatWarningsAsErrors` 下那是编译失败 |
+| 参考对象 | PowerToys `Settings.UI/SettingsXAML/MainWindow.xaml`（`MinWidth/MinHeight=480`）+ `Helpers/WindowHelper.cs`（`settings-placement.json` 记住位置/大小）。**"记住上次尺寸"本轮不做**（会新增一个落盘文件，见 D49 的 C 选项） |
+
+**D50 / D51：设置页与延时启动页**
+
+| 项 | 结论 |
+|---|---|
+| 预设延时默认值（D50） | ✅ `Settings.DelayPresets` 默认改 **`0 / 5 / 10 / 15 / 20 / 30 / 60`**，`ConfigService.NormalizePresets` 的两处空值兜底同步；编辑器空列表兜底改为直接读 `new Settings().DelayPresets`（不再另抄一份清单）。已落盘的列表**不做迁移**，原样保留 |
+| 设置页分区顺序（D50） | ✅ `SettingsPage.xaml` 顺序改为 **外观 → 延时 → 调度**（「外观」作为第一个子标题） |
+| 延时页分组（D51） | ✅ 新增 `App/ViewModels/DelayGroup.cs`（延时值 + 行快照 + 组标题/条目数），`DelayViewModel.Groups` 由**已排序**的 `Rows` 顺序切片得出（同一延时的行必然相邻；用 `GroupBy` 反而会丢掉"组按延时升序"这个既有保证）。`DelayPage.xaml` 改为 `ItemsControl` 套 `ItemsControl`：表头只保留一份、组内行模板与列宽不变（列宽仍逐列相同） |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**256 个用例全绿** |
+
+### 10.10 D52–D54 执行记录（2026-09-20，分组版式与编辑器 tab）
+
+| 项 | 结论 |
+|---|---|
+| 分组边框按组（D52） | ✅ `DelayPage.xaml` 去掉最外层那张"包住所有组"的大卡片，改为**每组一个 `Border`**：组模板 = `StackPanel`（子标题纯文本 + 条目数 → 组卡片）。画刷 / 圆角沿用卡片默认值（不新增样式）。表头左内边距 28 = 组卡片 `Padding` 8 + 行 `Padding` 20，保证标题与行内容逐列对齐 |
+| 编辑器 ① 块改 tab（D53） | ✅ `DelayEditorDialog` 用 `SelectorBar`（`程序` / `UWP 应用`）替代原来的"单块 + 双入口卡片"；code-behind 以 `_uwpTabActive` 为单一状态源，`TargetPath` / `ItemName` / `Arguments` / `WorkingDirectory` 全部按当前页签取值 —— **两个页签各存各的目标**（`_filePath` / `_uwpPath`），D48 那套"互相覆盖同一个字段"的结构消失。拖放落文件时 `SelectTab(false)` 自动切回「程序」页签。身份不再是"锁死"而是"按页签归一"：`_wantAdmin` 单独记一份，UWP 页签下 `RunAsAdmin` 恒为 false，切回「程序」页签时用户之前的选择还在（`PaintIdentity` 只重画，`SyncIdentityPills` 仅在管理员胶囊该出现/该消失时重建） |
+| 删掉活摘要（D53） | ✅ 删 `SummaryText` / `UpdateSummary` 及其 5 处调用（`ApplyPickedFile` / `ApplyPickedUwpTarget` / `OnDelayPillChecked` / `OnCustomDelayChanged` / `SetDelay`） |
+| UWP 页签字段（D53） | ✅ 页签内**不摆**命令行与工作目录 —— 原先的"禁用态 + 两行说明"整体删除（`ArgumentsHintText` / `WorkingDirHintText` / `ApplyTargetCapabilities` 一并删掉），页签底部换成一行说明「UWP 用系统外壳激活：始终普通身份，参数不转发、也没有工作目录」 |
+| UWP 只读条目（D54） | ✅ `UseReadOnlyTarget` 按 `_systemIsUwp` 决定：UWP 来源时名称 / 命令行 / 工作目录**全部 `Collapsed`**（非 UWP 系统条目的工作目录仍可编辑，bug#5 不变）。只读卡片的路径行对 UWP 显示 `UWP 应用 · shell:AppsFolder\<AUMID>`，但**提交用的 `_readOnlyPath` 仍取原始值**（显示文案与数据分离） |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**256 个用例全绿**；🔴 `SelectorBar` / `SelectorBarItem`（WinAppSDK 1.5+，本项目 1.8）可用，但 **XAML 解析期 `SelectionChanged` 会早于其余字段就绪触发**（第一项 `IsSelected="True"`），必须用 `_initialized` 挡住，否则 NRE |
+
+### 10.11 D55–D59 执行记录（2026-09-20，弹窗宽度 / 分节卡片 / 删 ④ / 字段可见性修正）
+
+| 项 | 结论 |
+|---|---|
+| 弹窗宽度回归框架默认（D55） | ✅ 删掉 `ContentDialog.Resources` 里的 `ContentDialogMaxWidth = 700` 覆盖，宽度交给框架。🔴 框架值实测自 WinUI 包内 `lib\net6.0-windows10.0.17763.0\Microsoft.WinUI\Themes\generic.xaml`：`ContentDialogMinWidth=320` / **`ContentDialogMaxWidth=548`** / `ContentDialogMaxHeight=756` / `ContentDialogTitleMaxHeight=56` / `ContentDialogPadding=24`（旧注释写的"540 限制"是错的）。同文件也确认模板里已有 `ContentScrollViewer`。内容区滚动上限 520 → **560**：宽度收窄后内容更高，560 + 外框（标题 ~27 + 内边距 48 + 按钮区 ~56 ≈ 143）= 703，仍在 756 以内 |
+| 分节卡片 + 去序号（D56） | ✅ 三个功能块统一为「纯文本子标题（`EditorSectionHeaderStyle`：14px SemiBold，与设置页 `SectionHeaderStyle` 同视觉）→ 一张边框卡片」；`①②③` 序号删除。卡片内的子区域（拖放区 / 已选目标 / UWP 入口）改用 `SubtleFillColorSecondaryBrush` 浅底 + 无描边，避免框套框 |
+| 页签换成分段按钮（D56） | ✅ `SelectorBar` → 两颗等宽 `ToggleButton`（`Background="Transparent"` + `BorderThickness="0"`，选中态由 Fluent 默认视觉给出 accent 实心：`generic.xaml` 的 `ToggleButtonBackgroundChecked = AccentFillColorDefaultBrush`）。🔴 必须处理 `ToggleButton` 的"再点一下取消选中"：新增 `OnProgramTabUnchecked` / `OnUwpTabUnchecked` → `RestoreTabSelection()` → `ApplyTabState()` 重画两颗，否则会出现"两颗都没选中、面板却停在那页"的矛盾状态；`ApplyTabState` 内改写 `IsChecked` 仍由 `_suppressSync` 挡重入 |
+| 删除原 ④ 模块（D57） | ✅ 删除 `ImpactHeaderText` / `InfoTypeText` / `InfoWriteText` / `InfoImpactText` 四个控件与三处构造赋值（加入系统项 / 编辑手动项 / 手动添加） |
+| 工作目录不再自动填（D58） | ✅ `ApplyPickedFile` 收掉两个恒真参数（`fillName` / `fillWorkingDirectory`）与"回填程序所在目录"那段，只保留"显示已选文件 + 按需回填显示名称"，三处调用点同步 |
+| 🔴 字段可见性缺陷修复（D59） | ✅ **上一轮 D53 引入的缺陷**：`NameBox` / `ArgumentsBox` / `WorkingDirBox` 被放进「程序」页签面板（`ProgramTabPanel`）之后，只读形态（系统条目）会整体折叠该面板 —— `UseReadOnlyTarget` 里对这三项设的 `Visibility` **全部无效**，"接管系统条目时能填参数与工作目录"（bug#5）静默失效且不报任何错。修法：`ArgumentsBox` / `WorkingDirBox` 移到**页签之外**（目标卡片的直接子项），新增 `ApplyTargetFieldVisibility()` 按 `_manualForm` + `UwpMode` 统一算三项可见性（名称仅"手动 + 「程序」页签"；参数与工作目录**除 UWP 外一律显示**），`ApplyTabState` 每次切页签都调用。🔴 教训：**可见性判据不能写在"会被父级整体折叠的子树"里** —— 这类失效不报错，只能靠逐形态过一遍字段发现 |
+| 文案单一来源 | ✅ 拖放区"支持 .exe / …"改由 `LaunchTargetTypes.DisplayList` 赋值（`InitializeCommon` 里写一次），不再硬编码在 XAML —— 白名单与界面文案一起漂移的隐患消除 |
+| 构建与测试 | ✅ 全解决方案 **0 警告 0 错误**；**256 个用例全绿**（本轮只动 App 层 XAML 与 code-behind，测试用例数不变） |
 

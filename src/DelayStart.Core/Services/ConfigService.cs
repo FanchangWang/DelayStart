@@ -321,7 +321,7 @@ public sealed class ConfigService : IAppConfigStore
     {
         if (presets is null || presets.Length == 0)
         {
-            return [0, 10, 30, 60, 120];
+            return [0, 5, 10, 15, 20, 30, 60];
         }
 
         var normalized = presets
@@ -330,7 +330,7 @@ public sealed class ConfigService : IAppConfigStore
             .Order()
             .ToArray();
 
-        return normalized.Length == 0 ? [0, 10, 30, 60, 120] : normalized;
+        return normalized.Length == 0 ? [0, 5, 10, 15, 20, 30, 60] : normalized;
     }
 
     private void PreserveCorruptFile()

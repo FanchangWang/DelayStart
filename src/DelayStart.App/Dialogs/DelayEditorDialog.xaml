@@ -3,41 +3,55 @@
     x:Class="DelayStart.App.Dialogs.DelayEditorDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ctl="using:DelayStart.App.Controls"
+    xmlns:dialogs="using:DelayStart.App.Dialogs"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    xmlns:ctl="using:DelayStart.App.Controls"
     mc:Ignorable="d"
     CloseButtonText="取消"
     DefaultButton="Primary"
     PrimaryButtonClick="OnPrimaryButtonClick">
 
-    <!-- 2026-09-20 批复 4：解除 ContentDialog 默认 540px 最大宽度限制；840 过宽回调到 700。 -->
     <ContentDialog.Resources>
-        <x:Double x:Key="ContentDialogMaxWidth">700</x:Double>
+        <!-- 分节标题：与设置页 SectionHeaderStyle 同一视觉（14px / SemiBold），
+             不在这里另立一套字号。 -->
+        <Style x:Key="EditorSectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </ContentDialog.Resources>
 
     <!--
         延时配置编辑器（docs/design-spec.md 三之二）。
-        4 个编号步骤块 + 底部活摘要，4 种进入方式共用这一个弹窗：
-
-          加入系统项 —— 目标程序只读（① 显示只读卡片）
-          编辑系统项 —— 目标程序只读
-          编辑手动项 —— 目标程序可更换（① 显示选择区 + 名称 + 工作目录）
-          手动添加   —— 目标程序可选择
+        4 种进入方式共用这一个弹窗，靠"这条记录有没有系统来源"分叉成 2 种形态。
 
         分叉的唯一依据是"这条记录有没有系统来源"，由 code-behind 按形态切 ① 里的面板。
-        🔴 根节点是 Grid：自定义延时提交前的二次确认面板（ConfirmOverlay）要覆盖整个内容区
-        （ContentDialog 之上不能叠第二个 ContentDialog，2026-09-19 用户批复 6）。
-        二轮 bug 批复 3/4/5：延时胶囊与身份胶囊统一 8 间距；胶囊宽度自适应内容；
-        校验提示（ValidationBar）放在**内容区顶部**——弹窗内容超高时不滚动也能看到。
+        🔴 根节点是 Grid：自定义延时提交前的二次确认面板（ConfirmOverlay）与 UWP 应用选择
+        面板（UwpPickerOverlay）都要覆盖整个内容区 —— ContentDialog 之上不能叠第二个
+        ContentDialog（2026-09-19 用户批复 6），所以两者都做成同层的覆盖层。
+
+        🔴 D55（2026-09-20 用户批复）：**宽度回归框架默认**。此前用
+        <c>ContentDialog.Resources</c> 把 <c>ContentDialogMaxWidth</c> 覆盖成 700，比框架的
+        548 宽出一截，比例失衡。框架默认值见 WinUI 的 generic.xaml：
+        MinWidth 320 / MaxWidth 548 / MaxHeight 756（标题区最多 56），本弹窗一律不再覆盖。
+
+        🔴 D56（2026-09-20 用户批复）：版式改成 **一个子标题 + 一张边框卡片**，并
+        **去掉数字序号**（①②③ 在只有一个入口的弹窗里不提供额外信息）。① 块顶部的
+        页签由 <c>SelectorBar</c>（选中态只是一小段下划线，很不明显）换成**两颗分段式
+        <c>ToggleButton</c>** —— 选中那颗按 Fluent 默认视觉是 **accent 实心填充**
+        （generic.xaml：ToggleButtonBackgroundChecked = AccentFillColorDefaultBrush），
+        与弹窗内既有的延时 / 身份胶囊同一套"选中 = 高亮"语言。
+
+        🔴 D57（2026-09-20 用户批复）：**整块删除 ④（接管对象 / 系统影响）**。
+        该块对手动条目是固定不变的同一段话（不提供新信息），对系统条目的价值也已由
+        「加入后原自启动项将被软禁用」这句副标题承担。
     -->
     <Grid>
         <ScrollViewer
-            MaxHeight="520"
+            MaxHeight="560"
             HorizontalScrollMode="Disabled"
             VerticalScrollBarVisibility="Auto">
-            <!-- 2026-09-20 批复 4：去掉固定 Width，跟随 ContentDialogMaxWidth=700 自适应。 -->
-            <StackPanel Spacing="14">
+            <StackPanel Spacing="16">
 
             <!-- 校验提示：置顶（二轮 bug 批复 5）—— 内容区滚动位置在哪儿都看得见 -->
             <InfoBar
@@ -52,216 +66,423 @@
                 Style="{StaticResource BodyTextBlockStyle}"
                 TextWrapping="Wrap" />
 
-            <!-- ① 目标程序 -->
-            <StackPanel Spacing="6">
-                <TextBlock FontWeight="SemiBold" Text="① 目标程序" />
+            <!-- ══ 目标程序 ══ -->
+            <StackPanel Spacing="8">
+                <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="目标程序" />
                 <TextBlock
                     x:Name="TargetHintText"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}" />
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    TextWrapping="Wrap" />
 
-                <!-- 形态 A：由系统自启动项绑定，不可更改 -->
                 <Border
-                    x:Name="ReadOnlyTargetBorder"
-                    Padding="12,10"
+                    Padding="12"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="{StaticResource ControlCornerRadius}">
-                    <StackPanel Spacing="2">
-                        <TextBlock x:Name="TargetNameText" FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <TextBlock
-                            x:Name="TargetPathText"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            TextTrimming="CharacterEllipsis"
-                            TextWrapping="Wrap" />
-                        <TextBlock
-                            x:Name="TargetSourceText"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}" />
-                    </StackPanel>
-                </Border>
+                    <StackPanel Spacing="12">
 
-                <!-- 形态 B-1：还没选程序（拖放走经典 WM_DROPFILES —— XAML 拖放在提权进程里
-                     被 UIPI 拦死，批复 4 改造后由 FileDropReceiver 广播路径进来） -->
-                <Border
-                    x:Name="PickEmptyBorder"
-                    Padding="0"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="{StaticResource ControlCornerRadius}">
-                    <Button
-                        x:Name="PickFileButton"
-                        Padding="16,18"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Stretch"
-                        Click="OnPickFile"
-                        Style="{StaticResource TextBlockButtonStyle}">
-                        <StackPanel Spacing="4">
-                            <TextBlock HorizontalAlignment="Center" Text="拖入文件，或点击选择程序" />
+                        <!-- 形态 A：由系统自启动项绑定，不可更改 -->
+                        <StackPanel x:Name="ReadOnlyTargetPanel" Spacing="2">
+                            <TextBlock x:Name="TargetNameText" FontWeight="SemiBold" TextWrapping="Wrap" />
                             <TextBlock
-                                x:Name="PickFileTypesText"
-                                HorizontalAlignment="Center"
-                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="支持 .exe / .lnk / .bat / .cmd / .msi" />
-                        </StackPanel>
-                    </Button>
-                </Border>
-
-                <!-- 形态 B-2：已选程序（同样接受拖放更换） -->
-                <Border
-                    x:Name="PickFilledBorder"
-                    Padding="12,10"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="{StaticResource ControlCornerRadius}">
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Spacing="2">
-                            <TextBlock x:Name="PickedNameText" FontWeight="SemiBold" TextWrapping="Wrap" />
-                            <TextBlock
-                                x:Name="PickedPathText"
+                                x:Name="TargetPathText"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 TextTrimming="CharacterEllipsis"
                                 TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="TargetSourceText"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}" />
                         </StackPanel>
-                        <Button
-                            Grid.Column="1"
-                            VerticalAlignment="Center"
-                            Click="OnPickFile"
-                            Content="更换" />
-                    </Grid>
+
+                        <!-- 形态 B：手动条目 —— 目标可更换。页签决定"哪一类目标"：
+                             「程序」= 磁盘上的文件（拖入 / 文件选择器）；
+                             「UWP 应用」= 已安装的应用（只能从应用清单里挑，文件选择器选不到）。
+
+                             页签用 ToggleButton 而不是 SelectorBar：选中态是整块 accent 填充，
+                             一眼可见。两颗互为单选（Unchecked 会被 code-behind 顶回去 ——
+                             ToggleButton 默认允许"再点一下取消选中"）。 -->
+                        <StackPanel
+                            x:Name="PickTargetPanel"
+                            Spacing="12"
+                            Visibility="Collapsed">
+
+                            <Border
+                                Padding="4"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                CornerRadius="8">
+                                <Grid ColumnSpacing="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <ToggleButton
+                                        x:Name="TargetTabProgram"
+                                        Grid.Column="0"
+                                        MinHeight="36"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Checked="OnProgramTabChecked"
+                                        Content="程序"
+                                        CornerRadius="6"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Unchecked="OnProgramTabUnchecked" />
+
+                                    <ToggleButton
+                                        x:Name="TargetTabUwp"
+                                        Grid.Column="1"
+                                        MinHeight="36"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Checked="OnUwpTabChecked"
+                                        Content="UWP 应用"
+                                        CornerRadius="6"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Unchecked="OnUwpTabUnchecked" />
+                                </Grid>
+                            </Border>
+
+                            <!-- ── 页签 1：程序 ── -->
+                            <StackPanel x:Name="ProgramTabPanel" Spacing="10">
+
+                                <!-- 还没选程序（拖放走经典 WM_DROPFILES —— XAML 拖放在提权进程里
+                                     被 UIPI 拦死，批复 4 改造后由 FileDropReceiver 广播路径进来） -->
+                                <Border
+                                    x:Name="PickEmptyBorder"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="4">
+                                    <Button
+                                        x:Name="PickFileButton"
+                                        Padding="16,16"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Stretch"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Click="OnPickFile"
+                                        Style="{StaticResource TextBlockButtonStyle}">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock HorizontalAlignment="Center" Text="拖入文件，或点击选择程序" />
+                                            <TextBlock
+                                                x:Name="PickFileTypesText"
+                                                HorizontalAlignment="Center"
+                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}" />
+                                        </StackPanel>
+                                    </Button>
+                                </Border>
+
+                                <!-- 已选程序（同样可点「更换」重选） -->
+                                <Border
+                                    x:Name="PickFilledBorder"
+                                    Padding="12,10"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="4"
+                                    Visibility="Collapsed">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="2">
+                                            <TextBlock x:Name="PickedNameText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock
+                                                x:Name="PickedPathText"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                TextTrimming="CharacterEllipsis"
+                                                TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Button
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Click="OnPickFile"
+                                            Content="更换"
+                                            ToolTipService.ToolTip="重新选择程序文件" />
+                                    </Grid>
+                                </Border>
+
+                                <TextBox
+                                    x:Name="NameBox"
+                                    Header="显示名称 — 自动取自文件名，可改"
+                                    PlaceholderText="例如：微信" />
+                            </StackPanel>
+
+                            <!-- ── 页签 2：UWP 应用 ──
+                                 UWP 条目在配置里存的是解析名（shell:AppsFolder\<AUMID>）而不是文件路径，
+                                 文件选择器永远选不到它 —— 这是唯一入口（D46）。
+                                 本页签刻意**不摆**命令行与工作目录：UWP 由外壳激活，参数不转发、
+                                 也没有"从哪个目录启动"这回事（2026-09-20 用户提问的结论）。 -->
+                            <StackPanel
+                                x:Name="UwpTabPanel"
+                                Spacing="10"
+                                Visibility="Collapsed">
+
+                                <Border
+                                    x:Name="PickUwpEmptyBorder"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="4">
+                                    <Button
+                                        x:Name="PickUwpButton"
+                                        Padding="16,16"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Stretch"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Click="OnPickUwpApp"
+                                        Style="{StaticResource TextBlockButtonStyle}">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock HorizontalAlignment="Center" Text="选择 UWP 应用" />
+                                            <TextBlock
+                                                x:Name="PickUwpSubtitleText"
+                                                HorizontalAlignment="Center"
+                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="从已安装的应用中选择（应用商店应用、系统应用）" />
+                                        </StackPanel>
+                                    </Button>
+                                </Border>
+
+                                <Border
+                                    x:Name="PickedUwpBorder"
+                                    Padding="12,10"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="4"
+                                    Visibility="Collapsed">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="2">
+                                            <TextBlock x:Name="PickedUwpNameText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock
+                                                x:Name="PickedUwpPathText"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                TextTrimming="CharacterEllipsis"
+                                                TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Button
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Click="OnPickUwpApp"
+                                            Content="更换"
+                                            ToolTipService.ToolTip="换一个 UWP 应用" />
+                                    </Grid>
+                                </Border>
+
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    TextWrapping="Wrap"
+                                    Text="UWP 应用由系统外壳激活：始终以普通用户身份启动，命令行参数不会被转发、也没有工作目录可言，因此本页签不提供这两项。" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- 参数与工作目录**放在页签之外**（本轮修正）：系统条目（非 UWP）同样要能改
+                             这两项（bug#5：有些程序依赖工作目录找配置），而系统条目根本没有页签 ——
+                             把它们摆在「程序」页签的面板里，会跟着那个面板一起被折叠掉，于是
+                             "接管系统条目时能填参数与工作目录"这条需求静默失效（D53 引入）。
+                             可见性统一由 code-behind 的 ApplyTargetFieldVisibility 决定：
+                             UWP 目标下一律不显示（参数不转发、也没有工作目录可言）。 -->
+                        <TextBox
+                            x:Name="ArgumentsBox"
+                            Header="命令行参数 — 可选"
+                            PlaceholderText="留空则不附加参数" />
+
+                        <TextBox
+                            x:Name="WorkingDirBox"
+                            Header="工作目录 — 可选"
+                            PlaceholderText="留空则使用程序所在目录" />
+                    </StackPanel>
                 </Border>
-
-                <TextBox
-                    x:Name="NameBox"
-                    Header="显示名称 — 自动取自文件名，可改"
-                    PlaceholderText="例如：微信" />
-
-                <TextBox
-                    x:Name="ArgumentsBox"
-                    Header="命令行参数 — 可选"
-                    PlaceholderText="留空则不附加参数" />
-
-                <TextBox
-                    x:Name="WorkingDirBox"
-                    Header="工作目录 — 可选"
-                    PlaceholderText="留空则使用程序所在目录" />
             </StackPanel>
 
-            <!-- ② 延时时间（胶囊快选：WrapGrid 换行 + 按内容自适应宽度，间距 8） -->
-            <StackPanel Spacing="6">
-                <TextBlock FontWeight="SemiBold" Text="② 延时时间" />
+            <!-- ══ 延时时间 ══ -->
+            <StackPanel Spacing="8">
+                <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="延时时间" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Style="{StaticResource CaptionTextBlockStyle}"
                     Text="以登录时刻为起点的绝对时间点；同一时间点的多个程序几乎同时启动" />
 
-                <!-- 胶囊由 code-behind 填充（选中 = 当前延时；自定义值不在预设里时全部弹起）。
-                     🔴 Round H 批复 5：横向 StackPanel 超宽直接被裁掉看不到 → 换自绘 WrapPanel
-                     （按内容测量 + 自动换行，宽度仍自适应）。 -->
-                <ItemsControl x:Name="DelayChoices">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <ctl:WrapPanel Spacing="8" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                </ItemsControl>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <NumberBox
-                        x:Name="CustomDelayBox"
-                        Width="140"
-                        Header="自定义（秒）"
-                        Minimum="0"
-                        SpinButtonPlacementMode="Compact"
-                        ValueChanged="OnCustomDelayChanged" />
-                    <TextBlock
-                        VerticalAlignment="Bottom"
-                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="手动输入的自定义值提交前需要确认" />
-                </StackPanel>
-            </StackPanel>
-
-            <!-- ③ 启动身份（一行两个胶囊，间距与延时胶囊一致 = 8） -->
-            <StackPanel Spacing="6">
-                <TextBlock FontWeight="SemiBold" Text="③ 启动身份" />
-                <StackPanel
-                    x:Name="IdentityChoices"
-                    Orientation="Horizontal"
-                    Spacing="8" />
-                <TextBlock
-                    x:Name="IdentityHintText"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    TextWrapping="Wrap" />
-            </StackPanel>
-
-            <!-- ④ 接管对象 / 系统影响 -->
-            <StackPanel Spacing="6">
-                <TextBlock x:Name="ImpactHeaderText" FontWeight="SemiBold" Text="④ 接管对象" />
                 <Border
-                    Padding="12,10"
+                    Padding="12"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="{StaticResource ControlCornerRadius}">
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+                    <StackPanel Spacing="4">
+                        <!-- 胶囊由 code-behind 填充（选中 = 当前延时；自定义值不在预设里时全部弹起）。
+                             🔴 Round H 批复 5：横向 StackPanel 超宽直接被裁掉看不到 → 换自绘 WrapPanel
+                             （按内容测量 + 自动换行，宽度仍自适应）。 -->
+                        <ItemsControl x:Name="DelayChoices">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <ctl:WrapPanel Spacing="8" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
 
-                        <TextBlock
-                            Grid.Row="0"
-                            Grid.Column="0"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="条目类型" />
-                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="InfoTypeText" TextWrapping="Wrap" />
-
-                        <TextBlock
-                            Grid.Row="1"
-                            Grid.Column="0"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="写入位置" />
-                        <TextBlock
-                            Grid.Row="1"
-                            Grid.Column="1"
-                            x:Name="InfoWriteText"
-                            TextWrapping="Wrap" />
-
-                        <TextBlock
-                            Grid.Row="2"
-                            Grid.Column="0"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="系统影响" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="InfoImpactText" TextWrapping="Wrap" />
-                    </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <NumberBox
+                                x:Name="CustomDelayBox"
+                                Width="140"
+                                Header="自定义（秒）"
+                                Minimum="0"
+                                SpinButtonPlacementMode="Compact"
+                                ValueChanged="OnCustomDelayChanged" />
+                            <TextBlock
+                                VerticalAlignment="Bottom"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                Text="手动输入的自定义值提交前需要确认" />
+                        </StackPanel>
+                    </StackPanel>
                 </Border>
             </StackPanel>
 
-            <!-- 底部活摘要（设计稿要求：随延时 / 身份选择实时更新） -->
-            <TextBlock
-                x:Name="SummaryText"
-                FontWeight="SemiBold"
-                TextWrapping="Wrap" />
+            <!-- ══ 启动身份 ══ -->
+            <StackPanel Spacing="8">
+                <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="启动身份" />
+
+                <Border
+                    Padding="12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource ControlCornerRadius}">
+                    <StackPanel Spacing="6">
+                        <StackPanel
+                            x:Name="IdentityChoices"
+                            Orientation="Horizontal"
+                            Spacing="8" />
+                        <TextBlock
+                            x:Name="IdentityHintText"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
 
         </StackPanel>
         </ScrollViewer>
+
+        <!-- UWP 应用选择面板（D46）：同层覆盖，不能叠第二个 ContentDialog。
+             列表只列"有应用清单条目"的包（开始菜单里能点开的那些），
+             图标复用 IconProvider（与列表页同一套提取逻辑）。 -->
+        <Border
+            x:Name="UwpPickerOverlay"
+            Padding="20"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="{StaticResource OverlayCornerRadius}"
+            Visibility="Collapsed">
+            <Grid RowSpacing="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Spacing="6">
+                    <TextBlock FontSize="18" FontWeight="SemiBold" Text="选择 UWP 应用" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextWrapping="Wrap"
+                        Text="只列出开始菜单里能启动的应用。选中后本条目将以普通用户身份、经系统外壳启动。" />
+                    <TextBox
+                        x:Name="UwpFilterBox"
+                        PlaceholderText="按名称筛选"
+                        TextChanged="OnUwpFilterChanged" />
+                </StackPanel>
+
+                <ListView
+                    x:Name="UwpAppList"
+                    Grid.Row="1"
+                    Height="300"
+                    SelectionMode="Single">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="dialogs:UwpAppListItem">
+                            <Grid Padding="8,6" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="32" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <Grid
+                                    Grid.Column="0"
+                                    Height="28"
+                                    VerticalAlignment="Center">
+                                    <Image
+                                        Source="{x:Bind Icon}"
+                                        Stretch="Uniform"
+                                        Visibility="{x:Bind HasIcon}" />
+                                    <FontIcon
+                                        FontSize="18"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Glyph="&#xE7C3;"
+                                        Visibility="{x:Bind HasNoIcon}" />
+                                </Grid>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                                    <TextBlock
+                                        FontWeight="SemiBold"
+                                        Text="{x:Bind DisplayName}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind AppUserModelId}"
+                                        TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <Grid Grid.Row="2" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        x:Name="UwpPickerHintText"
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextWrapping="Wrap" />
+                    <StackPanel
+                        Grid.Column="1"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <Button Click="OnUwpPickCancelled" Content="取消" />
+                        <Button
+                            Click="OnUwpPickConfirmed"
+                            Content="选择"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
 
         <!-- 二次确认覆盖层（用户批复 6：手动编辑自定义延时后提交需确认） -->
         <Border

@@ -713,9 +713,9 @@ textarea{resize:none;font-family:"Cascadia Mono",Consolas,monospace;font-size:12
           <div class="frow">
             <div class="fl">
               <div class="ft">预设延时选项</div>
-              <div class="fd">「延时启动」弹窗里的快捷按钮。逗号分隔，单位秒。默认 <b>0, 10, 30, 60, 120</b></div>
+              <div class="fd">「延时启动」弹窗里的快捷按钮。逗号分隔，单位秒。默认 <b>0, 5, 10, 15, 20, 30, 60</b></div>
             </div>
-            <input type="text" id="set-presets" value="0, 10, 30, 60, 120" style="width:230px;flex:0 0 auto"
+            <input type="text" id="set-presets" value="0, 5, 10, 15, 20, 30, 60" style="width:230px;flex:0 0 auto"
                    oninput="savePresets(this.value)" onblur="resetPresetsIfEmpty(this)">
           </div>
 
@@ -926,8 +926,8 @@ const LOAD_LOG = [
 ];
 
 let state = { page:'overview', src:'all', dlView:'list', taskCreated:true,
-              qItems:'', qTaken:'', presets:[0,10,30,60,120] };
-const DEFAULT_PRESETS = [0,10,30,60,120];
+              qItems:'', qTaken:'', presets:[0,5,10,15,20,30,60] };
+const DEFAULT_PRESETS = [0,5,10,15,20,30,60];
 let manualSeq = 0;
 
 /* ==================================================================
@@ -1354,7 +1354,7 @@ function pickArea(){
     return '<div class="pick" onclick="demoPick()">'+
       '<span class="ico pico">&#xE7C3;</span>'+
       '<div class="pt">点击选择程序，或把文件拖到这里</div>'+
-      '<div class="pd">支持 .exe / .lnk / .bat / .cmd / .msi<br>原型中点击此处会填入一个示例程序</div>'+
+      '<div class="pd">支持 .exe / .lnk / .bat / .cmd / .ps1<br>原型中点击此处会填入一个示例程序</div>'+
     '</div>';
   }
   return '<div class="pick filled">'+

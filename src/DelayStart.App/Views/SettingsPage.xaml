@@ -51,8 +51,21 @@
                  （HorizontalAlignment=Center 会收缩到内容宽度，导致各页宽窄不一，已改） -->
             <StackPanel HorizontalAlignment="Stretch" MaxWidth="1000" Spacing="4">
 
+                <!-- ── 外观 ──（2026-09-20 批复：提到最前，作为第一个子标题） -->
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionHeaderStyle}" Text="外观" />
+
+                <StackPanel Spacing="2">
+                    <stc:SettingsCard Description="切换立即生效，跟随系统时随 Windows 深浅色变化" Header="主题">
+                        <ComboBox
+                            MinWidth="160"
+                            ItemsSource="{x:Bind ViewModel.ThemeOptions}"
+                            SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}"
+                            SelectionChanged="OnThemeChanged" />
+                    </stc:SettingsCard>
+                </StackPanel>
+
                 <!-- ── 预设延时 ── -->
-                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
+                <TextBlock Margin="0,28,0,4" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
                 <TextBlock
                     Margin="0,0,0,8"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -168,18 +181,6 @@
                     </stc:SettingsCard>
                 </StackPanel>
 
-                <!-- ── 外观 ── -->
-                <TextBlock Margin="0,28,0,4" Style="{StaticResource SectionHeaderStyle}" Text="外观" />
-
-                <StackPanel Spacing="2">
-                    <stc:SettingsCard Description="切换立即生效，跟随系统时随 Windows 深浅色变化" Header="主题">
-                        <ComboBox
-                            MinWidth="160"
-                            ItemsSource="{x:Bind ViewModel.ThemeOptions}"
-                            SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}"
-                            SelectionChanged="OnThemeChanged" />
-                    </stc:SettingsCard>
-                </StackPanel>
             </StackPanel>
         </ScrollView>
 

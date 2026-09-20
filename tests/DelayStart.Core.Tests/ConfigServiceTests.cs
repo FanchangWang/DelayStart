@@ -225,7 +225,7 @@ public sealed class ConfigServiceTests : IDisposable
 
         var config = _service.Load();
 
-        int[] expected = [0, 10, 30, 60, 120];
+        int[] expected = [0, 5, 10, 15, 20, 30, 60];
         Assert.Equal(expected, config.Settings.DelayPresets);
     }
 

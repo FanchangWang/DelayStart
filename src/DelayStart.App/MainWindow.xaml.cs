@@ -59,6 +59,11 @@ public sealed partial class MainWindow : Window
         // 句柄上，否则 PickSingleFileAsync 在运行时直接抛异常。此刻 AppWindow 已可用。
         handles.Set(WinRT.Interop.WindowNative.GetWindowHandle(this));
 
+        // 2026-09-20 批复：默认宽高 1400×900 DIP、最小 960×600（参考 PowerToys 的设置窗口，
+        // 见 Interop/WindowSizing）。必须赶在窗口首次显示前落定 —— 显示后再改尺寸会看到跳变。
+        Interop.WindowSizing.ApplyInitialSize(AppWindow, handles.Handle);
+        Interop.WindowSizing.EnforceMinimum(handles.Handle);
+
         // R10：本程序提权运行（高完整性），不放开 UIPI 过滤，资源管理器往窗口里
         // 拖文件会被系统静默拦截（鼠标变禁止）。窗口创建时放行拖放消息白名单；
         // 🔴 再做一次**进程级**放行：ContentDialog / Popup 的弹层句柄是懒创建的，

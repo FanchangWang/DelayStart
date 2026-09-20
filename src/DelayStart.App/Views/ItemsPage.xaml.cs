@@ -3,6 +3,7 @@ using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
 using DelayStart.Management.Models;
+using DelayStart.Management.Services;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -17,17 +18,21 @@ namespace DelayStart.App.Views;
 public sealed partial class ItemsPage : Page, INavigationTarget
 {
     private readonly WindowHandleProvider _handles;
+    private readonly IconProvider _icons;
 
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
     /// <param name="handles">主窗口句柄提供者（编辑器选文件用）。</param>
-    public ItemsPage(ItemsViewModel viewModel, WindowHandleProvider handles)
+    /// <param name="icons">图标提取服务（编辑器 UWP 入口用，D46）。</param>
+    public ItemsPage(ItemsViewModel viewModel, WindowHandleProvider handles, IconProvider icons)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(handles);
+        ArgumentNullException.ThrowIfNull(icons);
 
         ViewModel = viewModel;
         _handles = handles;
+        _icons = icons;
 
         InitializeComponent();
 
@@ -300,7 +305,7 @@ public sealed partial class ItemsPage : Page, INavigationTarget
             return;
         }
 
-        var dialog = new DelayEditorDialog(item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles)
+        var dialog = new DelayEditorDialog(item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons)
         {
             XamlRoot = XamlRoot,
         };

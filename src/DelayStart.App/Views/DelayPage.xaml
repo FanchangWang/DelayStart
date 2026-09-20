@@ -11,15 +11,22 @@
     <!--
         「延时启动」页（docs/design-spec.md 页面 3）。
         ⚠️ 本页**只有列表**一种视图 —— 时间轴视图已按 D37 = B 整体删除。
-        列表列：顺序 / 图标 / 程序 / 延时 / 身份 / 开关 / ↑↓ / 操作。
-        批复 7：延时与身份拆成两个独立列（此前合并为"延时 · 身份"一列）。
+        列：顺序 / 图标 / 程序 / 延时 / 身份 / 开关 / ↑↓ / 操作。
+
+        2026-09-20 用户批复：
+          · 列表按**延时时间分组**，每组上方给一个子标题（= 延时本身）；
+          · 版式 = 子标题 → 边框 → 该组的列表，**边框按组**（D52 本轮修正）。
+            此前是整个列表共用一张大卡片（所有组都在里面），改成每组一张卡片后
+            "这几条属于同一组"这件事由边框直接说清，边框样式沿用卡片默认画刷/圆角。
+        实现上不用 ListView，而是 ItemsControl 套 ItemsControl：
+          - 表头仍只有一份（列宽与行模板逐列相同），跟着分组滚动之外固定；
+          - 外层按组（ViewModel.Groups），子标题 = 「登录后 30 秒 · 3 项」；
+          - 内层按行，行模板与改造前完全一致。
+        组的意义见 ViewModels/DelayGroup 的备注：同延时的条目本来就会一起启停，
+        而 ↑↓ 顺来就只在这一组内生效（FR-4.7）。
     -->
     <Page.Resources>
-        <Style x:Key="DelayRowStyle" TargetType="ListViewItem">
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="8,0" />
-            <Setter Property="MinHeight" Value="0" />
-        </Style>
+        <!-- 行内小按钮（↑↓ / 编辑 / 移出延时）：比默认按钮瘦一圈，八列才排得下 -->
         <Style x:Key="RowButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
             <Setter Property="Padding" Value="8,5" />
             <Setter Property="MinWidth" Value="0" />
@@ -88,195 +95,218 @@
                 Content="刷新" />
         </Grid>
 
-        <!-- 列表：按「延时 → 顺序」排序，与调度端的发起顺序一致（列表包进卡片） -->
-        <Border
-            Grid.Row="4"
-            Padding="8,4"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="7">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
+        <!-- 列表区：表头只一份 → 每组「子标题 + 一张边框卡片」
+             表头左内边距 28 = 组卡片 8 内边距 + 行 20 内边距，标题与行内容逐列对齐。 -->
+        <Grid Grid.Row="4" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
-                <!-- 表头：列宽与行模板**逐列相同**（28/40/*/90/80/70/76/170） -->
-                <Grid Grid.Row="0" Padding="28,8,28,4" ColumnSpacing="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="28" />
-                        <ColumnDefinition Width="40" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="90" />
-                        <ColumnDefinition Width="80" />
-                        <ColumnDefinition Width="70" />
-                        <ColumnDefinition Width="76" />
-                        <ColumnDefinition Width="170" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock
-                        Grid.Column="0"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="#" />
-                    <TextBlock
-                        Grid.Column="2"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="程序" />
-                    <TextBlock
-                        Grid.Column="3"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="延时" />
-                    <TextBlock
-                        Grid.Column="4"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="身份" />
-                    <TextBlock
-                        Grid.Column="5"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="启用" />
-                    <TextBlock
-                        Grid.Column="6"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="顺序" />
-                    <TextBlock
-                        Grid.Column="7"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="操作" />
-                </Grid>
-
-                <ListView
-                    Grid.Row="1"
-                    ItemContainerStyle="{StaticResource DelayRowStyle}"
-                    ItemsSource="{x:Bind ViewModel.Rows}"
-                    SelectionMode="None">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="vm:DelayRow">
-                        <Grid Padding="12,10" ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="28" />
-                                <ColumnDefinition Width="40" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="90" />
-                                <ColumnDefinition Width="80" />
-                                <ColumnDefinition Width="70" />
-                                <ColumnDefinition Width="76" />
-                                <ColumnDefinition Width="170" />
-                            </Grid.ColumnDefinitions>
-
-                            <!-- 顺序：与调度端的发起顺序一致 -->
-                            <TextBlock
-                                Grid.Column="0"
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind OrderText}" />
-
-                            <!-- 图标（D30）：64px 源显示为 32 DIP，200% DPI 下不糊；取不到时显示占位符 -->
-                            <Grid
-                                Grid.Column="1"
-                                Height="32"
-                                VerticalAlignment="Center">
-                                <!-- 行对象不可变，图标在构造时定型：OneTime 即可（OneWay 在非 INPC 行上是编译错误 WMC1506） -->
-                                <Image
-                                    Source="{x:Bind Icon}"
-                                    Stretch="Uniform"
-                                    Visibility="{x:Bind HasIcon}" />
-                                <FontIcon
-                                    FontSize="20"
-                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Glyph="&#xE7C3;"
-                                    Visibility="{x:Bind HasNoIcon}" />
-                            </Grid>
-
-                            <StackPanel
-                                Grid.Column="2"
-                                VerticalAlignment="Center"
-                                Spacing="2">
-                                <TextBlock
-                                    FontWeight="SemiBold"
-                                    Text="{x:Bind Name}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind CommandLine}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind SourceText}"
-                                    TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-
-                            <!-- 批复 7：延时、身份拆成两列 -->
-                            <TextBlock
-                                Grid.Column="3"
-                                VerticalAlignment="Center"
-                                Text="{x:Bind DelayText}" />
-                            <TextBlock
-                                Grid.Column="4"
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind IdentityText}" />
-
-                            <!-- 条目级开关（FR-4.6）：只影响本次登录是否启动它，不动系统 -->
-                            <ToggleSwitch
-                                Grid.Column="5"
-                                MinWidth="0"
-                                VerticalAlignment="Center"
-                                IsOn="{x:Bind IsEnabled}"
-                                OffContent=""
-                                OnContent=""
-                                Toggled="OnEnabledToggled" />
-
-                            <!-- ↑↓：仅在同延时组内有效（FR-4.7），端点由服务层返回 false 时无效果 -->
-                            <StackPanel
-                                Grid.Column="6"
-                                VerticalAlignment="Center"
-                                Orientation="Horizontal"
-                                Spacing="4">
-                                <Button
-                                    Click="OnMoveUp"
-                                    Content="↑"
-                                    Style="{StaticResource RowButtonStyle}"
-                                    ToolTipService.ToolTip="上移（同一延时内）" />
-                                <Button
-                                    Click="OnMoveDown"
-                                    Content="↓"
-                                    Style="{StaticResource RowButtonStyle}"
-                                    ToolTipService.ToolTip="下移（同一延时内）" />
-                            </StackPanel>
-
-                            <StackPanel
-                                Grid.Column="7"
-                                VerticalAlignment="Center"
-                                Orientation="Horizontal"
-                                Spacing="6">
-                                <Button
-                                    Click="OnEditRequested"
-                                    Content="编辑"
-                                    Style="{StaticResource RowButtonStyle}" />
-
-                                <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
-                                <Button
-                                    Click="OnRemoveRequested"
-                                    Content="移出延时"
-                                    Style="{StaticResource RowButtonStyle}" />
-                            </StackPanel>
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-                </ListView>
+            <Grid Grid.Row="0" Padding="28,0,28,0" ColumnSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="28" />
+                    <ColumnDefinition Width="40" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="90" />
+                    <ColumnDefinition Width="80" />
+                    <ColumnDefinition Width="70" />
+                    <ColumnDefinition Width="76" />
+                    <ColumnDefinition Width="170" />
+                </Grid.ColumnDefinitions>
+                <TextBlock
+                    Grid.Column="0"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="#" />
+                <TextBlock
+                    Grid.Column="2"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="程序" />
+                <TextBlock
+                    Grid.Column="3"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="延时" />
+                <TextBlock
+                    Grid.Column="4"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="身份" />
+                <TextBlock
+                    Grid.Column="5"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="启用" />
+                <TextBlock
+                    Grid.Column="6"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="顺序" />
+                <TextBlock
+                    Grid.Column="7"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="操作" />
             </Grid>
-        </Border>
+
+            <ScrollViewer
+                Grid.Row="1"
+                HorizontalScrollMode="Disabled"
+                VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Groups}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:DelayGroup">
+                            <StackPanel Margin="0,0,0,14" Spacing="6">
+                                <!-- 子标题：延时本身 + 组内条目数 -->
+                                <StackPanel
+                                    Margin="4,0,0,0"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <TextBlock FontWeight="SemiBold" Text="{x:Bind Header}" />
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind CountText}" />
+                                </StackPanel>
+
+                                <!-- 边框：本组条目（画刷/圆角沿用卡片默认） -->
+                                <Border
+                                    Padding="8,4"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="7">
+                                    <ItemsControl ItemsSource="{x:Bind Rows}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:DelayRow">
+                                                <Grid Padding="20,10,20,10" ColumnSpacing="10">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="28" />
+                                                        <ColumnDefinition Width="40" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="90" />
+                                                        <ColumnDefinition Width="80" />
+                                                        <ColumnDefinition Width="70" />
+                                                        <ColumnDefinition Width="76" />
+                                                        <ColumnDefinition Width="170" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <!-- 顺序：与调度端的发起顺序一致 -->
+                                                    <TextBlock
+                                                        Grid.Column="0"
+                                                        VerticalAlignment="Center"
+                                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                                        Text="{x:Bind OrderText}" />
+
+                                                    <!-- 图标（D30）：64px 源显示为 32 DIP，200% DPI 下不糊；取不到时显示占位符 -->
+                                                    <Grid
+                                                        Grid.Column="1"
+                                                        Height="32"
+                                                        VerticalAlignment="Center">
+                                                        <!-- 行对象不可变，图标在构造时定型：OneTime 即可
+                                                             （OneWay 在非 INPC 行上是编译错误 WMC1506） -->
+                                                        <Image
+                                                            Source="{x:Bind Icon}"
+                                                            Stretch="Uniform"
+                                                            Visibility="{x:Bind HasIcon}" />
+                                                        <FontIcon
+                                                            FontSize="20"
+                                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                            Glyph="&#xE7C3;"
+                                                            Visibility="{x:Bind HasNoIcon}" />
+                                                    </Grid>
+
+                                                    <StackPanel
+                                                        Grid.Column="2"
+                                                        VerticalAlignment="Center"
+                                                        Spacing="2">
+                                                        <TextBlock
+                                                            FontWeight="SemiBold"
+                                                            Text="{x:Bind Name}"
+                                                            TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock
+                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                                            Text="{x:Bind CommandLine}"
+                                                            TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock
+                                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                                            Text="{x:Bind SourceText}"
+                                                            TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+
+                                                    <!-- 批复 7：延时、身份拆成两列 -->
+                                                    <TextBlock
+                                                        Grid.Column="3"
+                                                        VerticalAlignment="Center"
+                                                        Text="{x:Bind DelayText}" />
+                                                    <TextBlock
+                                                        Grid.Column="4"
+                                                        VerticalAlignment="Center"
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                                        Text="{x:Bind IdentityText}" />
+
+                                                    <!-- 条目级开关（FR-4.6）：只影响本次登录是否启动它，不动系统 -->
+                                                    <ToggleSwitch
+                                                        Grid.Column="5"
+                                                        MinWidth="0"
+                                                        VerticalAlignment="Center"
+                                                        IsOn="{x:Bind IsEnabled}"
+                                                        OffContent=""
+                                                        OnContent=""
+                                                        Toggled="OnEnabledToggled" />
+
+                                                    <!-- ↑↓：仅在同延时组内有效（FR-4.7），端点由服务层返回 false 时无效果 -->
+                                                    <StackPanel
+                                                        Grid.Column="6"
+                                                        VerticalAlignment="Center"
+                                                        Orientation="Horizontal"
+                                                        Spacing="4">
+                                                        <Button
+                                                            Click="OnMoveUp"
+                                                            Content="↑"
+                                                            Style="{StaticResource RowButtonStyle}"
+                                                            ToolTipService.ToolTip="上移（同一延时内）" />
+                                                        <Button
+                                                            Click="OnMoveDown"
+                                                            Content="↓"
+                                                            Style="{StaticResource RowButtonStyle}"
+                                                            ToolTipService.ToolTip="下移（同一延时内）" />
+                                                    </StackPanel>
+
+                                                    <StackPanel
+                                                        Grid.Column="7"
+                                                        VerticalAlignment="Center"
+                                                        Orientation="Horizontal"
+                                                        Spacing="6">
+                                                        <Button
+                                                            Click="OnEditRequested"
+                                                            Content="编辑"
+                                                            Style="{StaticResource RowButtonStyle}" />
+
+                                                        <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
+                                                        <Button
+                                                            Click="OnRemoveRequested"
+                                                            Content="移出延时"
+                                                            Style="{StaticResource RowButtonStyle}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
 
         <!-- 空状态（design-spec 页面 3） -->
         <StackPanel

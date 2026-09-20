@@ -4,6 +4,7 @@ using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Management.Models;
+using DelayStart.Management.Services;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -13,26 +14,52 @@ namespace DelayStart.App.Dialogs;
 
 /// <summary>
 /// 延时配置编辑器（<c>design-spec.md</c> 三之二）。4 种进入方式共用这一个弹窗，
-/// 靠"这条记录有没有系统来源"分叉成 3 种形态。
+/// 靠"这条记录有没有系统来源"分叉成 2 种形态（目标程序块：只读卡片 / 可选目标 + 页签）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 🔴 **文案与编号一律取自设计稿**，不在这里临场发挥：用户判断"我这次操作会不会搞坏系统"
-/// 靠的就是第 ④ 块那三行，写得含糊等于没写。
+/// 🔴 **文案一律取自设计稿**，不在这里临场发挥。
 /// </para>
 /// <para>
-/// 各文本控件在构造函数里直接赋值而不用 <c>x:Bind</c>：这些值在弹窗显示前一次性确定、
-/// 之后只有"活摘要"会变，绑定带来的复杂度大于收益。
+/// 各文本控件在构造函数里直接赋值而不用 <c>x:Bind</c>：这些值在弹窗显示前一次性确定，
+/// 绑定带来的复杂度大于收益。
 /// </para>
 /// <para>
-/// ① 里的三块目标程序面板（只读卡片 / 未选择 / 已选择）按形态切可见性，
-/// 而不是做三个弹窗 —— ②③④ 与底部摘要是四种进入方式完全共享的部分。
+/// ① 块的目标面板按形态切可见性（只读卡片 / 可选目标），而不是做两个弹窗 ——
+/// ②③④ 是四种进入方式完全共享的部分。
 /// </para>
 /// <para>
 /// 2026-09-19 用户批复：**单条目延时上限已移除**（自定义值只受 7 天的输入兜底约束）；
 /// 手动编辑自定义延时后提交需要**二次确认** —— 弹窗内的确认面板，点「确认使用」才真正提交。
 /// bug 批复：延时预设与启动身份均为**胶囊**形态；文件选择走 Win32 对话框（提权进程里
 /// WinRT 选择器打不开）；弹窗打开后对主窗口子树放行 UIPI 拖放消息。
+/// </para>
+/// <para>
+/// 🔴 <b>D46 / D47（2026-09-20 用户批复）</b>：手动形态可选 UWP 应用（UWP 条目在配置里存的是
+/// <c>shell:AppsFolder\&lt;AUMID&gt;</c> <b>解析名而不是文件路径</b>，文件选择器选不到它）；
+/// 白名单 <c>.exe / .lnk / .bat / .cmd / .ps1</c>（移除 <c>.msi</c>：不是 PE 映像，
+/// <c>CreateProcess</c> 报 193；新增 <c>.ps1</c>：由 <c>pwsh.exe</c> / <c>powershell.exe</c> 承载），
+/// 清单取自 <see cref="LaunchTargetTypes"/>。
+/// </para>
+/// <para>
+/// 🔴 <b>D48（2026-09-20 用户真机反馈）</b>：UWP 条目点「更换」弹出文件选择器 = 换不了目标。
+/// </para>
+/// <para>
+/// 🔴 <b>D53 / D54（2026-09-20 用户批复，本轮）</b>：① 块顶部改成 <b>tab</b>（「程序」/「UWP 应用」）
+/// —— tab 决定目标**是哪一类**，换类别就是换页签，而不再是"往同一个字段里互相覆盖"
+/// （D48 那种"换了 UWP 还能不能换回来"的问题从结构上就不存在了）；
+/// ② 删除底部活摘要（"将在 xx 秒后以 xx 身份启动"）；
+/// ③ UWP 页签不摆命令行 / 工作目录（对 UWP 都不成立）；
+/// ④ UWP 来源的条目（「自启动项 · UWP Apps」页进入）只显示应用本身的信息。
+/// </para>
+/// <para>
+/// 🔴 <b>D55–D58（2026-09-20 用户批复，本轮）</b>：
+/// <b>D55</b> 宽度**回归框架默认**（删掉 <c>ContentDialogMaxWidth = 700</c> 的覆盖；框架默认 548，
+/// 见 WinUI 的 <c>generic.xaml</c>）；
+/// <b>D56</b> 每个功能块改成「子标题 + 一张边框卡片」，并去掉数字序号，页签从 <c>SelectorBar</c>
+/// （选中态只是一小段下划线）换成两颗**分段式 <c>ToggleButton</c>**（选中那颗是 accent 实心填充）；
+/// <b>D57</b> 整块删除原 ④（接管对象 / 系统影响）；
+/// <b>D58</b> 选择或拖入文件时**工作目录保持留空**，不再自动填成程序所在目录。
 /// </para>
 /// </remarks>
 public sealed partial class DelayEditorDialog : ContentDialog
@@ -42,9 +69,11 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
     private readonly WindowHandleProvider? _handles;
 
+    /// <summary>图标提取服务（D46：UWP 应用选择列表复用列表页那套提取）。</summary>
+    private readonly IconProvider? _icons;
+
     private bool _suppressSync;
     private int _delaySeconds;
-    private string _targetPath = string.Empty;
     private bool _nameWasAutoFilled;
 
     /// <summary>用户是否手动改过自定义延时（选预设不算）。</summary>
@@ -53,12 +82,46 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <summary>自定义延时是否已经过确认面板确认。</summary>
     private bool _manualDelayConfirmed;
 
+    /// <summary>初始化是否已跑完。XAML 解析期间 tab 的 <c>SelectionChanged</c> 会早于字段就绪触发。</summary>
+    private bool _initialized;
+
+    /// <summary>形态：目标可更换（手动条目）还是只读（系统自启动项绑定）。构造时定型。</summary>
+    private readonly bool _manualForm;
+
+    /// <summary>只读形态下目标是不是 UWP 来源的系统项（决定是否显示名称 / 命令行 / 工作目录）。</summary>
+    private readonly bool _systemIsUwp;
+
+    /// <summary>手动形态下当前停在哪一页签（<see langword="true"/> = 「UWP 应用」）。</summary>
+    private bool _uwpTabActive;
+
+    /// <summary>身份胶囊里是否摆着「管理员」那颗（UWP 目标不给）。</summary>
+    private bool _adminPillShown;
+
     /// <summary>
-    /// 启动身份固定为「普通身份」（D45 真机实测）：UWP 进程<b>恒为普通用户身份</b> ——
-    /// 即便按管理员身份委托外壳激活，起来的进程实测仍是普通用户（令牌由系统决定）。
-    /// 给它选管理员只会得到一个名不副实的条目，故不提供身份选择。
+    /// 用户**想要**的启动身份。单独记一份而不是从胶囊反读：切到 UWP 页签时管理员胶囊会被摘掉，
+    /// 反读会把用户之前在「程序」页签选的管理员悄悄丢掉；切回来时应该还在。
     /// </summary>
-    private readonly bool _identityLockedToNormal;
+    private bool _wantAdmin;
+
+    /// <summary>只读形态的目标路径（系统项自带，不可改）。</summary>
+    private string _readOnlyPath = string.Empty;
+
+    /// <summary>「程序」页签选中的文件路径。</summary>
+    private string _filePath = string.Empty;
+
+    /// <summary>「UWP 应用」页签选中的解析名（<c>shell:AppsFolder\&lt;AUMID&gt;</c>）。</summary>
+    private string _uwpPath = string.Empty;
+
+    /// <summary>「UWP 应用」页签选中应用的显示名。</summary>
+    private string _uwpName = string.Empty;
+
+    /// <summary>已读到的 UWP 应用列表（懒加载，弹窗内复用）。</summary>
+    /// <remarks>形参用具体 <see cref="List{T}"/> 而不是接口：赋值两端都是 <c>List</c>，
+    /// 接口分发在这里是纯开销（CA1859 已是本项目禁止的写法）。</remarks>
+    private List<UwpAppListItem> _uwpApps = [];
+
+    /// <summary>列表是否已经读过。失败时回落为 <see langword="false"/>，允许再次点击重试。</summary>
+    private bool _uwpAppsLoaded;
 
     /// <summary>构造「加入系统项」形态：目标程序由扫描到的自启动项绑定，不可更改。</summary>
     /// <param name="entry">要接管的系统自启动项。</param>
@@ -68,9 +131,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        // D45：UWP 进程恒为普通用户身份 —— 必须在 InitializeCommon 之前定好，
-        // 它里面的 BuildIdentityPills 会读这个标志。
-        _identityLockedToNormal = IsUwpTarget(entry.Source, entry.Path);
+        // 形态与 UWP 判定必须在 InitializeCommon 之前定好：BuildIdentityPills 会读 UwpMode。
+        _manualForm = false;
+        _systemIsUwp = IsUwpSource(entry.Source, entry.Path);
 
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
@@ -78,46 +141,47 @@ public sealed partial class DelayEditorDialog : ContentDialog
         Title = "加入延时启动";
         PrimaryButtonText = "加入延时启动";
         SubtitleText.Text = $"来自「{DisplayText.SourceOf(entry.Source)}」，加入后原自启动项将被软禁用";
-        TargetHintText.Text = "由系统自启动项绑定，不可更改";
+        TargetHintText.Text = _systemIsUwp
+            ? "由系统应用清单绑定，不可更改"
+            : "由系统自启动项绑定，不可更改";
 
-        TargetNameText.Text = entry.Name;
-        TargetPathText.Text = string.IsNullOrWhiteSpace(entry.Path) ? entry.SourceKey : entry.Path;
-        TargetSourceText.Text = $"{DisplayText.SourceOf(entry.Source)} · {DisplayText.ScopeOf(entry.Scope)}";
+        ShowReadOnlyTarget(entry.Name, entry.Path, entry.SourceKey, entry.Source, entry.Scope);
         ArgumentsBox.Text = entry.Arguments;
-
-        ImpactHeaderText.Text = "④ 接管对象";
-        InfoTypeText.Text = $"系统自启动项 · 来自「{DisplayText.SourceOf(entry.Source)}」";
-        InfoWriteText.Text = @"%APPDATA%\DelayStart\config.json（另在 StartupApproved 写入软禁用标记）";
-        InfoImpactText.Text = "原自启动项将被软禁用：不删除注册表值、不移动文件，随时可完整恢复。";
 
         UseReadOnlyTarget();
         SetDelay(defaultPreset);
         SetIdentity(false);
     }
 
-    /// <summary>构造「编辑已有条目」形态：系统项的目标程序只读，手动项可更换。</summary>
+    /// <summary>构造「编辑已有条目」形态：系统项的目标程序只读，手动项可在 tab 里更换。</summary>
     /// <param name="item">要编辑的配置条目。</param>
     /// <param name="presets">延时预设值（秒）。</param>
     /// <param name="defaultPreset">默认预设（秒）；编辑形态下预选条目现有延时。</param>
     /// <param name="handles">主窗口句柄提供者，手动形态选文件时需要。</param>
+    /// <param name="icons">图标提取服务，UWP 应用选择列表需要（D46）。</param>
     public DelayEditorDialog(
         DelayedItem item,
         int[] presets,
         int defaultPreset,
-        WindowHandleProvider handles)
+        WindowHandleProvider handles,
+        IconProvider icons)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(handles);
+        ArgumentNullException.ThrowIfNull(icons);
 
         _handles = handles;
+        _icons = icons;
 
-        // 同上：编辑形态下 UWP 条目同样不提供身份选择。
-        _identityLockedToNormal = IsUwpTarget(item.Source, item.Path);
+        var manual = item.IsManual;
+        var uwp = IsUwpSource(item.Source, item.Path);
+
+        _manualForm = manual;
+        _systemIsUwp = !manual && uwp;
+        _uwpTabActive = manual && uwp;
 
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
-
-        var manual = item.IsManual;
 
         Title = "编辑延时设置";
         PrimaryButtonText = "保存修改";
@@ -125,32 +189,31 @@ public sealed partial class DelayEditorDialog : ContentDialog
         if (manual)
         {
             SubtitleText.Text = "手动添加的条目，不关联任何系统自启动项";
-            TargetHintText.Text = "可更换目标程序";
-
-            ImpactHeaderText.Text = "④ 系统影响";
-            InfoTypeText.Text = "手动添加 · 不属于系统自启动项";
-            InfoWriteText.Text = @"%APPDATA%\DelayStart\config.json";
-            InfoImpactText.Text = "不改动注册表、启动文件夹、计划任务；移除时直接删除本条配置，无残留。";
+            TargetHintText.Text = "「程序」页签选磁盘上的文件，「UWP 应用」页签从已安装的应用里挑";
 
             UsePickTarget();
-            ApplyPickedFile(item.Path, fillName: true, fillWorkingDirectory: true);
-            NameBox.Text = item.Name;
+
+            if (_uwpTabActive)
+            {
+                // 🔴 UWP 手动条目的 Path 是解析名，不能走"按文件名回填"那条路
+                // （Path.GetFileNameWithoutExtension 会把 AUMID 截成一个莫名其妙的短名）。
+                ApplyPickedUwpTarget(item.Name, item.Path);
+            }
+            else
+            {
+                ApplyPickedFile(item.Path);
+                NameBox.Text = item.Name;
+                _nameWasAutoFilled = false;
+            }
+
             WorkingDirBox.Text = item.WorkingDirectory;
-            _nameWasAutoFilled = false;
         }
         else
         {
             SubtitleText.Text = "修改已接管条目，原自启动项保持软禁用";
             TargetHintText.Text = "由系统自启动项绑定，不可更改";
 
-            TargetNameText.Text = item.Name;
-            TargetPathText.Text = item.Path;
-            TargetSourceText.Text = $"{DisplayText.SourceOf(item.Source)} · {DisplayText.ScopeOf(item.Scope)}";
-
-            ImpactHeaderText.Text = "④ 接管对象";
-            InfoTypeText.Text = $"系统自启动项 · 来自「{DisplayText.SourceOf(item.Source)}」";
-            InfoWriteText.Text = @"%APPDATA%\DelayStart\config.json";
-            InfoImpactText.Text = "原自启动项保持软禁用状态，本次修改不会改变它在系统中的状态。";
+            ShowReadOnlyTarget(item.Name, item.Path, item.SourceKey, item.Source, item.Scope);
 
             UseReadOnlyTarget();
             WorkingDirBox.Text = item.WorkingDirectory;
@@ -161,15 +224,19 @@ public sealed partial class DelayEditorDialog : ContentDialog
         SetIdentity(item.RunAsAdmin);
     }
 
-    /// <summary>构造「手动添加」形态：目标程序由用户选择。</summary>
+    /// <summary>构造「手动添加」形态：目标程序由用户在「程序」/「UWP 应用」页签里选。</summary>
     /// <param name="presets">延时预设值（秒）。</param>
     /// <param name="defaultPreset">默认预设（秒）—— 打开时预选的延时。</param>
     /// <param name="handles">主窗口句柄提供者，选文件时需要。</param>
-    public DelayEditorDialog(int[] presets, int defaultPreset, WindowHandleProvider handles)
+    /// <param name="icons">图标提取服务，UWP 应用选择列表需要（D46）。</param>
+    public DelayEditorDialog(int[] presets, int defaultPreset, WindowHandleProvider handles, IconProvider icons)
     {
         ArgumentNullException.ThrowIfNull(handles);
+        ArgumentNullException.ThrowIfNull(icons);
 
         _handles = handles;
+        _icons = icons;
+        _manualForm = true;
 
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
@@ -180,12 +247,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         // 选择程序的主路径是 Win32 通用对话框（提权可用）；拖放是增强，
         // 弹窗 Opened 后对主窗口子树放行 UIPI 拖放消息（见 OnDialogOpened）。
-        TargetHintText.Text = "拖入文件或点击选择";
-
-        ImpactHeaderText.Text = "④ 系统影响";
-        InfoTypeText.Text = "手动添加 · 不属于系统自启动项";
-        InfoWriteText.Text = @"%APPDATA%\DelayStart\config.json";
-        InfoImpactText.Text = "不改动注册表、启动文件夹、计划任务；移除时直接删除本条配置，无残留。";
+        TargetHintText.Text = "「程序」页签选磁盘上的文件，「UWP 应用」页签从已安装的应用里挑";
 
         UsePickTarget();
         SetDelay(defaultPreset);
@@ -205,38 +267,31 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// </remarks>
     public bool DelayConfirmed => _manualDelayConfirmed;
 
-    /// <summary>最终选择的启动身份。</summary>
-    public bool RunAsAdmin
-    {
-        get
-        {
-            foreach (var child in IdentityChoices.Children)
-            {
-                if (child is ToggleButton { Tag: "admin" } pill && pill.IsChecked == true)
-                {
-                    return true;
-                }
-            }
+    /// <summary>最终选择的启动身份。UWP 目标恒为普通身份（D45 真机实测）。</summary>
+    public bool RunAsAdmin => _wantAdmin && !UwpMode;
 
-            return false;
-        }
-    }
-
-    /// <summary>命令行参数；留空表示沿用原自启动项自带的参数（FR-4.5）。</summary>
-    public string Arguments => ArgumentsBox.Text.Trim();
+    /// <summary>命令行参数。UWP 目标恒为空 —— 外壳委托不转发参数（D46）。</summary>
+    public string Arguments => UwpMode ? string.Empty : ArgumentsBox.Text.Trim();
 
     /// <summary>显示名。只读形态下恒为空 —— 系统条目的名字由系统项决定，不参与编辑。</summary>
-    public string ItemName => NameBox.Text.Trim();
+    public string ItemName => _manualForm && _uwpTabActive ? _uwpName : NameBox.Text.Trim();
 
-    /// <summary>目标程序路径。只读形态下为系统项自带的路径。</summary>
-    public string TargetPath => _targetPath;
+    /// <summary>目标程序路径。UWP 目标为 <c>shell:AppsFolder\…</c> 解析名（系统项则是 AUMID）。</summary>
+    public string TargetPath => _manualForm
+        ? _uwpTabActive ? _uwpPath : _filePath
+        : _readOnlyPath;
 
-    /// <summary>工作目录；留空表示用程序所在目录。</summary>
-    public string WorkingDirectory => WorkingDirBox.Text.Trim();
+    /// <summary>工作目录；留空表示用程序所在目录。UWP 目标恒为空。</summary>
+    public string WorkingDirectory => UwpMode ? string.Empty : WorkingDirBox.Text.Trim();
 
-    /// <summary>是否处于"目标程序由用户选择 / 可更换"的形态。</summary>
-    public bool IsPickTarget => PickFilledBorder.Visibility == Visibility.Visible
-        || PickEmptyBorder.Visibility == Visibility.Visible;
+    /// <summary>
+    /// 当前目标是不是 UWP：手动形态看页签，只读形态看来源。
+    /// </summary>
+    /// <remarks>
+    /// UWP 目标下三件事同时成立：① 身份只能是普通身份（D45 实测）；② 命令行参数不会被转发；
+    /// ③ 没有工作目录可言。手动形态下这三件事由"停在哪个页签"决定，只读形态下由来源决定。
+    /// </remarks>
+    private bool UwpMode => _manualForm ? _uwpTabActive : _systemIsUwp;
 
     /// <summary>把弹窗当前内容收成一份编辑值，供 <c>ConfigEditService</c> 使用。</summary>
     /// <returns>编辑值。</returns>
@@ -250,20 +305,29 @@ public sealed partial class DelayEditorDialog : ContentDialog
         WorkingDirectory = WorkingDirectory,
     };
 
-    /// <summary>四种形态共用的初始化：延时预设、身份胶囊、输入兜底、拖放接收。</summary>
+    /// <summary>四种形态共用的初始化：延时预设、身份胶囊、tab 面板、拖放接收。</summary>
     /// <param name="presets">延时预设值（秒）。</param>
     /// <param name="defaultPreset">默认预设（秒），用于无值时的预选兜底。</param>
     private void InitializeCommon(int[] presets, int defaultPreset)
     {
         CustomDelayBox.Maximum = FallbackMaxDelay;
         FillDelayPresets(presets, defaultPreset);
+
+        // 支持的类型清单不在这里另抄一份（D47：LaunchTargetTypes 是唯一事实来源，
+        // 界面上几处文案都跟着它走）。
+        PickFileTypesText.Text = $"支持 {LaunchTargetTypes.DisplayList}";
+
+        // 只读形态在构造函数后段才切面板，这里只需把身份胶囊与 tab 状态摆对。
         BuildIdentityPills();
+        ApplyTabState();
 
         // 批复 4：拖放走经典 WM_DROPFILES（FileDropReceiver 子类化接收），
         // 弹窗打开时对弹层 HWND 再补一轮启用；收到文件路径后填进目标程序。
         Opened += OnDialogOpened;
         Closed += OnDialogClosed;
         FileDropReceiver.FilesDropped += OnFilesDropped;
+
+        _initialized = true;
     }
 
     /// <summary>弹窗已打开：此时弹层 HWND 已创建，放行 UIPI 白名单 + 启用经典拖放。</summary>
@@ -282,29 +346,33 @@ public sealed partial class DelayEditorDialog : ContentDialog
         FileDropReceiver.FilesDropped -= OnFilesDropped;
     }
 
-    /// <summary>经典拖放收到文件（批复 4）：取第一个受支持的填进目标程序。</summary>
+    /// <summary>经典拖放收到文件（批复 4）：取第一个受支持的填进「程序」页签。</summary>
     private void OnFilesDropped(string[] paths)
     {
-        // 只读形态（目标程序由系统项绑定）不接受更换 —— 静默忽略。
-        if (!IsPickTarget || paths.Length == 0)
+        // 只读形态（目标由系统项绑定）不接受更换 —— 静默忽略。
+        if (!_manualForm || paths.Length == 0)
         {
             return;
         }
 
-        var path = Array.Find(paths, static candidate => IsSupportedProgram(candidate));
+        var path = Array.Find(paths, static candidate => LaunchTargetTypes.IsSupported(candidate));
         if (string.IsNullOrEmpty(path))
         {
-            ShowValidation("不支持的文件类型", "只接受 .exe / .lnk / .bat / .cmd / .msi。");
+            ShowValidation("不支持的文件类型", $"只接受 {LaunchTargetTypes.DisplayList}。");
             return;
         }
 
-        ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
+        // 拖进来的是文件 → 自动切回「程序」页签。用户拖文件就是要用文件启动，
+        // 此时还停在「UWP 应用」页签的话，填进去的东西用户根本看不见。
+        SelectTab(uwp: false);
+        ApplyPickedFile(path);
     }
 
     /// <summary>填充延时预设胶囊（一行多个，选中 = 当前延时）。</summary>
     private void FillDelayPresets(int[] presets, int defaultPreset)
     {
-        var usable = presets is { Length: > 0 } ? presets : [0, 10, 30, 60, 120];
+        // 调用方传空（配置损坏兜底）时用内置默认列表 —— 取自 Settings，不在这里另抄一份。
+        var usable = presets is { Length: > 0 } ? presets : new Settings().DelayPresets;
         if (!usable.Contains(defaultPreset))
         {
             defaultPreset = usable[0];
@@ -324,27 +392,64 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// D45：UWP 条目<b>不给</b>「管理员」胶囊 —— 真机实测 UWP 进程恒为普通用户身份，
     /// 选了管理员只会得到一个名不副实的条目（调度端会按普通用户启动并记一条说明）。
     /// 让用户在界面上就选不出来，比事后在日志里解释更好。
+    /// D46/D53：目标可在两页签间来回换，故本方法可重复调用（先清空再填）。
     /// </remarks>
     private void BuildIdentityPills()
     {
+        IdentityChoices.Children.Clear();
+
         IdentityChoices.Children.Add(
             CreatePill("普通身份", "normal", isChecked: false, OnIdentityNormalChecked));
 
-        if (!_identityLockedToNormal)
+        _adminPillShown = !UwpMode;
+        if (_adminPillShown)
         {
             IdentityChoices.Children.Add(
                 CreatePill("管理员", "admin", isChecked: false, OnIdentityAdminChecked));
         }
+
+        PaintIdentity();
     }
 
-    /// <summary>是否为 UWP 条目（UWP 来源，或手工填了 <c>shell:AppsFolder\…</c> 解析名）。</summary>
-    private static bool IsUwpTarget(StartupSource source, string? path)
+    /// <summary>按"当前时间点该不该有管理员胶囊"决定重建还是只重画选中态。</summary>
+    private void SyncIdentityPills()
+    {
+        if (_adminPillShown != !UwpMode)
+        {
+            BuildIdentityPills();
+            return;
+        }
+
+        PaintIdentity();
+    }
+
+    /// <summary>把 <see cref="_wantAdmin"/> 画到胶囊上（UWP 目标下恒为普通身份）。</summary>
+    private void PaintIdentity()
+    {
+        var admin = RunAsAdmin;
+
+        _suppressSync = true;
+        foreach (var child in IdentityChoices.Children)
+        {
+            if (child is ToggleButton { Tag: string tag } pill)
+            {
+                pill.IsChecked = admin ? tag == "admin" : tag == "normal";
+            }
+        }
+
+        _suppressSync = false;
+
+        UpdateIdentityHint();
+    }
+
+    /// <summary>是不是 UWP 目标：UWP 来源，或路径已经是 <c>shell:AppsFolder\…</c> 解析名。</summary>
+    private static bool IsUwpSource(StartupSource source, string? path)
         => source == StartupSource.Uwp || UwpParsingName.IsParsingName(path ?? string.Empty);
 
     /// <summary>造一个胶囊按钮。</summary>
     /// <remarks>
     /// 先设 <c>IsChecked</c> 再订阅 <c>Checked</c>：初始选中态不应触发"用户选择"的逻辑。
-    /// Margin 统一右 8 下 8 —— 与身份胶囊 / 设置页胶囊保持一致的固定间距（二轮 bug 批复 4）。
+    /// Margin 统一右 8 下 8 —— 与延时胶囊 / 设置页胶囊保持一致的固定间距（二轮 bug 批复 4）。
     /// </remarks>
     private static ToggleButton CreatePill(string text, object tag, bool isChecked, RoutedEventHandler onChecked)
     {
@@ -377,58 +482,210 @@ public sealed partial class DelayEditorDialog : ContentDialog
         _suppressSync = false;
     }
 
-    /// <summary>切到"目标程序只读"形态。</summary>
+    /// <summary>摆好只读形态的目标卡片（系统项绑定，改名 / 改路径都不允许）。</summary>
+    /// <param name="name">条目名。</param>
+    /// <param name="path">目标路径（UWP 是 AUMID）。</param>
+    /// <param name="sourceKey">来源键，路径为空时用它兜底显示。</param>
+    /// <param name="source">来源。</param>
+    /// <param name="scope">作用域。</param>
+    private void ShowReadOnlyTarget(
+        string name,
+        string path,
+        string sourceKey,
+        StartupSource source,
+        StartupScope scope)
+    {
+        TargetNameText.Text = name;
+        TargetPathText.Text = BuildTargetPathText(source, path, sourceKey);
+        TargetSourceText.Text = $"{DisplayText.SourceOf(source)} · {DisplayText.ScopeOf(scope)}";
+
+        // 🔴 提交用的路径始终是**原始值**，不是上面那行给人看的文案。
+        _readOnlyPath = path;
+    }
+
+    /// <summary>只读卡片里的"路径"行：UWP 显示成解析名，让人一眼看出它不是文件。</summary>
+    private static string BuildTargetPathText(StartupSource source, string path, string sourceKey)
+    {
+        if (source == StartupSource.Uwp)
+        {
+            var parsingName = UwpParsingName.Build(path);
+            return parsingName.Length > 0 ? $"UWP 应用 · {parsingName}" : "UWP 应用";
+        }
+
+        return string.IsNullOrWhiteSpace(path) ? sourceKey : path;
+    }
+
+    /// <summary>切到"目标程序只读"形态（系统条目：路径由系统绑定，不可更改）。</summary>
     /// <remarks>
-    /// 🔴 工作目录**保持可编辑**（bug#5）：系统项的路径不可改，但"从哪个目录启动"是
-    /// 启动质量的一部分（有些程序依赖工作目录找配置），接管时同样需要能填。
+    /// 名称 / 参数 / 工作目录三项的可见性不在这里写死 —— 交给
+    /// <see cref="ApplyTargetFieldVisibility"/> 按"形态 + 当前页签"统一算（D59 修正）。
     /// </remarks>
     private void UseReadOnlyTarget()
     {
-        ReadOnlyTargetBorder.Visibility = Visibility.Visible;
-        PickEmptyBorder.Visibility = Visibility.Collapsed;
-        PickFilledBorder.Visibility = Visibility.Collapsed;
-        NameBox.Visibility = Visibility.Collapsed;
-        WorkingDirBox.Visibility = Visibility.Visible;
+        ReadOnlyTargetPanel.Visibility = Visibility.Visible;
+        PickTargetPanel.Visibility = Visibility.Collapsed;
 
-        // 只读形态下 TargetPath 由系统项决定，不允许用户改。
-        _targetPath = TargetPathText.Text;
+        ApplyTargetFieldVisibility();
     }
 
-    /// <summary>切到"目标程序可选 / 可更换"形态。</summary>
+    /// <summary>切到"目标可更换"形态（手动条目）：面板由页签决定。</summary>
     private void UsePickTarget()
     {
-        ReadOnlyTargetBorder.Visibility = Visibility.Collapsed;
-        PickEmptyBorder.Visibility = Visibility.Visible;
-        PickFilledBorder.Visibility = Visibility.Collapsed;
-        NameBox.Visibility = Visibility.Visible;
-        WorkingDirBox.Visibility = Visibility.Visible;
+        ReadOnlyTargetPanel.Visibility = Visibility.Collapsed;
+        PickTargetPanel.Visibility = Visibility.Visible;
+
+        ApplyTabState();
     }
 
-    /// <summary>记录一次文件选择，并把名称 / 工作目录填成合理默认。</summary>
-    /// <param name="path">选中的文件路径。</param>
-    /// <param name="fillName">是否覆盖名称框（用户改过就不覆盖）。</param>
-    /// <param name="fillWorkingDirectory">是否覆盖工作目录框。</param>
-    private void ApplyPickedFile(string path, bool fillName, bool fillWorkingDirectory)
+    /// <summary>
+    /// 按"形态 + 当前页签"决定名称 / 命令行参数 / 工作目录三项的可见性。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b>D59（2026-09-20 本轮修正，缺陷修复）</b>：三项的可见性原先散在
+    /// <c>UseReadOnlyTarget</c> / <c>UsePickTarget</c> 里写死，而 D53 之后它们被摆进了
+    /// 「程序」页签的面板 —— 系统条目走的是只读卡片、那个面板整体折叠，于是"接管系统条目时
+    /// 能填参数与工作目录"这条需求**静默失效**（对折叠的父面板写 <c>Visibility</c> 不起作用，
+    /// 而且不会有任何报错）。本轮把参数与工作目录移到页签之外，可见性也收敛到这一处。
+    /// </para>
+    /// <para>
+    /// 规则：**名称**只在"手动条目 + 「程序」页签"出现（系统条目的名字由系统项决定）；
+    /// **参数与工作目录**在**除 UWP 之外**的所有情况都出现 —— UWP 参数不转发、也没有工作目录
+    /// 可言（D53/D54），而非 UWP 的系统条目必须能填（bug#5：有些程序依赖工作目录找配置）。
+    /// </para>
+    /// </remarks>
+    private void ApplyTargetFieldVisibility()
     {
-        _targetPath = path;
+        NameBox.Visibility = _manualForm && !_uwpTabActive ? Visibility.Visible : Visibility.Collapsed;
+
+        var files = UwpMode ? Visibility.Collapsed : Visibility.Visible;
+        ArgumentsBox.Visibility = files;
+        WorkingDirBox.Visibility = files;
+    }
+
+    /// <summary>按当前页签切换面板、页签选中态与身份胶囊（手动形态专用；只读形态直接返回）。</summary>
+    private void ApplyTabState()
+    {
+        if (!_manualForm)
+        {
+            return;
+        }
+
+        ProgramTabPanel.Visibility = _uwpTabActive ? Visibility.Collapsed : Visibility.Visible;
+        UwpTabPanel.Visibility = _uwpTabActive ? Visibility.Visible : Visibility.Collapsed;
+
+        // 页签自身的选中态也一并写：编辑既有 UWP 条目时若只切面板，
+        // "看得见的选中项"与"真正生效的目标"会对不上。
+        // 写 IsChecked 会同步触发 Checked / Unchecked —— 靠 _suppressSync 挡住重入。
+        _suppressSync = true;
+        TargetTabProgram.IsChecked = !_uwpTabActive;
+        TargetTabUwp.IsChecked = _uwpTabActive;
+        _suppressSync = false;
+
+        ApplyTargetFieldVisibility();
+        SyncIdentityPills();
+    }
+
+    /// <summary>切页签（含程序化切换：拖放落文件、编辑既有条目时定位）。</summary>
+    /// <param name="uwp">是否切到「UWP 应用」页签。</param>
+    private void SelectTab(bool uwp)
+    {
+        _uwpTabActive = uwp;
+        ApplyTabState();
+    }
+
+    /// <summary>用户点「程序」页签。</summary>
+    private void OnProgramTabChecked(object sender, RoutedEventArgs e)
+    {
+        // 程序化改写 IsChecked（初始化 / 切换时）会同步回调进来，用 _suppressSync 挡住。
+        if (!_initialized || _suppressSync)
+        {
+            return;
+        }
+
+        SelectTab(uwp: false);
+    }
+
+    /// <summary>用户点「UWP 应用」页签。</summary>
+    private void OnUwpTabChecked(object sender, RoutedEventArgs e)
+    {
+        if (!_initialized || _suppressSync)
+        {
+            return;
+        }
+
+        SelectTab(uwp: true);
+    }
+
+    /// <summary>「程序」页签被取消选中 —— 页签是单选，顶回去。</summary>
+    private void OnProgramTabUnchecked(object sender, RoutedEventArgs e) => RestoreTabSelection();
+
+    /// <summary>「UWP 应用」页签被取消选中 —— 页签是单选，顶回去。</summary>
+    private void OnUwpTabUnchecked(object sender, RoutedEventArgs e) => RestoreTabSelection();
+
+    /// <summary>
+    /// 把两颗页签的选中态恢复成"当前页签被选中"。
+    /// </summary>
+    /// <remarks>
+    /// <c>ToggleButton</c> 默认允许"再点一下取消选中" —— 不顶回去的话，用户点一下已选中的页签
+    /// 就会得到"两颗都没选中、面板却还停在那一页"的矛盾状态。
+    /// <see cref="ApplyTabState"/> 内的置位带 <c>_suppressSync</c>，不会与 <c>Checked</c> 打转。
+    /// </remarks>
+    private void RestoreTabSelection()
+    {
+        if (!_initialized || _suppressSync)
+        {
+            return;
+        }
+
+        ApplyTabState();
+    }
+
+    /// <summary>记录一次文件选择：显示已选文件，必要时把名称框填成文件名。</summary>
+    /// <param name="path">选中的文件路径。</param>
+    /// <remarks>
+    /// 🔴 <b>D58（2026-09-20 用户批复）</b>：**不动工作目录框**。此前会把程序所在目录自动填进去，
+    /// 用户看到框里已经有值就留着了 —— 但"留空"本身有明确语义（用程序所在目录），
+    /// 自动填一个同样的值只是把"没设置"变成"设置成了同一个值"，还会在用户换了程序之后
+    /// 留下一个陈旧路径。
+    /// </remarks>
+    private void ApplyPickedFile(string path)
+    {
+        _filePath = path;
 
         PickedNameText.Text = System.IO.Path.GetFileNameWithoutExtension(path);
         PickedPathText.Text = path;
         PickEmptyBorder.Visibility = Visibility.Collapsed;
         PickFilledBorder.Visibility = Visibility.Visible;
 
-        if (fillName && (_nameWasAutoFilled || string.IsNullOrWhiteSpace(NameBox.Text)))
+        // 用户手动改过名字就不覆盖（_nameWasAutoFilled 记的是"这个名字还是自动填的"）。
+        if (_nameWasAutoFilled || string.IsNullOrWhiteSpace(NameBox.Text))
         {
             NameBox.Text = System.IO.Path.GetFileNameWithoutExtension(path);
             _nameWasAutoFilled = true;
         }
+    }
 
-        if (fillWorkingDirectory && string.IsNullOrWhiteSpace(WorkingDirBox.Text))
-        {
-            WorkingDirBox.Text = System.IO.Path.GetDirectoryName(path) ?? string.Empty;
-        }
+    /// <summary>记录一次 UWP 应用选择（D46）：目标存**解析名**，显示名自带。</summary>
+    /// <param name="displayName">应用显示名（来自系统应用清单）。</param>
+    /// <param name="parsingName">AUMID 或已带前缀的解析名。</param>
+    /// <remarks>
+    /// 🔴 存解析名而不是裸 AUMID：调度端与图标链路都靠它认出这是 UWP
+    /// （<c>UwpParsingName.IsParsingName</c>）。存裸 AUMID 会被当成普通 exe 走到
+    /// <c>File.Exists</c> 判"目标文件不存在"（D41 已踩过一次）。
+    /// 这里顺手把老条目的裸 AUMID 也归一成解析名。
+    /// </remarks>
+    private void ApplyPickedUwpTarget(string displayName, string parsingName)
+    {
+        _uwpPath = UwpParsingName.Build(parsingName);
+        _uwpName = string.IsNullOrWhiteSpace(displayName) ? _uwpPath : displayName;
 
-        UpdateSummary();
+        PickedUwpNameText.Text = _uwpName;
+        PickedUwpPathText.Text = $"UWP 应用 · {_uwpPath}";
+        PickUwpEmptyBorder.Visibility = Visibility.Collapsed;
+        PickedUwpBorder.Visibility = Visibility.Visible;
+
+        SelectTab(uwp: true);
     }
 
     /// <summary>打开文件选择对话框选一个程序。</summary>
@@ -450,9 +707,10 @@ public sealed partial class DelayEditorDialog : ContentDialog
         return Task.FromResult(Win32FilePicker.PickFile(
             _handles.Handle,
             "选择延时启动的程序",
-            PickerExtensions));
+            LaunchTargetTypes.Extensions));
     }
 
+    /// <summary>「程序」页签：拖入区域与「更换」共用的文件选择入口。</summary>
     private async void OnPickFile(object sender, RoutedEventArgs e)
     {
         try
@@ -470,7 +728,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
                 return;
             }
 
-            ApplyPickedFile(path, fillName: true, fillWorkingDirectory: true);
+            ApplyPickedFile(path);
         }
         catch (Exception ex)
         {
@@ -480,11 +738,108 @@ public sealed partial class DelayEditorDialog : ContentDialog
         }
     }
 
-    private static bool IsSupportedProgram(string path) =>
-        Array.Exists(PickerExtensions, extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+    /// <summary>「UWP 应用」页签：打开应用选择面板。</summary>
+    private async void OnPickUwpApp(object sender, RoutedEventArgs e) => await ShowUwpPickerAsync();
 
-    /// <summary>与文件选择器一致的扩展名白名单（单一事实来源：两处必须同步改）。</summary>
-    private static readonly string[] PickerExtensions = [".exe", ".lnk", ".bat", ".cmd", ".msi"];
+    /// <summary>显示 UWP 应用选择面板（首次打开时读一次应用清单）。</summary>
+    private async Task ShowUwpPickerAsync()
+    {
+        UwpFilterBox.Text = string.Empty;
+        UwpPickerOverlay.Visibility = Visibility.Visible;
+
+        await EnsureUwpAppsLoadedAsync();
+    }
+
+    /// <summary>懒加载 UWP 应用列表：WinRT 枚举包 → 后台提图标 → UI 线程建行（D46）。</summary>
+    /// <remarks>
+    /// 🔴 图标提取放后台：单个 ~5–15ms，几十个应用在 UI 线程串起来就是可见的卡顿；
+    /// 像素数据是纯值对象（<c>IconPixels</c>），可以安全跨线程，只有
+    /// <c>WriteableBitmap</c> 必须回 UI 线程建。
+    /// </remarks>
+    private async Task EnsureUwpAppsLoadedAsync()
+    {
+        if (_uwpAppsLoaded)
+        {
+            ApplyUwpFilter();
+            return;
+        }
+
+        UwpPickerHintText.Text = "正在读取已安装的应用…";
+
+        IReadOnlyList<UwpAppEntry> entries;
+        try
+        {
+            entries = await UwpAppCatalog.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            // 目录读取整体失败（非预期异常）：允许用户重开面板重试。
+            UwpPickerHintText.Text = $"读取应用列表失败：{ex.Message}";
+            return;
+        }
+
+        IconPixels?[] pixels;
+        if (_icons is null)
+        {
+            pixels = [];
+        }
+        else
+        {
+            var provider = _icons;
+            pixels = await Task.Run(() => entries
+                .Select(entry => provider.TryGetIcon(UwpParsingName.Build(entry.AppUserModelId)))
+                .ToArray());
+        }
+
+        var items = new List<UwpAppListItem>(entries.Count);
+        for (var index = 0; index < entries.Count; index++)
+        {
+            items.Add(new UwpAppListItem(entries[index], pixels[index]));
+        }
+
+        _uwpApps = items;
+        _uwpAppsLoaded = true;
+        ApplyUwpFilter();
+    }
+
+    /// <summary>按筛选词刷新列表显示。</summary>
+    private void ApplyUwpFilter()
+    {
+        if (!_uwpAppsLoaded)
+        {
+            return;
+        }
+
+        var filtered = _uwpApps.Where(item => item.Matches(UwpFilterBox.Text)).ToList();
+
+        UwpAppList.ItemsSource = filtered;
+        UwpAppList.SelectedIndex = filtered.Count > 0 ? 0 : -1;
+
+        UwpPickerHintText.Text = filtered.Count > 0
+            ? $"共 {filtered.Count} 个应用"
+            : _uwpApps.Count == 0
+                ? "没有找到可启动的 UWP 应用。"
+                : "没有匹配的应用，换个关键词试试。";
+    }
+
+    private void OnUwpFilterChanged(object sender, TextChangedEventArgs e) => ApplyUwpFilter();
+
+    /// <summary>确认选择一个 UWP 应用。</summary>
+    private void OnUwpPickConfirmed(object sender, RoutedEventArgs e)
+    {
+        if (UwpAppList.SelectedItem is not UwpAppListItem selected)
+        {
+            UwpPickerHintText.Text = "请先在列表中选中一个应用。";
+            return;
+        }
+
+        ApplyPickedUwpTarget(selected.DisplayName, selected.ParsingName);
+        UwpPickerOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>放弃选择，只收起面板（已读到的列表留在内存里复用）。</summary>
+    private void OnUwpPickCancelled(object sender, RoutedEventArgs e)
+        => UwpPickerOverlay.Visibility = Visibility.Collapsed;
 
     private void ShowValidation(string title, string message)
     {
@@ -510,7 +865,6 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         // 选预设不算手动编辑：不需要二次确认。
         _manualDelayEdit = false;
-        UpdateSummary();
     }
 
     private void OnIdentityNormalChecked(object sender, RoutedEventArgs e)
@@ -521,6 +875,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
         }
 
         MakeExclusive(IdentityChoices.Children, pill);
+        _wantAdmin = false;
         UpdateIdentityHint();
     }
 
@@ -532,6 +887,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
         }
 
         MakeExclusive(IdentityChoices.Children, pill);
+        _wantAdmin = true;
         UpdateIdentityHint();
     }
 
@@ -556,8 +912,6 @@ public sealed partial class DelayEditorDialog : ContentDialog
         // 用户批复 6：手动编辑自定义延时后提交需要二次确认。
         _manualDelayEdit = true;
         _manualDelayConfirmed = false;
-
-        UpdateSummary();
     }
 
     /// <summary>把延时设为指定值，同步胶囊选中态与自定义输入框。</summary>
@@ -569,7 +923,6 @@ public sealed partial class DelayEditorDialog : ContentDialog
         _manualDelayConfirmed = false;
         SetCustomDelayValue(seconds);
         SyncDelayPresetSelection();
-        UpdateSummary();
     }
 
     private void SetCustomDelayValue(int seconds)
@@ -594,45 +947,24 @@ public sealed partial class DelayEditorDialog : ContentDialog
         _suppressSync = false;
     }
 
-    /// <summary>设置启动身份并刷新提示文案。</summary>
+    /// <summary>设置启动身份（记为"想要的"身份，UWP 目标下由 <see cref="RunAsAdmin"/> 归一）。</summary>
     /// <param name="runAsAdmin">是否以管理员身份启动。</param>
     private void SetIdentity(bool runAsAdmin)
     {
-        // UWP 形态下管理员胶囊根本不存在，按 true 进来会出现"两个胶囊都没选中"。
-        if (_identityLockedToNormal)
-        {
-            runAsAdmin = false;
-        }
-
-        _suppressSync = true;
-        foreach (var child in IdentityChoices.Children)
-        {
-            if (child is ToggleButton { Tag: string tag } pill)
-            {
-                pill.IsChecked = runAsAdmin ? tag == "admin" : tag == "normal";
-            }
-        }
-
-        _suppressSync = false;
-
-        UpdateIdentityHint();
+        _wantAdmin = runAsAdmin;
+        SyncIdentityPills();
     }
 
     private void UpdateIdentityHint()
     {
-        IdentityHintText.Text = RunAsAdmin
-            ? "由调度器在最高权限下启动，不会弹 UAC 确认框。"
-            : _identityLockedToNormal
-                ? "UWP 应用进程恒为普通用户身份（实测：即便以管理员身份启动也一样），故不提供身份选择。"
-                : "以当前登录用户身份启动，拖拽、剪贴板、文件权限都正常。";
-    }
-
-    private void UpdateSummary()
-    {
-        // 活摘要是设计稿刻意要求的：用户不用回去逐项核对就能确认最终结果。
-        // 它显示在弹窗底部之外，因此这里同步写进 PrimaryButton 的相邻区域 ——
-        // ContentDialog 没有"底部摘要槽"，放在内容末尾是最接近设计意图的位置。
-        SummaryText.Text = $"将在 {DisplayText.DelayOf(_delaySeconds)} 以 {DisplayText.IdentityOf(RunAsAdmin)} 身份启动";
+        IdentityHintText.Text = _wantAdmin && UwpMode
+            // 用户之前在「程序」页签选过管理员，切到 UWP 后胶囊被摘掉 —— 说清楚为什么。
+            ? "UWP 应用进程恒为普通用户身份（实测：即便以管理员身份启动也一样），故此项不适用。"
+            : RunAsAdmin
+                ? "由调度器在最高权限下启动，不会弹 UAC 确认框。"
+                : UwpMode
+                    ? "UWP 应用进程恒为普通用户身份（实测：即便以管理员身份启动也一样），故不提供身份选择。"
+                    : "以当前登录用户身份启动，拖拽、剪贴板、文件权限都正常。";
     }
 
     /// <summary>确认面板上的「确认使用」：确认后按已确认收尾。</summary>
@@ -656,11 +988,23 @@ public sealed partial class DelayEditorDialog : ContentDialog
         // 校验是同步的，不需要 GetDeferral —— 取了 deferral 就必须保证每条路径都 Complete，
         // 在这里只会增加"某条分支忘记 Complete 导致弹窗卡死"的风险。
 
-        if (IsPickTarget && string.IsNullOrWhiteSpace(_targetPath))
+        // 选择面板还开着时按提交：先收起面板并取消提交 —— 此时列表里选中的应用还没确认，
+        // 直接提交会用上一个目标（甚至空目标）建条目，用户会以为"选了没用"。
+        if (UwpPickerOverlay.Visibility == Visibility.Visible)
+        {
+            UwpPickerOverlay.Visibility = Visibility.Collapsed;
+            args.Cancel = true;
+            return;
+        }
+
+        // 目标校验只看**当前页签**的目标：两个页签各存各的，互不覆盖。
+        if (_manualForm && string.IsNullOrWhiteSpace(TargetPath))
         {
             ShowValidation(
-                "还没有选择程序",
-                "请拖入或点击上方区域选择一个程序（.exe / .lnk / .bat / .cmd / .msi）。");
+                "还没有选择目标",
+                _uwpTabActive
+                    ? "请先点上方「选择 UWP 应用」，从已安装的应用里挑一个。"
+                    : $"请拖入或点击上方区域选择一个程序（{LaunchTargetTypes.DisplayList}）。");
             args.Cancel = true;
             return;
         }

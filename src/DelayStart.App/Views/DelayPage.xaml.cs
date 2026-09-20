@@ -3,6 +3,7 @@ using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 using DelayStart.Core.Models;
 using DelayStart.Management.Models;
+using DelayStart.Management.Services;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -15,17 +16,21 @@ namespace DelayStart.App.Views;
 public sealed partial class DelayPage : Page
 {
     private readonly WindowHandleProvider _handles;
+    private readonly IconProvider _icons;
 
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
     /// <param name="handles">主窗口句柄提供者，「手动添加」的文件选择器需要它。</param>
-    public DelayPage(DelayViewModel viewModel, WindowHandleProvider handles)
+    /// <param name="icons">图标提取服务，「选择 UWP 应用」列表需要（D46）。</param>
+    public DelayPage(DelayViewModel viewModel, WindowHandleProvider handles, IconProvider icons)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(handles);
+        ArgumentNullException.ThrowIfNull(icons);
 
         ViewModel = viewModel;
         _handles = handles;
+        _icons = icons;
 
         InitializeComponent();
 
@@ -56,7 +61,7 @@ public sealed partial class DelayPage : Page
     /// </remarks>
     private async void OnAddManualRequested(object sender, RoutedEventArgs e)
     {
-        var dialog = new DelayEditorDialog(ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles)
+        var dialog = new DelayEditorDialog(ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons)
         {
             XamlRoot = XamlRoot,
         };
@@ -89,7 +94,7 @@ public sealed partial class DelayPage : Page
             return;
         }
 
-        var dialog = new DelayEditorDialog(row.Item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles)
+        var dialog = new DelayEditorDialog(row.Item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons)
         {
             XamlRoot = XamlRoot,
         };

@@ -61,25 +61,4 @@ public sealed class Settings
 
     /// <summary>最近一次运行的 <c>runId</c>，供管理端总览页横幅使用（FR-6.7）。从未运行时为 <see langword="null"/>。</summary>
     public string? LastRunId { get; set; }
-
-    /// <summary>
-    /// 首启自动注册调度计划任务是否**已经做过**（D63，2026-09-21 用户要求）。
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 装完第一次打开管理端时自动注册 <c>\DelayStartScheduler</c>，省得用户不知道
-    /// 要去总览页拨那个开关。判据就是本字段：一旦为 <see langword="true"/>，
-    /// 之后的每次启动都完全不再碰计划任务。
-    /// </para>
-    /// <para>
-    /// 🔴 **这是语义要求，不是优化。** 总览页的开关（D3：开 = 注册，关 = 删除）
-    /// 表达的是用户意图；自动动作只允许发生在他表达意图**之前**。
-    /// 若每次启动都"发现没注册就补上"，用户关掉开关的意愿会被无声地推翻。
-    /// </para>
-    /// <para>
-    /// ⚠️ 本字段是后加的：升级上来的老配置没有它，因此下一次启动会补做一次自动注册
-    /// （仅此一次）。理由是这个字段之前根本不存在，无从区分"没做过"和"用户关掉了"。
-    /// </para>
-    /// </remarks>
-    public bool SchedulerTaskInitialized { get; set; }
 }

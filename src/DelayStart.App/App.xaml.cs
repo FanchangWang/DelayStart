@@ -55,11 +55,11 @@ public partial class App : Application, IDisposable
     /// </remarks>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        // 首启初始化（D63）：装完第一次打开管理端时自动注册调度计划任务。
-        // 🔴 放在解析主窗口**之前** —— 总览页构造后立刻读任务状态，若注册动作跑在它之后，
-        //    用户会看到开关先显示"未创建"、几百毫秒后自己跳成"已创建"。
-        //    本调用幂等（除首次外只读一次配置就返回），且内部不抛异常。
-        _services.GetRequiredService<FirstRunBootstrap>().EnsureSchedulerTask();
+        // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测一次，缺失即自动补建。
+        // 🔴 放在解析主窗口**之前** —— 总览页进入时也会检测补建（状态卡），
+        //    这里先跑一轮可以把最常见的"任务被删"在页面显示前就修掉。
+        //    本调用幂等（任务已存在时只查一次就返回），且内部不抛异常。
+        _services.GetRequiredService<SchedulerTaskBootstrap>().EnsureSchedulerTask();
 
         _window = _services.GetRequiredService<MainWindow>();
         _window.Activate();

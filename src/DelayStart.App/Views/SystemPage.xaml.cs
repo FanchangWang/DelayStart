@@ -39,15 +39,27 @@ public sealed partial class SystemPage : Page, INavigationTarget
         }
     }
 
-    /// <summary>把导航标签翻译成分区与页标题。</summary>
+    /// <summary>把导航标签翻译成分区、页标题与分区描述。</summary>
+    /// <remarks>
+    /// 分区描述（2026-09-21 批复）：原常驻 InfoBar「本页全部只读」降级为标题下的一行描述，
+    /// 文案按分区说明"这一页是什么 + 只读"；统计数字由 ViewModel.Subtitle 单独承担。
+    /// </remarks>
     private void ApplyTag(string? tag)
     {
         ViewModel.Section = tag switch
         {
-            NavigationService.SysServicesTag => ApplyTitle("系统启动项 · 服务", SystemSection.Services),
-            NavigationService.SysDriversTag => ApplyTitle("系统启动项 · 驱动", SystemSection.Drivers),
-            NavigationService.SysWinlogonTag => ApplyTitle("系统启动项 · Winlogon", SystemSection.Winlogon),
-            NavigationService.SysGpoTag => ApplyTitle("系统启动项 · 组策略", SystemSection.GroupPolicy),
+            NavigationService.SysServicesTag => ApplyTitle(
+                "系统启动项 · 服务", SystemSection.Services,
+                "随系统启动的 Windows 服务，只读展示，本程序不会改动它们。"),
+            NavigationService.SysDriversTag => ApplyTitle(
+                "系统启动项 · 驱动", SystemSection.Drivers,
+                "随系统加载的内核驱动，默认只列出第三方驱动，只读展示。"),
+            NavigationService.SysWinlogonTag => ApplyTitle(
+                "系统启动项 · Winlogon", SystemSection.Winlogon,
+                "Windows 登录环节加载的关键项（Shell、Userinit 等），只读展示。"),
+            NavigationService.SysGpoTag => ApplyTitle(
+                "系统启动项 · 组策略", SystemSection.GroupPolicy,
+                "由组策略下发的登录与启动脚本，列表为空属正常现象，只读展示。"),
             _ => ViewModel.Section,
         };
 
@@ -68,9 +80,10 @@ public sealed partial class SystemPage : Page, INavigationTarget
             : ViewModel.GroupPolicyEntries;
     }
 
-    private SystemSection ApplyTitle(string title, SystemSection section)
+    private SystemSection ApplyTitle(string title, SystemSection section, string description)
     {
         PageTitleText.Text = title;
+        PageDescText.Text = description;
         return section;
     }
 

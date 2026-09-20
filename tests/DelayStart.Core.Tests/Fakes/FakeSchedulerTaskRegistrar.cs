@@ -29,8 +29,19 @@ internal sealed class FakeSchedulerTaskRegistrar : ISchedulerTaskRegistrar
     /// <summary>非空时 <see cref="Delete"/> 抛出它。</summary>
     public Exception? DeleteException { get; init; }
 
+    /// <summary>非空时 <see cref="IsRegistered"/> 抛出它，用于模拟任务状态查询失败。</summary>
+    public Exception? QueryException { get; init; }
+
     /// <inheritdoc />
-    public bool IsRegistered() => Registered;
+    public bool IsRegistered()
+    {
+        if (QueryException is not null)
+        {
+            throw QueryException;
+        }
+
+        return Registered;
+    }
 
     /// <inheritdoc />
     public void RegisterOrUpdate()

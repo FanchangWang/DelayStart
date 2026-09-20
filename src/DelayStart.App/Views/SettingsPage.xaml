@@ -30,29 +30,29 @@
              <x:Double x:Key="PageMaxWidth">1000</x:Double>，PageStyle 把它挂在内容容器上；
            - 预设延时两个边框：第一个左描述右（输入框 + 添加按钮），第二个胶囊一行多个。
     -->
-    <Grid Padding="32,20,32,24" RowSpacing="12">
+    <Grid RowSpacing="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 页头（Round I 批复 5：标题在居中后的内容区域内左对齐，不额外居中） -->
-        <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="设置" />
-            <TextBlock
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Style="{StaticResource BodyTextBlockStyle}"
-                Text="所有改动即时生效并写入配置，下次登录调度时按新值执行。" />
-        </StackPanel>
+        <ScrollView Grid.Row="0">
+            <!-- 2026-09-21 批复：与总览页同一版式 —— 页头在限宽容器内、随内容滚动，
+                 内边距计入 MaxWidth（总览：Padding 32,8,32,40 + MaxWidth 1000 → 内容 936）。
+                 子标题字号/间距沿用总览的 SectionHeaderStyle + Margin 0,28,0,2。 -->
+            <StackPanel Padding="32,8,32,40" HorizontalAlignment="Stretch" MaxWidth="1000" Spacing="4">
 
-        <ScrollView Grid.Row="1">
-            <!-- Round H 批复 5：Stretch + MaxWidth —— 内容少也撑满 1000，窗口不足 1000 自动收缩
-                 （HorizontalAlignment=Center 会收缩到内容宽度，导致各页宽窄不一，已改） -->
-            <StackPanel HorizontalAlignment="Stretch" MaxWidth="1000" Spacing="4">
+                <!-- 页头 -->
+                <StackPanel Spacing="4">
+                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="设置" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Text="所有改动即时保存，下次登录调度即按新值执行。" />
+                </StackPanel>
 
                 <!-- ── 外观 ──（2026-09-20 批复：提到最前，作为第一个子标题） -->
-                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionHeaderStyle}" Text="外观" />
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="外观" />
 
                 <StackPanel Spacing="2">
                     <stc:SettingsCard Description="切换立即生效，跟随系统时随 Windows 深浅色变化" Header="主题">
@@ -64,34 +64,29 @@
                     </stc:SettingsCard>
                 </StackPanel>
 
-                <!-- ── 预设延时 ── -->
-                <TextBlock Margin="0,28,0,4" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
-                <TextBlock
-                    Margin="0,0,0,8"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource BodyTextBlockStyle}"
-                    Text="编辑器快选按钮用的延时列表。选中（高亮）的胶囊是默认值 —— 接管条目时自动填入；胶囊右侧 ✕ 删除。" />
+        <!-- ── 预设延时 ──（2026-09-21 批复：分节描述移入下方胶囊卡片内部） -->
+        <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
 
-                <!-- 边框一：左描述 + 右（输入框 + 添加按钮），仿 PowerToys「颜色格式」卡片 -->
-                <Border
-                    Padding="16,14"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="7">
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
-                            <TextBlock Text="添加预设延时" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                TextWrapping="Wrap"
-                                Text="单位为秒；已有相同值时不重复添加，添加后出现在下方列表。" />
-                        </StackPanel>
+        <!-- 边框一：左描述 + 右（输入框 + 添加按钮），仿 PowerToys「颜色格式」卡片 -->
+        <Border
+            Padding="16,14"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="7">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                    <TextBlock Text="添加预设延时" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextWrapping="Wrap"
+                        Text="单位为秒；相同值不会重复添加。" />
+                </StackPanel>
                         <StackPanel
                             Grid.Column="1"
                             Orientation="Horizontal"
@@ -121,9 +116,16 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="7">
-                    <ItemsControl
-                        x:Name="PresetPills"
-                        ItemsSource="{x:Bind ViewModel.Presets, Mode=OneTime}">
+                    <StackPanel Spacing="8">
+                        <!-- 2026-09-21 批复：原分节描述移到卡片内部（删掉 ✕ / 右侧等纯位置描述） -->
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            Text="编辑器快选按钮使用的延时列表，高亮胶囊为默认值，接管条目时自动填入。点击垃圾桶移除，删除前会二次确认。" />
+                        <ItemsControl
+                            x:Name="PresetPills"
+                            ItemsSource="{x:Bind ViewModel.Presets, Mode=OneTime}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <!-- Round H 批复 7：超宽自动换行（自绘 WrapPanel，宽度仍按内容自适应） -->
@@ -135,13 +137,17 @@
                                 <ToggleButton
                                     Checked="OnPresetChecked"
                                     CornerRadius="14"
-                                    IsChecked="{x:Bind IsDefault, Mode=OneWay}"
+                                    IsChecked="{x:Bind IsDefault, Mode=OneTime}"
                                     Padding="10,5"
                                     Unchecked="OnPresetUnchecked">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <TextBlock
                                             VerticalAlignment="Center"
                                             Text="{x:Bind Display}" />
+                                        <!-- 垃圾桶：2026-09-21 二次批复回退为嵌套 Button ——
+                                             裸 TextBlock + PointerEntered/Tapped 方案触发 XamlCompiler
+                                             pass-1 静默崩溃（无 output.json），且悬停变色难以两主题兼顾。
+                                             主题同色问题接受现状（此功能可忽略）。 -->
                                         <Button
                                             Background="Transparent"
                                             BorderThickness="0"
@@ -149,7 +155,7 @@
                                             Content="&#xE74D;"
                                             FontFamily="{StaticResource SymbolThemeFontFamily}"
                                             FontSize="12"
-                                            IsEnabled="{x:Bind CanDelete, Mode=OneWay}"
+                                            IsEnabled="{x:Bind CanDelete, Mode=OneTime}"
                                             Padding="4,2"
                                             ToolTipService.ToolTip="删除这个预设" />
                                     </StackPanel>
@@ -157,10 +163,11 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    </StackPanel>
                 </Border>
 
                 <!-- ── 调度 ── -->
-                <TextBlock Margin="0,28,0,4" Style="{StaticResource SectionHeaderStyle}" Text="调度" />
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="调度" />
 
                 <StackPanel Spacing="2">
                     <stc:SettingsCard Description="全部启动完成后的通知方式" Header="通知策略">
@@ -184,12 +191,13 @@
             </StackPanel>
         </ScrollView>
 
-        <!-- 状态条：只报错（改动即时落盘，没有「已保存」提示） -->
+        <!-- 状态条：只报错（2026-09-21 批复：成功类提示改走右下角自动消失的通知） -->
         <InfoBar
-            Grid.Row="2"
+            Grid.Row="1"
+            Margin="32,0,32,4"
             IsClosable="False"
-            IsOpen="{x:Bind ViewModel.HasStatus, Mode=OneWay}"
+            IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
             Message="{x:Bind ViewModel.StatusText, Mode=OneWay}"
-            Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}" />
+            Severity="Error" />
     </Grid>
 </Page>

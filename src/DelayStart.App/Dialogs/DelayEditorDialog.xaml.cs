@@ -141,9 +141,6 @@ public sealed partial class DelayEditorDialog : ContentDialog
         Title = "加入延时启动";
         PrimaryButtonText = "加入延时启动";
         SubtitleText.Text = $"来自「{DisplayText.SourceOf(entry.Source)}」，加入后原自启动项将被软禁用";
-        TargetHintText.Text = _systemIsUwp
-            ? "由系统应用清单绑定，不可更改"
-            : "由系统自启动项绑定，不可更改";
 
         ShowReadOnlyTarget(entry.Name, entry.Path, entry.SourceKey, entry.Source, entry.Scope);
         ArgumentsBox.Text = entry.Arguments;
@@ -188,8 +185,8 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         if (manual)
         {
-            SubtitleText.Text = "手动添加的条目，不关联任何系统自启动项";
-            TargetHintText.Text = "「程序」页签选磁盘上的文件，「UWP 应用」页签从已安装的应用里挑";
+            // 2026-09-21 批复：手动形态的标题下描述整段移除 —— 下方 UI 已表达同样的信息。
+            SubtitleText.Visibility = Visibility.Collapsed;
 
             UsePickTarget();
 
@@ -211,7 +208,6 @@ public sealed partial class DelayEditorDialog : ContentDialog
         else
         {
             SubtitleText.Text = "修改已接管条目，原自启动项保持软禁用";
-            TargetHintText.Text = "由系统自启动项绑定，不可更改";
 
             ShowReadOnlyTarget(item.Name, item.Path, item.SourceKey, item.Source, item.Scope);
 
@@ -243,11 +239,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         Title = "手动添加延时启动";
         PrimaryButtonText = "加入延时启动";
-        SubtitleText.Text = "选择一个程序，由本程序在登录后延时启动";
 
-        // 选择程序的主路径是 Win32 通用对话框（提权可用）；拖放是增强，
-        // 弹窗 Opened 后对主窗口子树放行 UIPI 拖放消息（见 OnDialogOpened）。
-        TargetHintText.Text = "「程序」页签选磁盘上的文件，「UWP 应用」页签从已安装的应用里挑";
+        // 2026-09-21 批复：标题下描述（"选择一个程序…"）移除 —— 拖放区已表达同样的信息。
+        SubtitleText.Visibility = Visibility.Collapsed;
 
         UsePickTarget();
         SetDelay(defaultPreset);
@@ -955,16 +949,18 @@ public sealed partial class DelayEditorDialog : ContentDialog
         SyncIdentityPills();
     }
 
+    /// <summary>
+    /// 身份卡的一句话说明（2026-09-21 批复：只定义功能，不再按选择摆操作指导）。
+    /// </summary>
+    /// <remarks>
+    /// UWP 目标下说明**为什么只有一颗胶囊**；其余情况一句话定义"这是干什么的"。
+    /// 原先按普通 / 管理员 / UWP 三态各写一段的文案已删 —— 胶囊选中态本身已在表达选择。
+    /// </remarks>
     private void UpdateIdentityHint()
     {
-        IdentityHintText.Text = _wantAdmin && UwpMode
-            // 用户之前在「程序」页签选过管理员，切到 UWP 后胶囊被摘掉 —— 说清楚为什么。
-            ? "UWP 应用进程恒为普通用户身份（实测：即便以管理员身份启动也一样），故此项不适用。"
-            : RunAsAdmin
-                ? "由调度器在最高权限下启动，不会弹 UAC 确认框。"
-                : UwpMode
-                    ? "UWP 应用进程恒为普通用户身份（实测：即便以管理员身份启动也一样），故不提供身份选择。"
-                    : "以当前登录用户身份启动，拖拽、剪贴板、文件权限都正常。";
+        IdentityHintText.Text = UwpMode
+            ? "UWP 应用由系统外壳激活，仅支持以普通用户身份启动。"
+            : "本条目启动时使用的 Windows 账户身份。";
     }
 
     /// <summary>确认面板上的「确认使用」：确认后按已确认收尾。</summary>
@@ -998,13 +994,12 @@ public sealed partial class DelayEditorDialog : ContentDialog
         }
 
         // 目标校验只看**当前页签**的目标：两个页签各存各的，互不覆盖。
+        // 文案按原型 v3 的校验条（2026-09-21 批复）。
         if (_manualForm && string.IsNullOrWhiteSpace(TargetPath))
         {
             ShowValidation(
                 "还没有选择目标",
-                _uwpTabActive
-                    ? "请先点上方「选择 UWP 应用」，从已安装的应用里挑一个。"
-                    : $"请拖入或点击上方区域选择一个程序（{LaunchTargetTypes.DisplayList}）。");
+                "请先选择要延时启动的程序或 UWP 应用。");
             args.Cancel = true;
             return;
         }

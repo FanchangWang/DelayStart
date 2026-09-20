@@ -72,12 +72,18 @@
                 SelectionMode="None">
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="vm:RunGroupRow">
-                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <!-- IsExpanded：进入页面时最新一组默认展开（2026-09-21 批复）；
+                         分组随筛选重填会重新生成容器，OneTime 求值即可。 -->
+                    <Expander
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        IsExpanded="{x:Bind IsExpanded, Mode=OneTime}">
                         <Expander.Header>
                             <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" />
                         </Expander.Header>
                         <StackPanel>
-                            <!-- 表头：内缩与行内容对齐（Border 8 + ListViewItem 8 + 行 Grid 12 = 28） -->
+                            <!-- 表头：内缩与行内容对齐（Border 8 + ListViewItem 8 + 行 Grid 12 = 28）；
+                                 列标题列内水平居中（2026-09-21 批复） -->
                             <Grid Padding="28,8,28,2" ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -87,21 +93,25 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock
                                     Grid.Column="0"
+                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="程序" />
                                 <TextBlock
                                     Grid.Column="1"
+                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="延时" />
                                 <TextBlock
                                     Grid.Column="2"
+                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="结果" />
                                 <TextBlock
                                     Grid.Column="3"
+                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="说明" />

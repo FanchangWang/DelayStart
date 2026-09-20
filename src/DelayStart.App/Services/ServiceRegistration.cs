@@ -83,10 +83,12 @@ internal static class ServiceRegistration
         // 因此属 Management 层而不是 Core —— 与 TakeoverService 同理。
         services.AddSingleton<ConfigEditService>();
 
-        // 首启初始化（D63）：装完第一次打开管理端时自动注册调度计划任务。
-        // Singleton 而不是静态调用 —— "只做一次"这个语义由它读配置里的标记决定，
-        // 不靠调用次数，所以不需要额外保证只解析一次。
-        services.AddSingleton<FirstRunBootstrap>();
+        // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测，缺失即自动补建。
+        // "每次都跑"就是它的语义，不靠容器保证只解析一次；Singleton 与配置 / 日志同一批。
+        services.AddSingleton<SchedulerTaskBootstrap>();
+
+        // 应用内右下角通知（2026-09-21 批复）：成功类提示经它广播到主窗口的通知面板。
+        services.AddSingleton<ToastService>();
 
         // 主窗口句柄。unpackaged 的文件选择器必须知道自己的宿主窗口，
         // 否则 PickSingleFileAsync 直接抛异常。

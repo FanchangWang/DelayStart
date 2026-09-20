@@ -34,30 +34,26 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 页头 -->
+        <!-- 页头（2026-09-21 批复：常驻 InfoBar「本页全部只读」移到标题下方的分区描述，
+             文案按分区切换，由 code-behind ApplyTag 设置） -->
         <StackPanel Grid.Row="0" Spacing="4">
             <TextBlock x:Name="PageTitleText" Style="{StaticResource TitleTextBlockStyle}" Text="系统启动项" />
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
                 Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
+            <TextBlock
+                x:Name="PageDescText"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                TextWrapping="Wrap" />
         </StackPanel>
 
-        <InfoBar
-            Grid.Row="1"
-            IsClosable="False"
-            IsOpen="True"
-            Message="以下内容供了解系统现状用。本程序不会禁用、修改或延迟它们 —— 它们只能用系统自带工具（services.msc / 任务管理器）管理。"
-            Severity="Informational"
-            Title="本页全部只读" />
-
         <!-- 加载条 + 内置过滤开关（仅服务 / 驱动分区显示；文案按分区切换） -->
-        <Grid Grid.Row="2" Margin="0,0,0,4">
+        <Grid Grid.Row="1" Margin="0,0,0,4">
             <ProgressBar
                 IsIndeterminate="True"
                 VerticalAlignment="Center"
@@ -70,18 +66,9 @@
                 Visibility="{x:Bind ViewModel.IsServiceSection, Mode=OneTime, Converter={StaticResource BoolToVisibility}}" />
         </Grid>
 
-        <!-- 名值列表（Winlogon / 组策略）的空提示（批复 7：组策略为空是正常现象，要说清楚） -->
-        <TextBlock
-            Grid.Row="3"
-            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-            Style="{StaticResource BodyTextBlockStyle}"
-            Text="{x:Bind ViewModel.TextEmptyHint, Mode=OneWay}"
-            TextWrapping="Wrap"
-            Visibility="{x:Bind ViewModel.TextEmptyHint, Mode=OneWay, Converter={StaticResource NonEmptyToVisibility}}" />
-
         <!-- 服务类列表（服务 / 驱动）—— 列表包进卡片 -->
         <Border
-            Grid.Row="4"
+            Grid.Row="2"
             Padding="8,4"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -110,11 +97,13 @@
                         Text="名称" />
                     <TextBlock
                         Grid.Column="1"
+                        HorizontalAlignment="Center"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Text="启动类型" />
                     <TextBlock
                         Grid.Column="2"
+                        HorizontalAlignment="Center"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Text="状态" />
@@ -187,9 +176,11 @@
             </Grid>
         </Border>
 
-        <!-- 名值列表（Winlogon / 组策略）：ItemsSource 由 code-behind 按分区指定 -->
+        <!-- 名值列表（Winlogon / 组策略）：ItemsSource 由 code-behind 按分区指定。
+             2026-09-21 批复：空提示展示在列表占位区域（卡片内居中），列表与表头让位；
+             与总览「最近一次开机调度」的空状态同一表达。 -->
         <Border
-            Grid.Row="4"
+            Grid.Row="2"
             Padding="8,4"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -202,7 +193,11 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row="0" Padding="28,8,28,4" ColumnSpacing="12">
+                <Grid
+                    Grid.Row="0"
+                    Padding="28,8,28,4"
+                    ColumnSpacing="12"
+                    Visibility="{x:Bind ViewModel.HasTextEntries, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="200" />
                         <ColumnDefinition Width="*" />
@@ -219,11 +214,28 @@
                         Text="内容" />
                 </Grid>
 
+                <!-- 空提示：占住列表的位置（居中），有数据时让位 -->
+                <StackPanel
+                    Grid.Row="1"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    MaxWidth="560"
+                    Spacing="6"
+                    Visibility="{x:Bind ViewModel.TextEmptyHint, Mode=OneWay, Converter={StaticResource NonEmptyToVisibility}}">
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextAlignment="Center"
+                        Text="{x:Bind ViewModel.TextEmptyHint, Mode=OneWay}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
                 <ListView
                     x:Name="ReadOnlyList"
                     Grid.Row="1"
                     ItemContainerStyle="{StaticResource ItemRowStyle}"
-                    SelectionMode="None">
+                    SelectionMode="None"
+                    Visibility="{x:Bind ViewModel.HasTextEntries, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="m:ReadOnlyEntry">
                         <Grid Padding="12,6" ColumnSpacing="12">

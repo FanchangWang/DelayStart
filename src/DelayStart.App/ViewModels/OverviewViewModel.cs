@@ -6,22 +6,34 @@ using CommunityToolkit.Mvvm.Input;
 using DelayStart.App.Services;
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
-using DelayStart.Core.Services;
 using DelayStart.Management.Abstractions;
-using DelayStart.Management.Services;
 
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 总览页 ViewModel（UI v2，PowerToys 分节布局，<c>docs/ui-mockup-v2.html</c>）：
-/// 延时列表来源计数 / 最大延时 / 开机调度任务开关 / 扫描来源计数 / 最近一次开机调度。
+/// 总览页 ViewModel（UI v3，<c>docs/ui-mockup-v3.html</c>）：
+/// 延时列表来源计数 / 开机调度任务状态卡 / 扫描来源计数 / 最近一次开机调度。
 /// </summary>
 /// <remarks>
-/// D1（A）：模拟调度已删除。D3 的开关语义：开 = 注册计划任务，关 = 删除 ——
-/// 原外壳状态条（只读）的职责合并进这里的开关。
+/// <para>
+/// 2026-09-21 批复（原型 v3）：本软件强依赖调度器，计划任务改为**强制存在** ——
+/// 进入页面时检测，缺失即自动创建；创建失败给红色强提示 +「重试创建」按钮。
+/// 原先的开关（D3：开 = 注册，关 = 删除）随之删除，配套的
+/// <c>FirstRunBootstrap</c>「仅首启一次」不变量也一并废止（改为每次启动检测补建）。
+/// </para>
+/// <para>
+/// D1（A）：模拟调度已删除。「上次运行有失败」横幅已删 —— 失败信息在
+/// 「最近一次开机调度」的结果列里用红色呈现，不再重复摆一个提示框。
+/// </para>
 /// </remarks>
 public partial class OverviewViewModel : ObservableObject
 {
+    private const string TaskReadyDetail =
+        "登录时由计划任务拉起调度器，按延时依次启动条目。任务缺失时会自动重新创建，无需手动维护。";
+
+    private const string TaskFailDetail =
+        "没有调度任务，延时启动不会生效。点击右侧按钮重试；若反复失败，请查看运行日志中的错误详情。";
+
     private readonly IAppConfigStore _configStore;
     private readonly IRunStateStore _runState;
     private readonly ISchedulerTaskRegistrar _registrar;
@@ -30,7 +42,7 @@ public partial class OverviewViewModel : ObservableObject
     /// <summary>构造总览页 ViewModel。</summary>
     /// <param name="configStore">配置读取端。</param>
     /// <param name="runState">运行状态读取端。</param>
-    /// <param name="registrar">调度计划任务注册端（开关直接注册 / 删除）。</param>
+    /// <param name="registrar">调度计划任务注册端（检测 / 补建）。</param>
     /// <param name="scanCache">扫描缓存（来源计数，启动后已有）。</param>
     public OverviewViewModel(
         IAppConfigStore configStore,
@@ -71,25 +83,20 @@ public partial class OverviewViewModel : ObservableObject
     [ObservableProperty]
     public partial int DelayedManual { get; set; }
 
-    // ── 最大延时（原「开机加载窗口」，按用户反馈改为直观口径）────────────
+    // ── 开机调度任务状态卡 ────────────────────────────────────────────────
 
-    /// <summary>最长条目的延时文案。</summary>
+    /// <summary>调度任务是否已就绪（决定状态卡显示正常态还是失败态）。</summary>
+    /// <remarks>初值取 <see langword="true"/>：正常是常态，启动瞬间不让失败卡片闪一下。</remarks>
     [ObservableProperty]
-    public partial string MaxDelayText { get; set; } = "—";
+    public partial bool TaskReady { get; set; } = true;
 
-    // ── 开机调度任务开关 ──────────────────────────────────────────────────
-
-    /// <summary>调度任务是否存在（开关的绑定值）。</summary>
+    /// <summary>状态卡里的描述文字（正常态固定文案；失败态带失败原因）。</summary>
     [ObservableProperty]
-    public partial bool IsTaskRegistered { get; set; }
+    public partial string TaskStatusDetail { get; set; } = TaskReadyDetail;
 
-    /// <summary>开关旁的状态描述。</summary>
+    /// <summary>检测 / 补建是否正在进行（防止连点）。</summary>
     [ObservableProperty]
-    public partial string TaskStatusText { get; set; } = "正在检查…";
-
-    /// <summary>开关操作是否正在进行（防止连点）。</summary>
-    [ObservableProperty]
-    public partial bool IsTogglingTask { get; set; }
+    public partial bool IsWorkingOnTask { get; set; }
 
     // ── 系统自启动项（扫描来源计数 chips）────────────────────────────────
 
@@ -114,14 +121,6 @@ public partial class OverviewViewModel : ObservableObject
     /// <summary>「最近一次开机调度」的条目行；从未运行过为空集合。</summary>
     public ObservableCollection<RunItemRow> RecentRunRows { get; } = [];
 
-    /// <summary>「最近一次开机调度」标题（带运行时刻）。</summary>
-    [ObservableProperty]
-    public partial string RecentRunTitle { get; set; } = "最近一次开机调度";
-
-    /// <summary>「最近一次开机调度」摘要（成功 / 失败数）。</summary>
-    [ObservableProperty]
-    public partial string RecentRunSummary { get; set; } = "还没有调度记录 —— 接管条目并重启后，每次登录的启动结果会显示在这里";
-
     /// <summary>是否没有可展示的最近运行记录。</summary>
     /// <remarks>
     /// 🔴 必须是 <c>[ObservableProperty]</c> 而不是 <c>=&gt; Rows.Count == 0</c> 计算属性：
@@ -131,14 +130,6 @@ public partial class OverviewViewModel : ObservableObject
     /// </remarks>
     [ObservableProperty]
     public partial bool RecentRunEmpty { get; set; } = true;
-
-    /// <summary>上次运行横幅文案；全部成功或从未运行时为空（FR-6.7 / 9.3）。</summary>
-    [ObservableProperty]
-    public partial string LastRunBanner { get; set; } = string.Empty;
-
-    /// <summary>横幅是否可见。同为 OneWay 绑定要求的通知源（见 <see cref="RecentRunEmpty"/>）。</summary>
-    [ObservableProperty]
-    public partial bool HasBanner { get; set; }
 
     /// <summary>刷新全部数据。页面进入时调用（全部读缓存 / 小文件，秒回）。</summary>
     /// <returns>异步任务。</returns>
@@ -153,12 +144,6 @@ public partial class OverviewViewModel : ObservableObject
         DelayedUwp = config.Items.Count(static item => item.Source == StartupSource.Uwp);
         DelayedManual = config.Items.Count(static item => item.Source == StartupSource.Manual);
 
-        // ── 最大延时 ─────────────────────────────────────────────────────
-        var enabledDelays = config.Items.Where(static item => item.Enabled).Select(static item => item.DelaySeconds).ToList();
-        MaxDelayText = enabledDelays.Count > 0
-            ? DisplayText.DelayOf(enabledDelays.Max())
-            : "尚无启用的条目";
-
         // ── 扫描来源计数（读缓存：启动后已扫过一次，bug#7）────────────────
         var snapshot = await _scanCache.EnsureLoadedAsync().ConfigureAwait(true);
         ScannedRegistry = snapshot.Entries.Count(static entry => entry.Source == StartupSource.Registry);
@@ -166,66 +151,51 @@ public partial class OverviewViewModel : ObservableObject
         ScannedTask = snapshot.Entries.Count(static entry => entry.Source == StartupSource.ScheduledTask);
         ScannedUwp = snapshot.Entries.Count(static entry => entry.Source == StartupSource.Uwp);
 
-        RefreshTaskState();
+        await EnsureTaskAsync().ConfigureAwait(true);
         await FillRecentRun().ConfigureAwait(true);
     }
 
-    /// <summary>开 / 关开机调度任务（用户点开关）：开 = 注册，关 = 删除。</summary>
+    /// <summary>检测调度计划任务，缺失即补建；失败切到失败态（用户可点「重试创建」再来一遍）。</summary>
     /// <returns>异步任务。</returns>
     /// <remarks>
-    /// 失败时把开关回拨并写明原因 —— 开关态必须永远与系统真实状态一致，
-    /// 否则用户以为关了、下次登录调度器照样跑。
+    /// 页面进入与「重试创建」按钮共用本命令。2026-09-21 批复的语义：
+    /// 本软件强依赖调度器，任务缺失不再是"用户可以关掉的状态"，而是要自动修复的故障。
     /// </remarks>
     [RelayCommand]
-    private async Task ToggleTaskAsync()
+    private async Task EnsureTaskAsync()
     {
-        if (IsTogglingTask)
+        if (IsWorkingOnTask)
         {
             return;
         }
 
-        IsTogglingTask = true;
+        IsWorkingOnTask = true;
         try
         {
-            if (IsTaskRegistered)
+            try
             {
-                await Task.Run(_registrar.Delete).ConfigureAwait(true);
-                IsTaskRegistered = false;
-                TaskStatusText = "未创建 · 延时启动不会生效";
-            }
-            else
-            {
+                var registered = await Task.Run(_registrar.IsRegistered).ConfigureAwait(true);
+                if (registered)
+                {
+                    TaskReady = true;
+                    TaskStatusDetail = TaskReadyDetail;
+                    return;
+                }
+
                 await Task.Run(_registrar.RegisterOrUpdate).ConfigureAwait(true);
-                IsTaskRegistered = true;
-                TaskStatusText = "已创建 · 登录后按各条目延时分批启动";
+                TaskReady = true;
+                TaskStatusDetail = TaskReadyDetail;
             }
-        }
-        catch (Exception ex)
-        {
-            // 回拨开关并保留真实状态文案：查询一次兜底，查询也失败就按缺失处理。
-            RefreshTaskState();
-            TaskStatusText = $"操作失败：{ex.Message}";
+            catch (Exception ex)
+            {
+                // 查询 / 注册失败都进失败态：原因原样摆出来，修复路径交给「重试创建」。
+                TaskReady = false;
+                TaskStatusDetail = $"{TaskFailDetail}\n失败原因：{ex.Message}";
+            }
         }
         finally
         {
-            IsTogglingTask = false;
-        }
-    }
-
-    /// <summary>查询调度任务状态（查询失败按缺失处理并保持界面可用）。</summary>
-    private void RefreshTaskState()
-    {
-        try
-        {
-            IsTaskRegistered = _registrar.IsRegistered();
-            TaskStatusText = IsTaskRegistered
-                ? "已创建 · 登录后按各条目延时分批启动"
-                : "未创建 · 延时启动不会生效";
-        }
-        catch
-        {
-            IsTaskRegistered = false;
-            TaskStatusText = "无法确认 · 延时启动可能不会生效";
+            IsWorkingOnTask = false;
         }
     }
 
@@ -238,9 +208,7 @@ public partial class OverviewViewModel : ObservableObject
         RecentRunRows.Clear();
         if (current is null)
         {
-            RecentRunTitle = "最近一次开机调度";
-            RecentRunSummary = "还没有调度记录 —— 接管条目并重启后，每次登录的启动结果会显示在这里";
-            RecentRunEmpty = RecentRunRows.Count == 0;
+            RecentRunEmpty = true;
             return;
         }
 
@@ -249,62 +217,6 @@ public partial class OverviewViewModel : ObservableObject
             RecentRunRows.Add(new RunItemRow(item));
         }
 
-        var ok = current.Items.Count(static item => item.State == RunItemState.Done);
-        var failed = current.Items.Count(static item => item.State == RunItemState.Failed);
-        RecentRunTitle = $"最近一次开机调度 · {current.StartedAt:yyyy-MM-dd HH:mm:ss}";
-        RecentRunSummary = failed > 0
-            ? $"{ok}/{current.Items.Count} 成功 · 失败 {failed}"
-            : $"{current.Items.Count}/{current.Items.Count} 全部成功";
-
         RecentRunEmpty = RecentRunRows.Count == 0;
-
-        // 横幅（失败提示）与日志区共用一次读取。
-        LastRunBanner = await Task.Run(BuildLastRunBanner).ConfigureAwait(true);
-        HasBanner = LastRunBanner.Length > 0;
-    }
-
-    /// <summary>按 scheduler-design.md 9.3 的横幅文案矩阵生成「上次运行结果」。</summary>
-    private string BuildLastRunBanner()
-    {
-        var current = _runState.ReadCurrent();
-        if (current is null)
-        {
-            return string.Empty;
-        }
-
-        var failedItems = current.Items
-            .Where(static item => item.State == RunItemState.Failed)
-            .ToList();
-
-        if (failedItems.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var runs = _runState.ReadRecent(FailureStreakService.DefaultMaxRunsScanned);
-
-        var worstStreak = 0;
-        string worstName = string.Empty;
-        foreach (var item in failedItems)
-        {
-            var streak = FailureStreakService.CountConsecutiveFailures(runs, item.Id);
-            if (streak > worstStreak)
-            {
-                worstStreak = streak;
-                worstName = item.Name;
-            }
-        }
-
-        if (worstStreak >= 3)
-        {
-            return $"『{worstName}』已连续 {worstStreak} 次启动失败，建议检查该程序是否仍然可用";
-        }
-
-        if (worstStreak == 2)
-        {
-            return $"『{worstName}』已连续 2 次启动失败";
-        }
-
-        return $"上次登录：{failedItems.Count} 个程序启动失败";
     }
 }

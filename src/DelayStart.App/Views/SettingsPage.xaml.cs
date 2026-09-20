@@ -3,6 +3,7 @@ using DelayStart.App.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 
 namespace DelayStart.App.Views;
@@ -99,10 +100,31 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    /// <summary>删除一个预设。</summary>
-    private void OnPresetDelete(object sender, RoutedEventArgs e)
+    /// <summary>点击删除按钮。删除前弹 <see cref="ContentDialog"/> 二次确认（2026-09-21 批复）。</summary>
+    /// <remarks>
+    /// 确认弹窗说明「使用该值的条目不受影响」—— 预设只是编辑器的快选默认值，
+    /// 与已存在的条目无引用关系，用户不必因怕误伤而犹豫。
+    /// 2026-09-21 二次批复：垃圾桶回退为嵌套 Button（裸 TextBlock 方案触发 XamlCompiler
+    /// pass-1 静默崩溃，且悬停变色难以两主题兼顾），确认弹窗逻辑保留。
+    /// </remarks>
+    private async void OnPresetDelete(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: PresetRow row })
+        if (sender is not Button { DataContext: PresetRow row })
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "删除预设延时",
+            Content = $"确定删除「{row.Display}」吗？使用该值的条目不受影响，仅从快选列表移除。",
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
             ViewModel.DeletePreset(row);
         }

@@ -3,18 +3,15 @@ using DelayStart.App.ViewModels;
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「总览」页（UI v2，PowerToys 分节布局，<c>docs/ui-mockup-v2.html</c>）。
+/// 「总览」页（UI v3，<c>docs/ui-mockup-v3.html</c>）。
 /// </summary>
 /// <remarks>
-/// ⚠️ <see cref="ToggleSwitch.Toggled"/> 的回灌问题：绑定 <c>IsOn</c> 随
-/// <see cref="OverviewViewModel.IsTaskRegistered"/> 更新时也会触发 Toggled。
-/// 判据与「延时启动」页的条目开关一致 —— 开关当前值等于 ViewModel 已记录值即为回灌，
-/// 直接忽略；命令执行期间的连点由 ViewModel 的 <c>IsTogglingTask</c> 守卫挡掉。
+/// 2026-09-21 批复：开机调度任务从开关改为状态卡（缺失自动补建、失败给重试按钮），
+/// 原先 <c>ToggleSwitch.Toggled</c> 的回灌守卫随之删除 —— 界面上已经没有开关了。
 /// </remarks>
 public sealed partial class OverviewPage : Page
 {
@@ -56,22 +53,6 @@ public sealed partial class OverviewPage : Page
     /// <summary>「手动添加」chip：手动条目只存在于延时列表，跳延时启动页。</summary>
     private void OnGoDelay(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.DelayTag);
 
-    private void OnTaskToggled(object sender, RoutedEventArgs e)
-    {
-        if (sender is not ToggleSwitch toggle)
-        {
-            return;
-        }
-
-        // 回灌：开关当前值与 ViewModel 已记录值一致，说明这次 Toggled 是绑定更新造成的。
-        if (toggle.IsOn == ViewModel.IsTaskRegistered)
-        {
-            return;
-        }
-
-        if (ViewModel.ToggleTaskCommand.CanExecute(null))
-        {
-            ViewModel.ToggleTaskCommand.Execute(null);
-        }
-    }
+    /// <summary>「查看运行日志 →」：跳运行日志页（2026-09-21 批复）。</summary>
+    private void OnGoRuns(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.RunsTag);
 }

@@ -44,10 +44,6 @@ public sealed partial class DelayViewModel : ObservableObject
     /// </remarks>
     private Dictionary<DelayedItem, IconPixels?> _pendingPixels = [];
 
-    /// <summary>页头副标题，形如 `共 5 项（含手动添加 1 项）· 最后一个在登录后 1 分 00 秒启动`。</summary>
-    [ObservableProperty]
-    public partial string Subtitle { get; set; }
-
     /// <summary>是否正在读取 / 刷新。</summary>
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
@@ -94,7 +90,6 @@ public sealed partial class DelayViewModel : ObservableObject
         _scanCache = scanCache;
         _log = log;
 
-        Subtitle = "正在读取配置…";
         DelayPresets = new Settings().DelayPresets;
         DefaultPreset = new Settings().DefaultPreset;
     }
@@ -196,7 +191,6 @@ public sealed partial class DelayViewModel : ObservableObject
             _log.Error(ex, "配置无法加载");
             Rows.Clear();
             Groups.Clear();
-            Subtitle = "配置不可用";
             ErrorText = ex.Message;
             OnPropertyChanged(nameof(IsEmpty));
             return;
@@ -221,7 +215,6 @@ public sealed partial class DelayViewModel : ObservableObject
 
         RebuildGroups();
 
-        Subtitle = BuildSubtitle(config.Items);
         ErrorText = canJudgeStaleness
             ? null
             : "系统扫描未完全成功，暂时无法判断哪些条目已失效。";
@@ -305,29 +298,62 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <summary>切换条目级开关（FR-4.6）。关闭后本次登录不启动，系统侧状态不变。</summary>
     /// <param name="row">目标行。</param>
     /// <param name="enabled">是否启用。</param>
+    /// <remarks>
+    /// 2026-09-21 批复：**局部更新** —— 落盘成功后只改这一行的 <see cref="DelayRow.IsEnabled"/>，
+    /// 不再整表 <see cref="Load"/>。整表重建会让 ScrollViewer 的滚动位置与整页视觉状态归零，
+    /// 用户看到的就是"拨一下开关整个页面都在刷"。回灌（绑定把 <c>IsOn</c> 推回来再触发一次）
+    /// 由 <c>row.IsEnabled == enabled</c> 挡掉。
+    /// </remarks>
     public void SetEnabled(DelayRow row, bool enabled)
     {
         ArgumentNullException.ThrowIfNull(row);
 
+        if (row.IsEnabled == enabled)
+        {
+            return;
+        }
+
         _editor.SetEnabled(row.Item.Id, enabled);
-        Load();
+        row.SetEnabledState(enabled);
     }
 
     /// <summary>在同一延时的组内上移 / 下移一位（FR-4.7）。</summary>
     /// <param name="row">目标行。</param>
     /// <param name="delta">位移量：<c>-1</c> 上移、<c>+1</c> 下移。</param>
     /// <returns>顺序是否真的变了（已在组内端点时为 <see langword="false"/>）。</returns>
+    /// <remarks>
+    /// 2026-09-21 批复：**局部更新** —— 落盘成功后在组内 <see cref="ObservableCollection{T}.Move"/>
+    /// 交换相邻两行并互换顺序号，列表只重排这两个容器；不再整表 <see cref="Load"/>
+    /// （滚动位置归零问题同 <see cref="SetEnabled"/>）。
+    /// </remarks>
     public bool Move(DelayRow row, int delta)
     {
         ArgumentNullException.ThrowIfNull(row);
 
         var moved = _editor.Move(row.Item.Id, delta);
-        if (moved)
+        if (!moved)
         {
-            Load();
+            return false;
         }
 
-        return moved;
+        // 组是快照、行对象是同一实例 —— 在行所在的组内做最小变更。
+        var group = Groups.FirstOrDefault(g => g.Rows.Contains(row));
+        if (group is not null)
+        {
+            var rows = group.Rows;
+            var index = rows.IndexOf(row);
+            var target = index + delta;
+            if (index >= 0 && target >= 0 && target < rows.Count)
+            {
+                rows.Move(index, target);
+
+                // Move 之后邻居恰好落回 index（无论上移还是下移），互换全局顺序号。
+                var neighbor = rows[index];
+                (row.Order, neighbor.Order) = (neighbor.Order, row.Order);
+            }
+        }
+
+        return true;
     }
 
     /// <summary>手动添加一个条目（FR-3.4：不动系统任何设置）。</summary>
@@ -369,28 +395,5 @@ public sealed partial class DelayViewModel : ObservableObject
     {
         DelayPresets = settings.DelayPresets;
         DefaultPreset = settings.DefaultPreset;
-    }
-
-    /// <summary>拼页头副标题。</summary>
-    /// <param name="items">配置里的全部条目。</param>
-    /// <returns>形如 `共 5 项（含手动添加 1 项）· 最后一个在登录后 1 分 00 秒启动`。</returns>
-    /// <remarks>
-    /// 形参用具体 <see cref="List{T}"/> 而不是 <c>IReadOnlyCollection</c>：调用点传的永远是
-    /// <c>AppConfig.Items</c>（就是 <see cref="List{T}"/>），接口分发在这里是纯开销（CA1859）。
-    /// </remarks>
-    private static string BuildSubtitle(List<DelayedItem> items)
-    {
-        if (items.Count == 0)
-        {
-            return "还没有延时启动项";
-        }
-
-        var manual = items.Count(static item => item.IsManual);
-        var head = manual > 0 ? $"共 {items.Count} 项（含手动添加 {manual} 项）" : $"共 {items.Count} 项";
-
-        // 「最后一个」按**延时值**取最大，不是按列表末行 —— 列表按延时排序，
-        // 末行确实是最大延时，但显式取 Max 才不依赖排序实现的稳定性。
-        var last = items.Max(static item => item.DelaySeconds);
-        return $"{head} · 最后一个在{DisplayText.DelayOf(last)}启动";
     }
 }

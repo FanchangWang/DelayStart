@@ -104,6 +104,10 @@ public partial class RunsViewModel : ObservableObject
     }
 
     /// <summary>按级别筛选重填 <see cref="Groups"/> 并同步副标题。</summary>
+    /// <remarks>
+    /// 进入页面时最新一组默认展开（2026-09-21 批复）：首组 <see cref="RunGroupRow.IsExpanded"/>
+    /// 置真，其余收起。筛选重填后同样生效 —— 「仅失败」视图下第一组就是最新的失败记录。
+    /// </remarks>
     private void RefillGroups()
     {
         var onlyFailed = LevelFilterIndex == 1;
@@ -113,6 +117,7 @@ public partial class RunsViewModel : ObservableObject
         {
             if (!onlyFailed || group.HasFailure)
             {
+                group.IsExpanded = Groups.Count == 0;
                 Groups.Add(group);
             }
         }
@@ -164,6 +169,13 @@ public sealed class RunGroupRow
 
     /// <summary>这次运行是否含失败项（级别筛选「仅失败」的判据）。</summary>
     public bool HasFailure => _record.Items.Any(static item => item.State == RunItemState.Failed);
+
+    /// <summary>
+    /// 分组是否默认展开。进入页面 / 重填筛选时最新一组（分组列表的首项）为
+    /// <see langword="true"/>。行容器随筛选重填会重新生成，x:Bind OneTime 在生成时求值即可，
+    /// 不需要 INPC。
+    /// </summary>
+    public bool IsExpanded { get; set; }
 
     /// <summary>各条目结果。</summary>
     public ObservableCollection<RunItemRow> Items { get; } = [];

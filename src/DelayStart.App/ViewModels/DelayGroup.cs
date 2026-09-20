@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
@@ -10,8 +12,9 @@ namespace DelayStart.App.ViewModels;
 /// "顺序只调得动同组"不再需要解释。
 /// </para>
 /// <para>
-/// 组是不可变快照：任何改动都整表重建（与 <see cref="PresetRow"/> 同一思路），
-/// 免得行内状态与配置半同步。
+/// 组本身仍是快照（整表 <c>Load()</c> 时重建），但 <see cref="Rows"/> 用
+/// <see cref="ObservableCollection{T}"/> 承载 —— 2026-09-21 批复后，组内 ↑↓ 走
+/// <c>Move</c> 做局部更新，不再整表重建（整表重建会让滚动位置与视觉状态归零）。
 /// </para>
 /// </remarks>
 public sealed class DelayGroup
@@ -24,14 +27,14 @@ public sealed class DelayGroup
         ArgumentNullException.ThrowIfNull(rows);
 
         DelaySeconds = delaySeconds;
-        Rows = rows;
+        Rows = new ObservableCollection<DelayRow>(rows);
     }
 
     /// <summary>本组的延时值（秒）。</summary>
     public int DelaySeconds { get; }
 
-    /// <summary>组内条目，顺序与调度端的发起顺序一致。</summary>
-    public IReadOnlyList<DelayRow> Rows { get; }
+    /// <summary>组内条目，顺序与调度端的发起顺序一致。组内 ↑↓ 经它做局部更新。</summary>
+    public ObservableCollection<DelayRow> Rows { get; }
 
     /// <summary>组标题。形如 <c>登录后 30 秒</c>；延时为 0 时是 <c>立即启动</c>（<c>登录后 立即</c> 读不通）。</summary>
     public string Header => DelaySeconds <= 0 ? "立即启动" : $"登录后 {DisplayText.DelayOf(DelaySeconds)}";

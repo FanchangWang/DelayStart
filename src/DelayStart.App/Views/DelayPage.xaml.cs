@@ -149,9 +149,9 @@ public sealed partial class DelayPage : Page
     /// <param name="sender">触发开关。</param>
     /// <param name="e">事件参数。</param>
     /// <remarks>
-    /// 🔴 <b>必须挡掉"回灌造成的二次触发"</b>：每次改动都会重建列表，
-    /// 新行在绑定 <c>IsOn</c> 时同样会触发一次 <c>Toggled</c>。
-    /// 判据是"开关的当前值是否等于配置里已经记的值" —— 相等说明这是回灌，不是用户点的。
+    /// 🔴 <b>必须挡掉"回灌造成的二次触发"</b>：局部更新后 VM 会把 <c>IsEnabled</c> 推给
+    /// OneWay 绑定，开关同样会触发一次 <c>Toggled</c>。
+    /// 判据是"开关的当前值是否等于行对象已记的状态" —— 相等说明这是回灌，不是用户点的。
     /// 少这个判断就会出现"点一下开关、配置被来回写两次"的抖动。
     /// </remarks>
     private void OnEnabledToggled(object sender, RoutedEventArgs e)
@@ -161,7 +161,7 @@ public sealed partial class DelayPage : Page
             return;
         }
 
-        if (row.Item.Enabled == toggle.IsOn)
+        if (row.IsEnabled == toggle.IsOn)
         {
             return;
         }
@@ -172,6 +172,8 @@ public sealed partial class DelayPage : Page
         }
         catch (StartupOperationException ex)
         {
+            // 落盘失败：把开关弹回真实状态（属性值没变，重发通知让 OneWay 绑定重读）。
+            row.RefreshEnabled();
             _ = ShowFailureAsync("未能切换启用状态", ex.Message);
         }
     }

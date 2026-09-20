@@ -44,7 +44,6 @@
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="False"
             SelectionChanged="NavView_SelectionChanged">
-
             <!--
                 问题1（2026-09-19）：内容区与标题栏 / 菜单颜色不同 ——
                 NavigationView 默认给内容区铺 LayerFillColorDefault 半透明层，
@@ -115,5 +114,32 @@
             </NavigationView.MenuItems>
             <Frame x:Name="NavFrame" />
         </NavigationView>
+
+        <!--
+            应用内右下角通知（2026-09-21 批复：成功类提示自动消除）。
+            WinUI 3 没有内置「窗口内 toast」，自绘一块面板；显示 / 定时消失由
+            code-behind 的 ShowToast 驱动，消息来自 ToastService 的广播。
+        -->
+        <Border
+            x:Name="ToastPanel"
+            Grid.Row="1"
+            Margin="0,0,24,24"
+            Padding="14,10"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="6"
+            IsHitTestVisible="False"
+            Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <FontIcon
+                    FontSize="14"
+                    Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                    Glyph="&#xE73E;" />
+                <TextBlock x:Name="ToastText" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>

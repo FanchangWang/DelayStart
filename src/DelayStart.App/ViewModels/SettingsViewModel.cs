@@ -6,8 +6,6 @@ using DelayStart.App.Services;
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
 
-using Microsoft.UI.Xaml.Controls;
-
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
@@ -60,6 +58,7 @@ public partial class SettingsViewModel : ObservableObject
 {
     private readonly IAppConfigStore _configStore;
     private readonly ThemeService _theme;
+    private readonly ToastService _toast;
 
     /// <summary>加载期守卫：Load 期间对可观察属性的回灌不得触发落盘。</summary>
     private bool _loading;
@@ -67,13 +66,16 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>构造设置页 ViewModel。</summary>
     /// <param name="configStore">配置读写端。</param>
     /// <param name="theme">主题服务（切主题即时落盘并广播到主窗口）。</param>
-    public SettingsViewModel(IAppConfigStore configStore, ThemeService theme)
+    /// <param name="toast">应用内通知（2026-09-21 批复：添加成功改走右下角自动消失的通知）。</param>
+    public SettingsViewModel(IAppConfigStore configStore, ThemeService theme, ToastService toast)
     {
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(theme);
+        ArgumentNullException.ThrowIfNull(toast);
 
         _configStore = configStore;
         _theme = theme;
+        _toast = toast;
     }
 
     /// <summary>预设延时列表（选中项 = 默认）。</summary>
@@ -95,32 +97,17 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     public partial int ThemeIndex { get; set; }
 
-    /// <summary>页面底部状态（落盘失败 / 校验错误；成功不提示，避免每次改动都闪一条）。</summary>
+    /// <summary>页面底部状态条的错误文案（2026-09-21 批复：状态条只报错；成功类提示走右下角通知）。</summary>
     [ObservableProperty]
     public partial string StatusText { get; set; } = string.Empty;
 
-    /// <summary><see cref="StatusText"/> 变化时联动派生属性。</summary>
-    partial void OnStatusTextChanged(string value)
-    {
-        OnPropertyChanged(nameof(HasError));
-        OnPropertyChanged(nameof(HasStatus));
-        StatusSeverity = StatusText.StartsWith('✗') ? InfoBarSeverity.Error : InfoBarSeverity.Success;
-    }
-
-    /// <summary>状态是否为错误（决定 InfoBar 颜色）。</summary>
-    public bool HasError => StatusText.StartsWith('✗');
-
-    /// <summary>状态条是否可见。</summary>
-    public bool HasStatus => StatusText.Length > 0;
-
-    /// <summary>状态条的严重级别。</summary>
+    /// <summary>状态条是否可见。现在只有错误才会置文案。</summary>
     /// <remarks>
-    /// 🔴 必须是 <c>[ObservableProperty]</c>：OneWay 绑定要求路径上有通知源，
+    /// 🔴 必须是 <c>[ObservableProperty]</c> 的 <see cref="StatusText"/> + 这里的通知，
+    /// 而不是把可见性做成独立字段：x:Bind OneWay 要求路径上有通知源，
     /// get-only 计算属性会被 XamlCompiler 拒绝（增量 pass-2 下按错误处理）。
-    /// 在 <see cref="OnStatusTextChanged(string)"/> 里联动赋值。
     /// </remarks>
-    [ObservableProperty]
-    public partial InfoBarSeverity StatusSeverity { get; set; } = InfoBarSeverity.Success;
+    public bool HasError => StatusText.Length > 0;
 
     /// <summary>通知策略下拉框的选项。</summary>
     public ObservableCollection<string> NotifyModes { get; } = ["仅失败时通知", "总是通知", "从不通知"];
@@ -269,13 +256,18 @@ public partial class SettingsViewModel : ObservableObject
 
         if (settings.DelayPresets.Contains(seconds))
         {
-            Fail($"「{DisplayText.DelayOf(seconds)}」已在列表里");
+            // 2026-09-21 批复：重复添加走右下角通知（与成功提示同一通道），不占状态条。
+            _toast.Show($"「{DisplayText.DelayOf(seconds)}」已在列表里，无需重复添加");
+            NewPresetValue = double.NaN;
             return;
         }
 
         Persist(settings => settings.DelayPresets = [.. settings.DelayPresets.Append(seconds).Order()]);
         NewPresetValue = double.NaN;
         ReloadPresetsFromConfig();
+
+        // 2026-09-21 批复：添加成功改走右下角自动消失的应用内通知（不再占用状态条）。
+        _toast.Show($"已添加预设延时 {DisplayText.DelayOf(seconds)}");
     }
 
     /// <summary>统一落盘：读最新配置 → 局部改 → 原子写。失败转状态条。</summary>
@@ -321,6 +313,6 @@ public partial class SettingsViewModel : ObservableObject
 
     private void Fail(string message)
     {
-        StatusText = $"✗ {message}";
+        StatusText = message;
     }
 }

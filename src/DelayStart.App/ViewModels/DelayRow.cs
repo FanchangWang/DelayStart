@@ -1,3 +1,5 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+
 using DelayStart.App.Services;
 using DelayStart.Core.Models;
 using DelayStart.Management.Models;
@@ -10,11 +12,18 @@ namespace DelayStart.App.ViewModels;
 /// 「延时启动」页一行。<see cref="DelayedItem"/> 的只读展示包装。
 /// </summary>
 /// <remarks>
+/// <para>
 /// 与 <see cref="StartupEntryRow"/> 同样的思路：把文案拼装从 XAML 里挪出来。
 /// 区别在于这一页的数据来自 <c>config.json</c>（用户配置）而不是系统扫描结果，
 /// 所以行里多了一样东西 —— <see cref="IsStale"/>，"这条配置指向的系统项已经不存在了"。
+/// </para>
+/// <para>
+/// 2026-09-21 批复：开关切换与组内 ↑↓ 改为**局部更新**，不再整表重建 ——
+/// 因此 <see cref="Order"/> 与 <see cref="IsEnabled"/> 变成可通知属性，
+/// 其余字段仍随行对象不可变（整表 <c>Load()</c> 时才重建行）。
+/// </para>
 /// </remarks>
-public sealed class DelayRow
+public sealed class DelayRow : ObservableObject
 {
     /// <summary>构造行。</summary>
     /// <param name="item">配置里的延时条目。</param>
@@ -26,6 +35,7 @@ public sealed class DelayRow
         Item = item;
         IsStale = isStale;
         Icon = IconRenderer.ToImageSource(iconPixels);
+        _isEnabled = item.Enabled;
     }
 
     /// <summary>原始条目，供移除 / 编辑取用。</summary>
@@ -40,14 +50,26 @@ public sealed class DelayRow
     /// <summary><see cref="HasIcon"/> 的反面。<c>x:Bind</c> 不支持取反表达式。</summary>
     public bool HasNoIcon => Icon is null;
 
+    private int _order;
+
     /// <summary>
     /// 列表中的序号（1 起），与调度端的发起顺序一致。
     /// </summary>
     /// <remarks>
-    /// 由 ViewModel 在灌列表时填 —— 序号是"排序之后的位置"，
-    /// 行对象本身不知道自己排第几。
+    /// 由 ViewModel 在灌列表 / 组内移动时填 —— 序号是"排序之后的位置"，
+    /// 行对象本身不知道自己排第几。变化时联动 <see cref="OrderText"/>。
     /// </remarks>
-    public int Order { get; set; }
+    public int Order
+    {
+        get => _order;
+        set
+        {
+            if (SetProperty(ref _order, value))
+            {
+                OnPropertyChanged(nameof(OrderText));
+            }
+        }
+    }
 
     /// <summary>序号的文本形式。<c>x:Bind</c> 不做 <c>int → string</c> 的隐式转换。</summary>
     public string OrderText => Order.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -78,6 +100,21 @@ public sealed class DelayRow
     /// </remarks>
     public bool IsStale { get; }
 
-    /// <summary>条目级开关状态（FR-4.6）。</summary>
-    public bool IsEnabled => Item.Enabled;
+    private bool _isEnabled;
+
+    /// <summary>条目级开关状态（FR-4.6）。局部更新时由 ViewModel 直接改，联动开关 UI。</summary>
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        private set => SetProperty(ref _isEnabled, value);
+    }
+
+    /// <summary>局部更新启用状态（配置已成功落盘后调用）。</summary>
+    public void SetEnabledState(bool enabled) => IsEnabled = enabled;
+
+    /// <summary>
+    /// 强制重发 <see cref="IsEnabled"/> 通知：落盘失败时让 OneWay 绑定把开关弹回真实值
+    /// （此时属性值没变，只有重发通知才能纠正用户已经拨过去的开关位置）。
+    /// </summary>
+    public void RefreshEnabled() => OnPropertyChanged(nameof(IsEnabled));
 }

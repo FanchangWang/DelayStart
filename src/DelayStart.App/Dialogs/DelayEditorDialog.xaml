@@ -46,7 +46,7 @@
         该块对手动条目是固定不变的同一段话（不提供新信息），对系统条目的价值也已由
         「加入后原自启动项将被软禁用」这句副标题承担。
     -->
-    <Grid>
+    <Grid MinWidth="500">
         <ScrollViewer
             MaxHeight="560"
             HorizontalScrollMode="Disabled"
@@ -60,20 +60,17 @@
                 IsOpen="False"
                 Severity="Error" />
 
+            <!-- 标题下描述（2026-09-21 批复：手动形态整段移除 —— 下方 UI 已表达同样的信息；
+                 系统条目形态保留，"软禁用"这层影响只有这里说） -->
             <TextBlock
                 x:Name="SubtitleText"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
                 TextWrapping="Wrap" />
 
-            <!-- ══ 目标程序 ══ -->
+            <!-- ══ 目标程序 ══（卡内不再摆描述：拖放区 / 已选行已表达同样信息） -->
             <StackPanel Spacing="8">
                 <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="目标程序" />
-                <TextBlock
-                    x:Name="TargetHintText"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    TextWrapping="Wrap" />
 
                 <Border
                     Padding="12"
@@ -281,11 +278,9 @@
                                     </Grid>
                                 </Border>
 
-                                <TextBlock
-                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    TextWrapping="Wrap"
-                                    Text="UWP 应用由系统外壳激活：始终以普通用户身份启动，命令行参数不会被转发、也没有工作目录可言，因此本页签不提供这两项。" />
+                                <!-- 2026-09-21 批复：原"UWP 由系统外壳激活…本页签不提供这两项"的
+                                     卡内长描述删除 —— UWP 页签不摆参数 / 工作目录本身就是表达，
+                                     身份限制由「启动身份」卡说明。 -->
                             </StackPanel>
                         </StackPanel>
 
@@ -311,10 +306,6 @@
             <!-- ══ 延时时间 ══ -->
             <StackPanel Spacing="8">
                 <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="延时时间" />
-                <TextBlock
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="以登录时刻为起点的绝对时间点；同一时间点的多个程序几乎同时启动" />
 
                 <Border
                     Padding="12"
@@ -323,6 +314,14 @@
                     BorderThickness="1"
                     CornerRadius="{StaticResource ControlCornerRadius}">
                     <StackPanel Spacing="4">
+                        <!-- 2026-09-21 批复：描述移入卡片内部，口径改为"相同延时的条目按列表顺序依次启动"
+                             （调度端就是按排序顺序发起的，原文案"几乎同时"不准确） -->
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            Text="以登录时刻为起点的相对时间点；相同延时的条目按列表顺序依次启动。" />
+
                         <!-- 胶囊由 code-behind 填充（选中 = 当前延时；自定义值不在预设里时全部弹起）。
                              🔴 Round H 批复 5：横向 StackPanel 超宽直接被裁掉看不到 → 换自绘 WrapPanel
                              （按内容测量 + 自动换行，宽度仍自适应）。 -->
@@ -334,20 +333,23 @@
                             </ItemsControl.ItemsPanel>
                         </ItemsControl>
 
+                        <!-- 自定义行（2026-09-21 二轮批复）：标签、输入框、确认规则提示同一行 -->
                         <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Text="自定义（秒）" />
                             <NumberBox
                                 x:Name="CustomDelayBox"
                                 Width="140"
-                                Header="自定义（秒）"
                                 Minimum="0"
                                 SpinButtonPlacementMode="Compact"
                                 ValueChanged="OnCustomDelayChanged" />
                             <TextBlock
-                                VerticalAlignment="Bottom"
+                                VerticalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 TextWrapping="Wrap"
-                                Text="手动输入的自定义值提交前需要确认" />
+                                Text="自定义值提交前需二次确认" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -364,15 +366,16 @@
                     BorderThickness="1"
                     CornerRadius="{StaticResource ControlCornerRadius}">
                     <StackPanel Spacing="6">
-                        <StackPanel
-                            x:Name="IdentityChoices"
-                            Orientation="Horizontal"
-                            Spacing="8" />
+                        <!-- 描述在胶囊上方（2026-09-21 二轮批复） -->
                         <TextBlock
                             x:Name="IdentityHintText"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             TextWrapping="Wrap" />
+                        <StackPanel
+                            x:Name="IdentityChoices"
+                            Orientation="Horizontal"
+                            Spacing="8" />
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -484,30 +487,37 @@
             </Grid>
         </Border>
 
-        <!-- 二次确认覆盖层（用户批复 6：手动编辑自定义延时后提交需确认） -->
-        <Border
-            x:Name="ConfirmOverlay"
-            Padding="24"
-            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="{StaticResource OverlayCornerRadius}"
-            Visibility="Collapsed">
-            <StackPanel Spacing="14" VerticalAlignment="Center">
-                <TextBlock FontSize="18" FontWeight="SemiBold" Text="确认自定义延时" />
-                <TextBlock
-                    x:Name="ConfirmText"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource BodyTextBlockStyle}"
-                    TextWrapping="Wrap" />
-                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
-                    <Button Click="OnConfirmDelayRejected" Content="返回修改" />
-                    <Button
-                        Click="OnConfirmDelayAccepted"
-                        Content="确认使用"
-                        Style="{StaticResource AccentButtonStyle}" />
+        <!-- 二次确认覆盖层（用户批复 6：手动编辑自定义延时后提交需确认）。
+             2026-09-21 批复：从"一块普通面板"改成**弹窗视觉** —— 全区遮罩 + 居中卡片 +
+             右下角标准按钮行（ContentDialog 不能嵌套，这是同层实现的标准弹窗观感）。 -->
+        <Grid x:Name="ConfirmOverlay" Visibility="Collapsed">
+            <!-- 遮罩：压暗底下内容，聚焦确认卡 -->
+            <Border Background="#88000000" />
+            <Border
+                Padding="24"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Width="400">
+                <StackPanel Spacing="14">
+                    <TextBlock FontSize="18" FontWeight="SemiBold" Text="确认自定义延时" />
+                    <TextBlock
+                        x:Name="ConfirmText"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        TextWrapping="Wrap" />
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                        <Button Click="OnConfirmDelayRejected" Content="返回修改" />
+                        <Button
+                            Click="OnConfirmDelayAccepted"
+                            Content="确认使用"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
-        </Border>
+            </Border>
+        </Grid>
     </Grid>
 </ContentDialog>

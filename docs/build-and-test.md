@@ -674,30 +674,31 @@ publish/构建**，否则开始菜单图标不会变（`bin` 里旧 exe 与安�
 
 ---
 
-### 7.7 首启自动注册与默认延时（D63）
+### 7.7 调度计划任务启动期保障与默认延时（D63 → 2026-09-21 改判）
 
-**计划任务**：管理端**第一次启动**时自动注册 `\DelayStartScheduler`（`FirstRunBootstrap`，
-在 `App.OnLaunched` 解析主窗口之前执行）。之后每次启动都只读一个布尔值就返回。
+**计划任务**：管理端**每次启动**都检测 `\DelayStartScheduler`，**缺失即自动补建**
+（`SchedulerTaskBootstrap`，在 `App.OnLaunched` 解析主窗口之前执行；总览页进入时也会经
+状态卡再检测一轮，失败态给「重试创建」按钮）。
 
 ```powershell
-# 验证「首次运行确实注册了」
-schtasks /query /tn DelayStartScheduler            # 注册后应能查到
-Get-Content "$env:APPDATA\DelayStart\config.json"  # 应含 "schedulerTaskInitialized": true
-Select-String -Path "$env:LOCALAPPDATA\DelayStart\manager.log" -Pattern '首启初始化'
+# 验证「任务确实存在」
+schtasks /query /tn DelayStartScheduler            # 应能查到
+Select-String -Path "$env:LOCALAPPDATA\DelayStart\manager.log" -Pattern '调度计划任务'
 ```
 
-🔴 **只在首次运行做一次**，判据是 `config.json` 里的 `schedulerTaskInitialized`。总览页那个开关
-（D3：开 = 注册，关 = 删除）表达的是**用户意图**，自动动作只允许发生在他表达意图**之前** ——
-所以"关掉开关后再重启程序，任务不会被自动装回来"是有意设计，不是遗漏。
+🔴 **语义已改判（2026-09-21 批复，原型 v3）**：原 D63 是"仅首启注册一次、之后绝不插手"，
+判据是 `config.json` 里的 `schedulerTaskInitialized` —— 那是为了保护总览页开关（D3）表达的
+用户意图。本轮该开关被**删除**，任务改为**强制存在**：本软件强依赖调度器，缺失即视为故障
+自动修复，"自动补建推翻用户关掉开关的意愿"的反对理由不复存在。`schedulerTaskInitialized`
+标记随之废止（模型字段已删；老配置里残留的该键被 JSON 反序列化忽略，无需清理）。
 
-三种失败/边界语义：
+失败/边界语义：
 
 | 情形 | 行为 |
 |---|---|
-| 注册失败（组策略、临时故障） | **不落标记** → 下次启动重试。日志里有一条带完整栈的 `Error` |
-| 已存在任务（用户自己开过开关 / 跑过 `--reinstall-task`） | `IsRegistered()` 命中 → 只补标记，不重复注册 |
-| 标记落盘失败 | 任务照常生效，只记 `Warn`；代价是下次启动重查一遍 |
-| ⚠️ 升级上来的老配置（**没有**该字段） | 会补做一次自动注册。此前有意关掉开关的用户会被重新打开一次 —— **仅此一次** |
+| 任务缺失 | `RegisterOrUpdate()` 自动补建，日志记一条 `Info` |
+| 注册失败（组策略、临时故障） | 不抛异常（启动路径），日志记带完整栈的 `Error`；总览页状态卡显示失败态 + 「重试创建」 |
+| 已存在任务 | `IsRegistered()` 命中 → 直接返回，不重复注册 |
 
 **默认延时**：`Settings.DefaultPreset` = **10 秒**（D63 前是 30）。⚠️ 与 D50 的预设列表同理 ——
 **已落盘的 `config.json` 原样保留**，默认值只影响新装 / 未改过该项的配置。想验证默认值需要

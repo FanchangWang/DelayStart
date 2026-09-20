@@ -19,7 +19,8 @@
             此前是整个列表共用一张大卡片（所有组都在里面），改成每组一张卡片后
             "这几条属于同一组"这件事由边框直接说清，边框样式沿用卡片默认画刷/圆角。
         实现上不用 ListView，而是 ItemsControl 套 ItemsControl：
-          - 表头仍只有一份（列宽与行模板逐列相同），跟着分组滚动之外固定；
+          - 表头跟组走：每组「子标题 → 表头 → 卡片」（2026-09-21 二轮批复，
+            列宽与行模板逐列相同）；
           - 外层按组（ViewModel.Groups），子标题 = 「登录后 30 秒 · 3 项」；
           - 内层按行，行模板与改造前完全一致。
         组的意义见 ViewModels/DelayGroup 的备注：同延时的条目本来就会一起启停，
@@ -39,31 +40,23 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 页头 -->
+        <!-- 页头（原常驻 InfoBar「延时不是累加」的要点并入这句描述，2026-09-21 批复：
+             顶部不再摆常驻提示框） -->
         <StackPanel Grid.Row="0" Spacing="4">
             <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="延时启动" />
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
-                Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
+                TextWrapping="Wrap"
+                Text="延时从登录时刻起算、不是累加；同一延时的条目按列表顺序依次启动。若 B 依赖 A 先就绪，请给 B 设置更大的延时。" />
         </StackPanel>
-
-        <!-- 常驻提示条：延时是"相对登录时刻的时间点"这件事必须一直可见（坑 7） -->
-        <InfoBar
-            Grid.Row="1"
-            IsClosable="False"
-            IsOpen="True"
-            Message="延时时间是相对登录时刻的时间点，不是累加。同一时间点的程序按列表顺序依次发起启动。如果 B 依赖 A 先启动，请给 B 设置更大的延时值 —— 只保证发起顺序，不保证 A 已完成初始化。"
-            Severity="Informational"
-            Title="延时不是累加" />
 
         <!-- 配置不可用 / 扫描失败 -->
         <InfoBar
-            Grid.Row="2"
+            Grid.Row="1"
             IsClosable="False"
             IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
             Message="{x:Bind ViewModel.ErrorText, Mode=OneWay}"
@@ -71,7 +64,7 @@
             Title="提示" />
 
         <!-- 工具栏（本批：刷新 + 手动添加） -->
-        <Grid Grid.Row="3" ColumnSpacing="12">
+        <Grid Grid.Row="2" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -95,66 +88,15 @@
                 Content="刷新" />
         </Grid>
 
-        <!-- 列表区：表头只一份 → 每组「子标题 + 一张边框卡片」
-             表头左内边距 28 = 组卡片 8 内边距 + 行 20 内边距，标题与行内容逐列对齐。 -->
-        <Grid Grid.Row="4" RowSpacing="8">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Padding="28,0,28,0" ColumnSpacing="10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="28" />
-                    <ColumnDefinition Width="40" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="90" />
-                    <ColumnDefinition Width="80" />
-                    <ColumnDefinition Width="70" />
-                    <ColumnDefinition Width="76" />
-                    <ColumnDefinition Width="170" />
-                </Grid.ColumnDefinitions>
-                <TextBlock
-                    Grid.Column="0"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="#" />
-                <TextBlock
-                    Grid.Column="2"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="程序" />
-                <TextBlock
-                    Grid.Column="3"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="延时" />
-                <TextBlock
-                    Grid.Column="4"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="身份" />
-                <TextBlock
-                    Grid.Column="5"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="启用" />
-                <TextBlock
-                    Grid.Column="6"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="顺序" />
-                <TextBlock
-                    Grid.Column="7"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="操作" />
-            </Grid>
-
-            <ScrollViewer
-                Grid.Row="1"
-                HorizontalScrollMode="Disabled"
-                VerticalScrollBarVisibility="Auto">
+        <!-- 列表区：每组「子标题 → 表头 → 边框卡片」（2026-09-21 二轮批复：表头跟组走，
+             子标题在表头上方）。表头左内边距 28 = 组卡片 8 内边距 + 行 20 内边距，
+             与行内容逐列对齐；列标题列内水平居中。
+             ⚠️ 本区必须落在 * 行上（滚动 bug 教训）：放 Auto 行时 ScrollViewer 拿不到
+             高度约束，会整体撑开到内容高度，滚动条永不出现（2026-09-21 实测）。 -->
+        <ScrollViewer
+            Grid.Row="3"
+            HorizontalScrollMode="Disabled"
+            VerticalScrollBarVisibility="Auto">
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Groups}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:DelayGroup">
@@ -171,6 +113,64 @@
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="{x:Bind CountText}" />
                                 </StackPanel>
+
+                                <!-- 表头：跟组走（每列表头，子标题在其上方）。
+                                     列宽与行模板逐列相同；左内边距 28 = 卡片 8 + 行 20，
+                                     与行内容逐列对齐。 -->
+                                <Grid Padding="28,0,28,2" ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="28" />
+                                        <ColumnDefinition Width="40" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="70" />
+                                        <ColumnDefinition Width="76" />
+                                        <ColumnDefinition Width="170" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="#" />
+                                    <TextBlock
+                                        Grid.Column="2"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="程序" />
+                                    <TextBlock
+                                        Grid.Column="3"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="延时" />
+                                    <TextBlock
+                                        Grid.Column="4"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="身份" />
+                                    <TextBlock
+                                        Grid.Column="5"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="启用" />
+                                    <TextBlock
+                                        Grid.Column="6"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="顺序" />
+                                    <TextBlock
+                                        Grid.Column="7"
+                                        HorizontalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="操作" />
+                                </Grid>
 
                                 <!-- 边框：本组条目（画刷/圆角沿用卡片默认） -->
                                 <Border
@@ -194,13 +194,13 @@
                                                         <ColumnDefinition Width="170" />
                                                     </Grid.ColumnDefinitions>
 
-                                                    <!-- 顺序：与调度端的发起顺序一致 -->
+                                                    <!-- 顺序：与调度端的发起顺序一致（组内 ↑↓ 局部更新时联动） -->
                                                     <TextBlock
                                                         Grid.Column="0"
                                                         VerticalAlignment="Center"
                                                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                                        Text="{x:Bind OrderText}" />
+                                                        Text="{x:Bind OrderText, Mode=OneWay}" />
 
                                                     <!-- 图标（D30）：64px 源显示为 32 DIP，200% DPI 下不糊；取不到时显示占位符 -->
                                                     <Grid
@@ -252,12 +252,14 @@
                                                         Style="{StaticResource CaptionTextBlockStyle}"
                                                         Text="{x:Bind IdentityText}" />
 
-                                                    <!-- 条目级开关（FR-4.6）：只影响本次登录是否启动它，不动系统 -->
+                                                    <!-- 条目级开关（FR-4.6）：只影响本次登录是否启动它，不动系统。
+                                                         OneWay：局部更新后由 VM 推回真实状态（WMC1506 之外，
+                                                         DelayRow 现在是 ObservableObject，OneWay 合法）。 -->
                                                     <ToggleSwitch
                                                         Grid.Column="5"
                                                         MinWidth="0"
                                                         VerticalAlignment="Center"
-                                                        IsOn="{x:Bind IsEnabled}"
+                                                        IsOn="{x:Bind IsEnabled, Mode=OneWay}"
                                                         OffContent=""
                                                         OnContent=""
                                                         Toggled="OnEnabledToggled" />
@@ -306,11 +308,10 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </ScrollViewer>
-        </Grid>
 
         <!-- 空状态（design-spec 页面 3） -->
         <StackPanel
-            Grid.Row="4"
+            Grid.Row="3"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Spacing="6"

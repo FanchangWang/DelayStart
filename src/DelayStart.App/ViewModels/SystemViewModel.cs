@@ -91,6 +91,14 @@ public partial class SystemViewModel : ObservableObject
     [ObservableProperty]
     public partial string TextEmptyHint { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 名值列表（Winlogon / 组策略）当前有没有数据。为 <see langword="false"/> 时
+    /// 列表区域整体让位给空提示（2026-09-21 批复：提示展示在列表占位区域，
+    /// 与总览「最近一次开机调度」的空状态同一表达）。
+    /// </summary>
+    [ObservableProperty]
+    public partial bool HasTextEntries { get; set; }
+
     /// <summary>是否正在加载。</summary>
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
@@ -132,7 +140,10 @@ public partial class SystemViewModel : ObservableObject
                     var winlogon = await Task.Run(SystemStartupInspector.ReadWinlogon).ConfigureAwait(true);
                     ReplaceAll(WinlogonEntries, winlogon);
                     Subtitle = $"Winlogon 关键值 · {WinlogonEntries.Count} 项";
-                    TextEmptyHint = string.Empty;
+                    TextEmptyHint = winlogon.Count == 0
+                        ? "没有读到 Winlogon 自启动项。"
+                        : string.Empty;
+                    HasTextEntries = winlogon.Count > 0;
                     break;
                 }
 
@@ -144,6 +155,7 @@ public partial class SystemViewModel : ObservableObject
                     TextEmptyHint = GroupPolicyEntries.Count == 0
                         ? "本机没有组策略下发的自启动项 —— 这是正常现象：只有域环境统一推送，或手动用 gpedit.msc 配置过「启动脚本 / 策略 Run」的机器，这里才会有内容。"
                         : string.Empty;
+                    HasTextEntries = GroupPolicyEntries.Count > 0;
                     break;
                 }
             }

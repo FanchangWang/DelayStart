@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 
 using DelayStart.App.Services;
 
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -22,21 +23,27 @@ public sealed partial class MainWindow : Window
     private readonly ShellNavigator _shellNavigator;
     private readonly ThemeService _themeService;
 
+    /// <summary>通知自动消失的定时器（右下角 toast，2026-09-21 批复）。</summary>
+    private DispatcherQueueTimer? _toastTimer;
+
     /// <summary>构造主窗口。</summary>
     /// <param name="navigation">导航服务，由容器注入。</param>
     /// <param name="shellNavigator">跨页导航器，由容器注入；页面用它跳菜单。</param>
     /// <param name="handles">窗口句柄提供者。文件选择器 / 拖放等 WinRT 互操作要它。</param>
     /// <param name="themeService">主题服务。读取配置里的主题偏好并在切换时联动。</param>
+    /// <param name="toastService">应用内通知服务。设置页等处的成功提示经它广播到右下角。</param>
     public MainWindow(
         NavigationService navigation,
         ShellNavigator shellNavigator,
         WindowHandleProvider handles,
-        ThemeService themeService)
+        ThemeService themeService,
+        ToastService toastService)
     {
         ArgumentNullException.ThrowIfNull(navigation);
         ArgumentNullException.ThrowIfNull(shellNavigator);
         ArgumentNullException.ThrowIfNull(handles);
         ArgumentNullException.ThrowIfNull(themeService);
+        ArgumentNullException.ThrowIfNull(toastService);
 
         _navigation = navigation;
         _shellNavigator = shellNavigator;
@@ -49,6 +56,9 @@ public sealed partial class MainWindow : Window
         RootGrid.RequestedTheme = ThemeService.ToElementTheme(_themeService.Current);
         _themeService.ThemeChanged += theme =>
             RootGrid.RequestedTheme = ThemeService.ToElementTheme(theme);
+
+        // 右下角通知：广播 → 显示 → 3.5 秒后自动消失；连发时重置计时。
+        toastService.Requested += ShowToast;
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -94,6 +104,35 @@ public sealed partial class MainWindow : Window
     {
         Interop.FileDropReceiver.EnableTree(
             WinRT.Interop.WindowNative.GetWindowHandle(this));
+    }
+
+    /// <summary>显示右下角应用内通知，3.5 秒后自动消失（连发时重置计时）。</summary>
+    /// <param name="message">要展示的文本。</param>
+    /// <remarks>
+    /// 事件来自 <see cref="ToastService"/> 的广播。⚠️ 广播线程不保证是 UI 线程
+    /// （ViewModel 侧都是 UI 线程调用，但契约上不承诺），经 DispatcherQueue 切回 UI 线程。
+    /// </remarks>
+    private void ShowToast(string message)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            ToastText.Text = message;
+            ToastPanel.Visibility = Visibility.Visible;
+
+            _toastTimer ??= DispatcherQueue.CreateTimer();
+            _toastTimer.Stop();
+            _toastTimer.Interval = TimeSpan.FromMilliseconds(3500);
+            _toastTimer.IsRepeating = false;
+            _toastTimer.Tick += OnToastTimerTick;
+            _toastTimer.Start();
+        });
+    }
+
+    private void OnToastTimerTick(DispatcherQueueTimer sender, object args)
+    {
+        sender.Tick -= OnToastTimerTick;
+        sender.Stop();
+        ToastPanel.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>在指定 Tag 的顶层菜单项之后插入分隔线。</summary>

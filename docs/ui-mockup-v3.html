@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DelayStart UI v3 · 本轮交互优化原型</title>
+<!--
+  本轮（v3）优化点（评审用）：
+  ① 顶部独立 InfoBar 信息提示全部移除 → 并入页头标题下方的描述文字，文案精简
+  ② 列表列标题改为列内水平居中
+  ③ 子标题下不再放描述文字 → 描述移入对应边框卡片内部，文案重写
+  ④ 总览：删除「最大延时」；「开机调度任务」改为自动创建 + 状态卡（失败强提示 + 重试按钮，无开关）
+  ⑤ 总览「最近一次开机调度」空状态重排
+  ⑥ 运行日志：进入页面时最新一组默认展开
+  ⑦ 设置：预设胶囊垃圾桶 hover 反馈（手型 + 变红）；删除走 ContentDialog 二次确认；
+     添加成功提示改为右下角自动消失的应用内通知（WinUI 3 无内置该控件，需自绘 ToastPanel）
+  ⑧ 编辑弹窗：固定宽度（页签切换不再撑宽）；标题下描述移除；各子标题描述移入边框内部；
+     自定义延时二次确认改为「弹窗样式」（⚠️ ContentDialog 不能嵌套，实现上是把
+     确认覆盖层重画成 ContentDialog 同款视觉：遮罩 + 居中卡片 + 标准按钮行）
+-->
+<style>
+  :root {
+    --bg: #f3f3f3;
+    --card: #ffffff;
+    --card-border: #e5e5e5;
+    --hover: #f0f0f0;
+    --active: #ebebeb;
+    --accent: #0067c0;
+    --accent-hover: #0078d4;
+    --on-accent: #ffffff;
+    --text: #1a1a1a;
+    --text-2: #616161;
+    --text-3: #8a8a8a;
+    --divider: #e5e5e5;
+    --danger: #a4262c;
+    --danger-bg: #fde7e9;
+    --ok: #0f7b0f;
+    --ok-bg: #dff6dd;
+    --warn-fg: #9d5d00; --warn-bg: #fff4ce;
+    --input-bg: #ffffff;
+    --input-border: #d1d1d1;
+    --scrim: rgba(0,0,0,.35);
+    --dlg-shadow: 0 16px 48px rgba(0,0,0,.22);
+  }
+  body.dark {
+    --bg: #202020; --card: #2b2b2b; --card-border: #383838;
+    --hover: #2f2f2f; --active: #383838;
+    --accent: #4cc2ff; --accent-hover: #63cbff; --on-accent: #000;
+    --text: #ffffff; --text-2: #c9c9c9; --text-3: #8a8a8a;
+    --divider: #3b3b3b; --danger: #ff99a4; --danger-bg: #4b2529;
+    --ok: #6ccb5f; --ok-bg: #393d1b;
+    --warn-fg: #ffc83d; --warn-bg: #453218;
+    --input-bg: #383838; --input-border: #4a4a4a;
+    --scrim: rgba(0,0,0,.5);
+    --dlg-shadow: 0 16px 48px rgba(0,0,0,.5);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; }
+  body { font-family:"Segoe UI Variable","Segoe UI","Microsoft YaHei UI",sans-serif;
+         font-size:14px; color:var(--text); background:var(--bg); overflow:hidden; }
+
+  .app { display:flex; flex-direction:column; height:100vh; position:relative; }
+  .titlebar { height:42px; flex:none; display:flex; align-items:center; padding-left:14px; gap:10px; user-select:none; }
+  .titlebar .app-name { font-size:13px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar button { border:none; background:transparent; color:var(--text-2); cursor:pointer;
+                     font-size:14px; padding:6px 10px; border-radius:6px; }
+  .titlebar button:hover { background:var(--hover); }
+  .win-btns { display:flex; }
+  .win-btns span { width:46px; height:42px; display:grid; place-items:center; color:var(--text-2); font-size:11px; }
+  .win-btns span:hover { background:var(--hover); }
+  .win-btns .close:hover { background:#c42b1c; color:#fff; }
+
+  .main { flex:1; display:flex; min-height:0; }
+
+  /* ── 导航 ── */
+  .nav { width:208px; flex:none; overflow-y:auto; padding:4px 6px 16px; }
+  .nav-item { display:flex; align-items:center; gap:12px; height:36px; padding:0 10px;
+              border-radius:6px; cursor:pointer; white-space:nowrap; position:relative; margin-bottom:2px; }
+  .nav-item:hover { background:var(--hover); }
+  .nav-item.active { background:var(--active); }
+  .nav-item.active::before { content:""; position:absolute; left:0; top:9px; bottom:9px;
+                             width:3px; border-radius:2px; background:var(--accent); }
+  .nav-item .ico { width:18px; text-align:center; flex:none; font-size:15px; color:var(--text-2); }
+  .nav-item.active .ico { color:var(--accent); }
+  .nav-group .arrow { margin-left:auto; font-size:10px; color:var(--text-3); transition:transform .15s; }
+  .nav-group.open .arrow { transform:rotate(90deg); }
+  .nav-sub { display:none; }
+  .nav-group.open + .nav-sub { display:block; }
+  .nav-sub .nav-item { padding-left:40px; height:32px; font-size:13px; color:var(--text-2); }
+
+  /* ── 内容区 ── */
+  .content { flex:1; min-width:0; overflow-y:auto; position:relative; }
+  .page { display:none; max-width:1000px; margin:0 auto; padding:14px 32px 40px; }
+  .page.active { display:block; }
+  .page-head h1 { font-size:24px; font-weight:600; margin-bottom:4px; }
+  .page-head .desc { color:var(--text-2); line-height:1.5; }
+  .page-head .desc .em { color:var(--text); font-weight:600; }
+
+  .sec-title { font-size:14px; font-weight:600; margin:28px 0 8px; }
+  .sec-title .demo { font-size:12px; font-weight:400; color:var(--text-3); margin-left:10px; cursor:pointer; }
+  .sec-title .demo:hover { color:var(--accent); }
+
+  .card { background:var(--card); border:1px solid var(--card-border); border-radius:7px; }
+  .card .card-inner-pad { padding:12px 16px; }
+  .card .caption { color:var(--text-2); font-size:12px; line-height:1.55; }
+  .card .caption + .caption { margin-top:2px; }
+
+  /* 计数 chip */
+  .chips { display:flex; gap:10px; margin-top:12px; }
+  .chip { min-width:130px; flex:1; padding:10px 16px; text-align:center; cursor:pointer;
+          background:var(--card); border:1px solid var(--card-border); border-radius:6px; }
+  .chip:hover { background:var(--hover); }
+  .chip .num { font-size:20px; font-weight:600; }
+  .chip .lbl { font-size:12px; color:var(--text-2); margin-top:1px; }
+
+  /* 表格（表头列内居中） */
+  .thead { display:grid; column-gap:12px; color:var(--text-2); font-size:12px; padding:8px 16px 4px; }
+  .thead div { text-align:center; }
+  .trow { display:grid; column-gap:12px; padding:9px 16px; border-top:1px solid var(--divider); align-items:center; }
+  .trow:first-of-type { border-top:none; }
+
+  /* 开关 */
+  .switch { width:40px; height:20px; border-radius:10px; background:var(--text-3); position:relative;
+            cursor:pointer; flex:none; border:1px solid transparent; transition:background .12s; }
+  .switch::after { content:""; position:absolute; top:3px; left:4px; width:12px; height:12px;
+                   border-radius:50%; background:var(--text); transition:left .12s; }
+  .switch.on { background:var(--accent); }
+  .switch.on::after { left:22px; background:var(--on-accent); }
+
+  .badge { display:inline-block; padding:2px 10px; border-radius:10px; font-size:12px; font-weight:600; }
+  .badge.ok { color:var(--ok); background:var(--ok-bg); }
+  .badge.err { color:var(--danger); background:var(--danger-bg); }
+  .result-ok { color:var(--text-2); font-size:12px; }
+  .result-fail { color:var(--danger); font-size:12px; font-weight:600; }
+
+  /* 按钮 */
+  .btn { border:1px solid var(--input-border); background:var(--card); color:var(--text);
+         padding:5px 14px; border-radius:5px; font-size:14px; cursor:pointer; }
+  .btn:hover { background:var(--hover); }
+  .btn.accent { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+  .btn.accent:hover { background:var(--accent-hover); }
+  .btn.danger { background:var(--danger); border-color:var(--danger); color:#fff; font-weight:600; }
+  .btn.small { padding:3px 10px; font-size:12px; }
+  input[type=text], input[type=number], .combo {
+    background:var(--input-bg); border:1px solid var(--input-border); border-radius:5px;
+    padding:6px 10px; font-size:14px; color:var(--text); outline:none; }
+  input:focus { border-bottom:2px solid var(--accent); }
+  .combo { cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
+  .combo::after { content:"▾"; font-size:10px; color:var(--text-2); }
+
+  /* 工具栏 */
+  .toolbar { display:flex; align-items:center; gap:12px; margin-top:14px; }
+  .toolbar .grow { flex:1; }
+
+  /* Expander（运行日志分组 / 延时组） */
+  .expander { border:1px solid var(--card-border); border-radius:7px; background:var(--card); margin-bottom:8px; }
+  .expander > .exp-head { display:flex; align-items:center; gap:10px; padding:11px 16px; cursor:pointer;
+                          font-weight:600; border-radius:7px; }
+  .expander > .exp-head:hover { background:var(--hover); }
+  .expander > .exp-head .chev { font-size:10px; color:var(--text-2); transition:transform .15s; }
+  .expander.open > .exp-head .chev { transform:rotate(90deg); }
+  .expander > .exp-body { display:none; padding:0 8px 8px; }
+  .expander.open > .exp-body { display:block; }
+  .expander .cnt { font-size:12px; font-weight:400; color:var(--text-3); }
+
+  /* 延时行 8 列：# / 图标 / 程序 / 延时 / 身份 / 启用 / 顺序 / 操作 */
+  .delay-grid { display:grid; grid-template-columns:28px 36px 1fr 90px 80px 64px 76px 150px;
+                column-gap:10px; align-items:center; padding:9px 12px; }
+  .delay-head { display:grid; grid-template-columns:28px 36px 1fr 90px 80px 64px 76px 150px;
+                column-gap:10px; padding:6px 12px 4px 40px; color:var(--text-2); font-size:12px; }
+  .delay-head div { text-align:center; }
+  .delay-row { border-top:1px solid var(--divider); }
+  .delay-row .prog-name { font-weight:600; }
+  .delay-row .prog-path, .delay-row .prog-src { font-size:12px; color:var(--text-2); }
+  .delay-row .prog-src { color:var(--text-3); }
+  .ord-btns { display:flex; gap:4px; justify-content:center; }
+  .op-btns { display:flex; gap:6px; }
+  .icon-slot { width:28px; height:28px; border-radius:5px; background:var(--hover);
+               display:grid; place-items:center; font-size:13px; color:var(--text-2); }
+
+  /* 运行日志 4 列：程序 / 延时 / 结果 / 说明 */
+  .run-grid { display:grid; grid-template-columns:1fr 70px 90px 1fr; column-gap:12px;
+              align-items:center; padding:7px 20px; }
+  .run-head { display:grid; grid-template-columns:1fr 70px 90px 1fr; column-gap:12px;
+              color:var(--text-2); font-size:12px; padding:6px 20px 2px; }
+  .run-head div { text-align:center; }
+  .run-row { border-top:1px solid var(--divider); font-size:13px; }
+  .run-row .why { color:var(--text-3); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* 总览：最近调度小表 4 列：时间 / 程序 / 延时 / 结果 */
+  .recent-grid { display:grid; grid-template-columns:110px 1fr 90px 70px; column-gap:16px;
+                 align-items:center; padding:7px 16px; }
+  .recent-head { display:grid; grid-template-columns:110px 1fr 90px 70px; column-gap:16px;
+                 color:var(--text-2); font-size:12px; padding:8px 16px 4px; }
+  .recent-head div { text-align:center; }
+  .recent-row { border-top:1px solid var(--divider); font-size:13px; }
+  .recent-row .tm { color:var(--text-3); font-size:12px; }
+  .recent-row .dl { color:var(--text-2); font-size:12px; }
+
+  /* 空状态 */
+  .empty { text-align:center; padding:36px 16px; }
+  .empty .big { font-size:26px; opacity:.5; }
+  .empty .t1 { margin-top:8px; color:var(--text-2); }
+  .empty .t2 { margin-top:4px; font-size:12px; color:var(--text-3); }
+
+  /* 设置卡（PowerToys SettingsCard） */
+  .scard { display:flex; align-items:center; gap:16px; padding:14px 16px;
+           background:var(--card); border:1px solid var(--card-border); border-radius:7px; }
+  .scard + .scard { margin-top:2px; }
+  .scard .s-left { flex:1; }
+  .scard .s-title { font-weight:600; }
+  .scard .s-desc { color:var(--text-2); font-size:12px; margin-top:2px; line-height:1.5; }
+
+  /* 预设胶囊 */
+  .pill-wrap { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:14px;
+          border:1px solid var(--input-border); background:var(--card); cursor:pointer; font-size:13px; }
+  .pill:hover { background:var(--hover); }
+  .pill.on { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+  .pill .trash { font-size:12px; color:var(--text-3); padding:1px 3px; border-radius:4px; cursor:pointer; line-height:1; }
+  .pill .trash:hover { color:var(--danger); background:var(--danger-bg); }
+  .pill.on .trash { color:inherit; opacity:.8; }
+  .pill.on .trash:hover { color:var(--danger); background:rgba(255,255,255,.25); }
+
+  /* Toast（右下角应用内通知，自动消失） */
+  .toast { position:absolute; right:24px; bottom:24px; z-index:60;
+           background:var(--card); border:1px solid var(--card-border); border-radius:7px;
+           box-shadow:var(--dlg-shadow); padding:12px 16px; display:flex; align-items:center; gap:10px;
+           min-width:260px; animation:toast-in .2s ease; }
+  @keyframes toast-in { from { transform:translateY(8px); opacity:0; } to { transform:none; opacity:1; } }
+  .toast .t-ico { color:var(--ok); font-weight:700; }
+  .toast.hide { display:none; }
+
+  /* 弹窗（ContentDialog 同款：遮罩 + 居中卡片，宽度 ≤548） */
+  .scrim { position:absolute; inset:0; background:var(--scrim); z-index:40;
+           display:none; align-items:center; justify-content:center; }
+  .scrim.show { display:flex; }
+  .dlg { width:548px; max-width:calc(100vw - 48px); background:var(--bg); border:1px solid var(--card-border);
+         border-radius:8px; box-shadow:var(--dlg-shadow); padding:24px; }
+  .dlg.small { width:432px; }
+  .dlg h3 { font-size:20px; font-weight:600; margin-bottom:14px; }
+  .dlg .dlg-body { color:var(--text-2); line-height:1.6; }
+  .dlg .dlg-foot { display:flex; justify-content:flex-end; gap:8px; margin-top:22px; }
+  .vbar { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:9px 12px;
+          border-radius:6px; background:var(--danger-bg); color:var(--danger); font-size:13px; }
+
+  /* 编辑弹窗内部 */
+  .ed-sec { margin-top:16px; }
+  .ed-sec .ed-title { font-size:14px; font-weight:600; margin-bottom:8px; }
+  .ed-card { background:var(--card); border:1px solid var(--card-border); border-radius:6px; padding:12px; }
+  .ed-card .caption { color:var(--text-2); font-size:12px; line-height:1.55; margin-bottom:10px; }
+  .seg { display:flex; background:var(--hover); border-radius:8px; padding:4px; margin-bottom:12px; }
+  .seg .seg-btn { flex:1; text-align:center; padding:8px 0; border-radius:6px; cursor:pointer;
+                  font-size:14px; font-weight:600; color:var(--text); }
+  .seg .seg-btn.on { background:var(--accent); color:var(--on-accent); }
+  .dropzone { background:var(--hover); border-radius:4px; padding:18px 16px; text-align:center; cursor:pointer; }
+  .dropzone:hover { background:var(--active); }
+  .dropzone .dz-sub { font-size:12px; color:var(--text-3); margin-top:4px; }
+  .field { margin-top:10px; }
+  .field label { display:block; font-size:12px; color:var(--text-2); margin-bottom:4px; }
+  .field input { width:100%; }
+  .picked { display:flex; align-items:center; gap:12px; background:var(--hover); border-radius:4px; padding:10px 12px; }
+  .picked .p-name { font-weight:600; }
+  .picked .p-path { font-size:12px; color:var(--text-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .picked .grow { flex:1; min-width:0; }
+
+  /* 评审用注释条 */
+  .note { margin:10px 0 0; padding:8px 12px; border:1px dashed var(--input-border); border-radius:6px;
+          font-size:12px; color:var(--text-3); line-height:1.6; }
+  .note b { color:var(--text-2); font-weight:600; }
+  .note summary { cursor:pointer; color:var(--text-2); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── 标题栏 ── -->
+  <div class="titlebar">
+    <span class="app-name">DelayStart</span>
+    <span class="spacer"></span>
+    <button id="btnTheme" title="切换深浅色">🌓</button>
+    <div class="win-btns"><span>─</span><span>▢</span><span class="close">✕</span></div>
+  </div>
+
+  <div class="main">
+    <!-- ── 导航 ── -->
+    <div class="nav" id="nav">
+      <div class="nav-item" data-page="overview"><span class="ico">⌂</span><span class="lbl">总览</span></div>
+      <div class="nav-item" data-page="delay"><span class="ico">⏱</span><span class="lbl">延时启动</span></div>
+      <div class="nav-group open">
+        <div class="nav-item nav-parent"><span class="ico">▤</span><span class="lbl">自启动项</span><span class="arrow">▶</span></div>
+      </div>
+      <div class="nav-sub">
+        <div class="nav-item" data-page="items-reg"><span class="lbl">注册表</span></div>
+        <div class="nav-item" data-page="items-folder"><span class="lbl">启动文件夹</span></div>
+        <div class="nav-item" data-page="items-task"><span class="lbl">计划任务</span></div>
+        <div class="nav-item" data-page="items-uwp"><span class="lbl">UWP Apps</span></div>
+      </div>
+      <div class="nav-group open">
+        <div class="nav-item nav-parent"><span class="ico">⛭</span><span class="lbl">系统启动项</span><span class="arrow">▶</span></div>
+      </div>
+      <div class="nav-sub">
+        <div class="nav-item" data-page="sys-services"><span class="lbl">服务</span></div>
+        <div class="nav-item" data-page="sys-drivers"><span class="lbl">驱动</span></div>
+        <div class="nav-item" data-page="sys-winlogon"><span class="lbl">Winlogon</span></div>
+        <div class="nav-item" data-page="sys-gpo"><span class="lbl">组策略</span></div>
+      </div>
+      <div class="nav-item" data-page="runs"><span class="ico">≡</span><span class="lbl">运行日志</span></div>
+      <div class="nav-item" data-page="settings"><span class="ico">⚙</span><span class="lbl">设置</span></div>
+    </div>
+
+    <!-- ── 内容区 ── -->
+    <div class="content" id="content">
+
+      <!-- ═══════════ 总览 ═══════════ -->
+      <div class="page" id="page-overview">
+        <div class="page-head">
+          <h1>总览</h1>
+          <p class="desc">延时启动的运行状态一览：条目分布、调度任务与最近一次运行结果。</p>
+        </div>
+        <details class="note"><summary>本轮改动</summary>
+          · 删除「最大延时」分节<br>
+          · 顶部「上次运行有失败」InfoBar 移除 —— 失败信息并入「最近一次开机调度」的结果列<br>
+          · 「开机调度任务」从开关改为状态卡：启动时自动检测并创建，失败强提示 + 重试按钮<br>
+          · 「最近一次开机调度」空状态重排<br>
+          · 各分节描述文案精简
+        </details>
+
+        <!-- 延时启动 -->
+        <div class="sec-title">延时启动</div>
+        <div class="chips">
+          <div class="chip" onclick="navTo('delay')"><div class="num">6</div><div class="lbl">注册表</div></div>
+          <div class="chip" onclick="navTo('delay')"><div class="num">3</div><div class="lbl">启动文件夹</div></div>
+          <div class="chip" onclick="navTo('delay')"><div class="num">4</div><div class="lbl">计划任务</div></div>
+          <div class="chip" onclick="navTo('delay')"><div class="num">2</div><div class="lbl">UWP Apps</div></div>
+          <div class="chip" onclick="navTo('delay')"><div class="num">1</div><div class="lbl">手动添加</div></div>
+        </div>
+
+        <!-- 开机调度任务：状态卡（无开关） -->
+        <div class="sec-title">开机调度任务
+          <span class="demo" onclick="toggleSched()">⇄ 演示：正常 / 创建失败</span>
+        </div>
+        <!-- 正常态 -->
+        <div class="card" id="schedOk">
+          <div class="card-inner-pad" style="display:flex; align-items:center; gap:16px;">
+            <div style="flex:1;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-weight:600;">调度任务已就绪</span>
+                <span class="badge ok">✓ 已启用</span>
+              </div>
+              <div class="caption" style="margin-top:4px;">
+                登录时由计划任务拉起调度器，按延时依次启动条目。任务缺失时会自动重新创建，无需手动维护。
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 失败态（强提示 + 重试） -->
+        <div class="card" id="schedFail" style="display:none; border-color:var(--danger);">
+          <div class="card-inner-pad" style="display:flex; align-items:center; gap:16px;">
+            <div style="flex:1;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-weight:600; color:var(--danger);">调度任务创建失败</span>
+                <span class="badge err">✕ 未就绪</span>
+              </div>
+              <div class="caption" style="margin-top:4px; color:var(--danger);">
+                没有调度任务，延时启动不会生效。点击右侧按钮重试；若反复失败，请查看运行日志中的错误详情。
+              </div>
+            </div>
+            <button class="btn accent" onclick="toast('正在重新创建调度任务…')">重试创建</button>
+          </div>
+        </div>
+
+        <!-- 系统自启动项 -->
+        <div class="sec-title">系统自启动项</div>
+        <div class="chips">
+          <div class="chip" onclick="navTo('items-reg')"><div class="num">18</div><div class="lbl">注册表</div></div>
+          <div class="chip" onclick="navTo('items-folder')"><div class="num">5</div><div class="lbl">启动文件夹</div></div>
+          <div class="chip" onclick="navTo('items-task')"><div class="num">42</div><div class="lbl">计划任务</div></div>
+          <div class="chip" onclick="navTo('items-uwp')"><div class="num">9</div><div class="lbl">UWP Apps</div></div>
+        </div>
+
+        <!-- 最近一次开机调度 -->
+        <div class="sec-title">最近一次开机调度
+          <span class="demo" onclick="toggleRecent()">⇄ 演示：有记录 / 无记录</span>
+        </div>
+        <div class="card" id="recentFull">
+          <div class="recent-head">
+            <div>时间</div><div>程序</div><div>延时</div><div>结果</div>
+          </div>
+          <div class="recent-grid recent-row"><div class="tm">08:00:03</div><div>Everything</div><div class="dl">10 秒</div><div><span class="result-ok">成功</span></div></div>
+          <div class="recent-grid recent-row"><div class="tm">08:00:13</div><div>微信</div><div class="dl">10 秒</div><div><span class="result-fail">失败</span></div></div>
+          <div class="recent-grid recent-row"><div class="tm">08:00:31</div><div>Snipaste</div><div class="dl">30 秒</div><div><span class="result-ok">成功</span></div></div>
+          <div style="display:flex; justify-content:flex-end; padding:7px 16px 9px; border-top:1px solid var(--divider);">
+            <a href="#" onclick="navTo('runs'); return false;" style="color:var(--accent); font-size:12px; text-decoration:none;">查看运行日志 →</a>
+          </div>
+        </div>
+        <div class="card" id="recentEmpty" style="display:none;">
+          <div class="empty">
+            <div class="big">◍</div>
+            <div class="t1">还没有调度记录</div>
+            <div class="t2">接管条目并重启后，每次登录的启动结果都会出现在这里</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 延时启动 ═══════════ -->
+      <div class="page" id="page-delay">
+        <div class="page-head">
+          <h1>延时启动</h1>
+          <p class="desc">延时从登录时刻起算、<span class="em">不是累加</span>；同一延时的条目按列表顺序依次启动。若 B 依赖 A 先就绪，请给 B 设置更大的延时。</p>
+        </div>
+        <details class="note"><summary>本轮改动</summary>
+          · 顶部常驻 InfoBar「延时不是累加」移除 → 并入页头描述（文案压缩为一句）<br>
+          · 列标题改为列内水平居中<br>
+          · 手动添加弹窗见下
+        </details>
+
+        <div class="toolbar">
+          <div class="grow"></div>
+          <button class="btn" onclick="openEditor()">手动添加</button>
+          <button class="btn">刷新</button>
+        </div>
+
+        <!-- 组：登录后 10 秒 -->
+        <div class="sec-title" style="margin-top:18px;">登录后 10 秒 <span class="cnt" style="font-size:12px; color:var(--text-3);">· 2 项</span></div>
+        <div class="card" style="padding:4px 0;">
+          <div class="delay-head">
+            <div>#</div><div></div><div>程序</div><div>延时</div><div>身份</div><div>启用</div><div>顺序</div><div>操作</div>
+          </div>
+          <div class="delay-grid delay-row">
+            <div style="color:var(--text-3); font-size:12px; text-align:center;">1</div>
+            <div class="icon-slot">E</div>
+            <div><div class="prog-name">Everything</div><div class="prog-path">C:\Program Files\Everything\Everything.exe</div><div class="prog-src">注册表 · HKCU Run</div></div>
+            <div>10 秒</div><div style="font-size:12px; color:var(--text-2);">普通用户</div>
+            <div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ord-btns"><button class="btn small">↑</button><button class="btn small">↓</button></div>
+            <div class="op-btns"><button class="btn small">编辑</button><button class="btn small">移出延时</button></div>
+          </div>
+          <div class="delay-grid delay-row">
+            <div style="color:var(--text-3); font-size:12px; text-align:center;">2</div>
+            <div class="icon-slot">W</div>
+            <div><div class="prog-name">微信</div><div class="prog-path">shell:AppsFolder\Tencent.WeChat</div><div class="prog-src">UWP Apps</div></div>
+            <div>10 秒</div><div style="font-size:12px; color:var(--text-2);">普通用户</div>
+            <div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ord-btns"><button class="btn small">↑</button><button class="btn small">↓</button></div>
+            <div class="op-btns"><button class="btn small">编辑</button><button class="btn small">移出延时</button></div>
+          </div>
+        </div>
+
+        <!-- 组：登录后 30 秒 -->
+        <div class="sec-title" style="margin-top:18px;">登录后 30 秒 <span class="cnt" style="font-size:12px; color:var(--text-3);">· 3 项</span></div>
+        <div class="card" style="padding:4px 0;">
+          <div class="delay-head">
+            <div>#</div><div></div><div>程序</div><div>延时</div><div>身份</div><div>启用</div><div>顺序</div><div>操作</div>
+          </div>
+          <div class="delay-grid delay-row">
+            <div style="color:var(--text-3); font-size:12px; text-align:center;">1</div>
+            <div class="icon-slot">S</div>
+            <div><div class="prog-name">Snipaste</div><div class="prog-path">D:\Tools\Snipaste\Snipaste.exe</div><div class="prog-src">启动文件夹 · 用户</div></div>
+            <div>30 秒</div><div style="font-size:12px; color:var(--text-2);">普通用户</div>
+            <div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ord-btns"><button class="btn small">↑</button><button class="btn small">↓</button></div>
+            <div class="op-btns"><button class="btn small">编辑</button><button class="btn small">移出延时</button></div>
+          </div>
+          <div class="delay-grid delay-row">
+            <div style="color:var(--text-3); font-size:12px; text-align:center;">2</div>
+            <div class="icon-slot">O</div>
+            <div><div class="prog-name">OneDrive</div><div class="prog-path">C:\Users\xing\OneDrive\OneDrive.exe /background</div><div class="prog-src">注册表 · HKCU Run</div></div>
+            <div>30 秒</div><div style="font-size:12px; color:var(--text-2);">普通用户</div>
+            <div><div class="switch" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ord-btns"><button class="btn small">↑</button><button class="btn small">↓</button></div>
+            <div class="op-btns"><button class="btn small">编辑</button><button class="btn small">移出延时</button></div>
+          </div>
+          <div class="delay-grid delay-row">
+            <div style="color:var(--text-3); font-size:12px; text-align:center;">3</div>
+            <div class="icon-slot">T</div>
+            <div><div class="prog-name">TightVNC Server</div><div class="prog-path">C:\Program Files\TightVNC\tvnserver.exe</div><div class="prog-src">计划任务 · 系统</div></div>
+            <div>30 秒</div><div style="font-size:12px; color:var(--text-2);">管理员</div>
+            <div><div class="switch on" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ord-btns"><button class="btn small">↑</button><button class="btn small">↓</button></div>
+            <div class="op-btns"><button class="btn small">编辑</button><button class="btn small">移出延时</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 运行日志 ═══════════ -->
+      <div class="page" id="page-runs">
+        <div class="page-head">
+          <h1>运行日志</h1>
+          <p class="desc">按登录会话分组的启动结果，最新在前，保留最近 30 次。</p>
+        </div>
+        <details class="note"><summary>本轮改动</summary>
+          · 进入页面时最新一组默认展开（原型中第一组已展开）<br>
+          · 列标题改为列内水平居中
+        </details>
+
+        <div class="toolbar">
+          <span class="combo">全部级别</span>
+          <div class="grow"></div>
+          <button class="btn">打开日志文件</button>
+        </div>
+
+        <!-- 最新一组：默认展开 -->
+        <div class="expander open" style="margin-top:14px;">
+          <div class="exp-head" onclick="toggleExp(this)">
+            <span class="chev">▶</span>
+            <span>2026-09-21 08:00:03</span>
+            <span class="cnt">10 项 · 9 成功 · 1 失败</span>
+          </div>
+          <div class="exp-body">
+            <div class="run-head"><div>程序</div><div>延时</div><div>结果</div><div>说明</div></div>
+            <div class="run-grid run-row"><div>Everything</div><div style="text-align:center;">10 秒</div><div style="text-align:center;"><span class="result-ok">成功</span></div><div class="why"></div></div>
+            <div class="run-grid run-row"><div>微信</div><div style="text-align:center;">10 秒</div><div style="text-align:center;"><span class="result-fail">失败</span></div><div class="why">Win32 错误 2：系统找不到指定的文件</div></div>
+            <div class="run-grid run-row"><div>Snipaste</div><div style="text-align:center;">30 秒</div><div style="text-align:center;"><span class="result-ok">成功</span></div><div class="why"></div></div>
+            <div class="run-grid run-row"><div>TightVNC Server</div><div style="text-align:center;">30 秒</div><div style="text-align:center;"><span class="result-ok">成功</span></div><div class="why"></div></div>
+          </div>
+        </div>
+        <!-- 更早的组：默认折叠 -->
+        <div class="expander">
+          <div class="exp-head" onclick="toggleExp(this)">
+            <span class="chev">▶</span>
+            <span>2026-09-20 08:00:01</span>
+            <span class="cnt">10 项 · 全部成功</span>
+          </div>
+          <div class="exp-body">
+            <div class="run-head"><div>程序</div><div>延时</div><div>结果</div><div>说明</div></div>
+            <div class="run-grid run-row"><div>Everything</div><div style="text-align:center;">10 秒</div><div style="text-align:center;"><span class="result-ok">成功</span></div><div class="why"></div></div>
+            <div class="run-grid run-row"><div>微信</div><div style="text-align:center;">10 秒</div><div style="text-align:center;"><span class="result-ok">成功</span></div><div class="why"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 设置 ═══════════ -->
+      <div class="page" id="page-settings">
+        <div class="page-head">
+          <h1>设置</h1>
+          <p class="desc">所有改动即时保存，下次登录调度即按新值执行。</p>
+        </div>
+        <details class="note"><summary>本轮改动</summary>
+          · 「延时」分节描述移入胶囊卡片内部，文案重写<br>
+          · 胶囊垃圾桶 hover 反馈（手型 + 变红），删除走弹窗二次确认（点垃圾桶体验）<br>
+          · 「添加」成功提示改为右下角自动消失的应用内通知（点「添加」体验，3.5s 后消失）<br>
+          · 底部常驻状态 InfoBar 移除 —— 成功类提示走右下角通知，错误仍用瞬时提示
+        </details>
+
+        <div class="sec-title">外观</div>
+        <div class="scard">
+          <div class="s-left">
+            <div class="s-title">主题</div>
+            <div class="s-desc">跟随系统时随 Windows 深浅色自动切换</div>
+          </div>
+          <span class="combo" onclick="toast('原型演示：选项不落地')">跟随系统</span>
+        </div>
+
+        <div class="sec-title">延时</div>
+        <div class="scard">
+          <div class="s-left">
+            <div class="s-title">添加预设延时</div>
+            <div class="s-desc">单位为秒；相同值不会重复添加</div>
+          </div>
+          <input type="number" value="45" style="width:130px;">
+          <button class="btn" onclick="toast('已添加预设延时 45 秒')">添加</button>
+        </div>
+        <div class="card" style="margin-top:8px; padding:12px 14px;">
+          <div class="caption">
+            编辑器快选按钮使用的延时列表，<b>高亮胶囊为默认值</b>，接管条目时自动填入。点击垃圾桶移除，删除前会二次确认。
+          </div>
+          <div class="pill-wrap">
+            <div class="pill">0 秒<span class="trash" title="删除" onclick="askDelete('0 秒')">🗑</span></div>
+            <div class="pill">5 秒<span class="trash" title="删除" onclick="askDelete('5 秒')">🗑</span></div>
+            <div class="pill">10 秒<span class="trash" title="删除" onclick="askDelete('10 秒')">🗑</span></div>
+            <div class="pill">15 秒<span class="trash" title="删除" onclick="askDelete('15 秒')">🗑</span></div>
+            <div class="pill on">30 秒<span class="trash" title="删除" onclick="askDelete('30 秒')">🗑</span></div>
+            <div class="pill">60 秒<span class="trash" title="删除" onclick="askDelete('60 秒')">🗑</span></div>
+          </div>
+        </div>
+
+        <div class="sec-title">调度</div>
+        <div class="scard">
+          <div class="s-left">
+            <div class="s-title">通知策略</div>
+            <div class="s-desc">全部条目启动完成后的通知方式</div>
+          </div>
+          <span class="combo">仅失败时通知</span>
+        </div>
+        <div class="scard">
+          <div class="s-left">
+            <div class="s-title">重试次数</div>
+            <div class="s-desc">单条启动失败后的自动重试次数（0–5）</div>
+          </div>
+          <input type="number" value="1" style="width:110px;">
+        </div>
+      </div>
+
+      <!-- ═══════════ 自启动项 · 注册表（代表页） ═══════════ -->
+      <div class="page" id="page-items-reg">
+        <div class="page-head">
+          <h1>注册表</h1>
+          <p class="desc">注册表 Run 键中的自启动条目，接管后将进入延时启动。</p>
+        </div>
+        <details class="note"><summary>本轮改动</summary>· 列标题改为列内水平居中（四个来源页共用本版式）</details>
+        <div class="toolbar">
+          <span class="combo">全部状态</span>
+          <span class="combo">按名称</span>
+          <div class="grow"></div>
+          <input type="text" placeholder="搜索名称、命令或位置" style="width:220px;">
+          <button class="btn">刷新本页</button>
+        </div>
+        <div class="card" style="margin-top:14px; padding:4px 0;">
+          <div class="run-head" style="grid-template-columns:44px 1fr 110px 260px; display:grid; column-gap:12px; padding:8px 16px 4px;">
+            <div></div><div style="text-align:left;">程序</div><div>状态</div><div>操作</div>
+          </div>
+          <div class="run-grid run-row" style="grid-template-columns:44px 1fr 110px 260px;">
+            <div class="icon-slot" style="width:24px;height:24px;font-size:11px;">E</div>
+            <div><div class="prog-name" style="font-weight:600;">Everything</div><div class="why" style="font-size:12px; color:var(--text-2);">"C:\Program Files\Everything\Everything.exe" -startup</div></div>
+            <div style="text-align:center;"><span class="badge ok">已接管</span></div>
+            <div class="op-btns"><button class="btn small">查看</button><button class="btn small">移出延时</button><button class="btn small">禁用</button></div>
+          </div>
+          <div class="run-grid run-row" style="grid-template-columns:44px 1fr 110px 260px;">
+            <div class="icon-slot" style="width:24px;height:24px;font-size:11px;">D</div>
+            <div><div class="prog-name" style="font-weight:600;">Dropbox</div><div class="why" style="font-size:12px; color:var(--text-2);">C:\Program Files\Dropbox\Client\Dropbox.exe</div></div>
+            <div style="text-align:center;"><span class="badge" style="color:var(--text-2); background:var(--hover);">已启用</span></div>
+            <div class="op-btns"><button class="btn small">查看</button><button class="btn small accent">加入延时</button><button class="btn small">禁用</button></div>
+          </div>
+          <div class="run-grid run-row" style="grid-template-columns:44px 1fr 110px 260px;">
+            <div class="icon-slot" style="width:24px;height:24px;font-size:11px;">S</div>
+            <div><div class="prog-name" style="font-weight:600;">Steam</div><div class="why" style="font-size:12px; color:var(--text-2);">"C:\Program Files (x86)\Steam\steam.exe" -silent</div></div>
+            <div style="text-align:center;"><span class="badge" style="color:var(--text-2); background:var(--hover);">已禁用</span></div>
+            <div class="op-btns"><button class="btn small">查看</button><button class="btn small">启用</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 系统启动项 · 服务（代表页） ═══════════ -->
+      <div class="page" id="page-sys-services">
+        <div class="page-head">
+          <h1>服务</h1>
+          <p class="desc">开机自动启动的系统服务（只读）。</p>
+        </div>
+        <div class="toolbar">
+          <span class="combo">全部状态</span>
+          <div class="grow"></div>
+          <input type="text" placeholder="搜索名称" style="width:220px;">
+        </div>
+        <div class="card" style="margin-top:14px; padding:4px 0;">
+          <div class="run-head" style="grid-template-columns:1fr 110px 1fr; display:grid; column-gap:12px; padding:8px 16px 4px;">
+            <div style="text-align:left;">服务</div><div>启动类型</div><div>描述</div>
+          </div>
+          <div class="run-grid run-row" style="grid-template-columns:1fr 110px 1fr;">
+            <div style="font-weight:600;">Themes</div><div style="text-align:center; font-size:12px; color:var(--text-2);">自动</div><div class="why">主题管理服务</div>
+          </div>
+          <div class="run-grid run-row" style="grid-template-columns:1fr 110px 1fr;">
+            <div style="font-weight:600;">Audiosrv</div><div style="text-align:center; font-size:12px; color:var(--text-2);">自动</div><div class="why">Windows Audio</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 占位页（启动文件夹 / 计划任务 / UWP / 驱动 / Winlogon / 组策略） -->
+      <div class="page" id="page-items-folder"><div class="page-head"><h1>启动文件夹</h1><p class="desc">版式与「注册表」页一致（原型略）。</p></div></div>
+      <div class="page" id="page-items-task"><div class="page-head"><h1>计划任务</h1><p class="desc">版式与「注册表」页一致（原型略）。</p></div></div>
+      <div class="page" id="page-items-uwp"><div class="page-head"><h1>UWP Apps</h1><p class="desc">版式与「注册表」页一致（原型略）。</p></div></div>
+      <div class="page" id="page-sys-drivers"><div class="page-head"><h1>驱动</h1><p class="desc">版式与「服务」页一致（原型略）。</p></div></div>
+      <div class="page" id="page-sys-winlogon"><div class="page-head"><h1>Winlogon</h1><p class="desc">版式与「服务」页一致（原型略）。</p></div></div>
+      <div class="page" id="page-sys-gpo"><div class="page-head"><h1>组策略</h1><p class="desc">版式与「服务」页一致（原型略）。</p></div></div>
+
+      <!-- Toast -->
+      <div class="toast hide" id="toast">
+        <span class="t-ico">✓</span><span id="toastText"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 弹窗：手动添加延时（编辑器） ═══════════ -->
+  <div class="scrim" id="editorScrim">
+    <div class="dlg">
+      <h3>手动添加延时</h3>
+
+      <!-- 校验提示：未选择目标时点保存 -->
+      <div class="vbar" id="validationBar" style="display:none;">请先选择要延时启动的程序或 UWP 应用</div>
+
+      <!-- 目标程序 -->
+      <div class="ed-sec" style="margin-top:0;">
+        <div class="ed-title">目标程序</div>
+        <div class="ed-card">
+          <div class="seg">
+            <div class="seg-btn on" id="tabProgram" onclick="switchTab('program')">程序</div>
+            <div class="seg-btn" id="tabUwp" onclick="switchTab('uwp')">UWP 应用</div>
+          </div>
+
+          <!-- 页签：程序 -->
+          <div id="paneProgram">
+            <div class="dropzone" id="dzProgram" onclick="pickTarget('program')">
+              <div>拖入文件，或点击选择程序</div>
+              <div class="dz-sub">支持 .exe / .lnk / .bat / .cmd / .ps1</div>
+            </div>
+            <div class="picked" id="pkProgram" style="display:none;">
+              <div class="icon-slot">S</div>
+              <div class="grow">
+                <div class="p-name">Snipaste</div>
+                <div class="p-path">D:\Tools\Snipaste\Snipaste.exe</div>
+              </div>
+              <button class="btn small" onclick="resetPick('program')">更换</button>
+            </div>
+            <div class="field">
+              <label>显示名称 — 自动取自文件名，可改</label>
+              <input type="text" placeholder="例如：微信">
+            </div>
+            <div class="field">
+              <label>命令行参数 — 可选</label>
+              <input type="text" placeholder="留空则不附加参数">
+            </div>
+            <div class="field">
+              <label>工作目录 — 可选</label>
+              <input type="text" placeholder="留空则使用程序所在目录">
+            </div>
+          </div>
+
+          <!-- 页签：UWP 应用 -->
+          <div id="paneUwp" style="display:none;">
+            <div class="dropzone" id="dzUwp" onclick="pickTarget('uwp')">
+              <div>从已安装的应用中选择</div>
+              <div class="dz-sub">应用商店应用、系统应用</div>
+            </div>
+            <div class="picked" id="pkUwp" style="display:none;">
+              <div class="icon-slot">计</div>
+              <div class="grow">
+                <div class="p-name">计算器</div>
+                <div class="p-path">Microsoft.WindowsCalculator_8wekyb3d8bbwe!App</div>
+              </div>
+              <button class="btn small" onclick="resetPick('uwp')">更换</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 延时时间 -->
+      <div class="ed-sec">
+        <div class="ed-title">延时时间</div>
+        <div class="ed-card">
+          <div class="caption">以登录时刻为起点的相对时间点；相同延时的条目按列表顺序依次启动。</div>
+          <div class="pill-wrap" style="margin-top:0;">
+            <div class="pill">0 秒</div><div class="pill">5 秒</div><div class="pill">10 秒</div>
+            <div class="pill">15 秒</div><div class="pill on">30 秒</div><div class="pill">60 秒</div>
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:10px; margin-top:12px;">
+            <div>
+              <label style="display:block; font-size:12px; color:var(--text-2); margin-bottom:4px;">自定义（秒）</label>
+              <input type="number" value="45" style="width:130px;">
+            </div>
+            <span style="font-size:12px; color:var(--text-3); padding-bottom:8px;">自定义值提交前需二次确认</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 启动身份 -->
+      <div class="ed-sec">
+        <div class="ed-title">启动身份</div>
+        <div class="ed-card">
+          <div class="caption" id="idCaptionProgram">本条目启动时使用的 Windows 账户身份。</div>
+          <div class="caption" id="idCaptionUwp" style="display:none;">UWP 应用由系统外壳激活，仅支持以普通用户身份启动。</div>
+          <div class="pill-wrap" id="idPillsProgram" style="margin-top:0;">
+            <div class="pill">普通用户</div>
+            <div class="pill on">管理员</div>
+          </div>
+          <div class="pill-wrap" id="idPillsUwp" style="display:none; margin-top:0;">
+            <div class="pill on">普通用户</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dlg-foot">
+        <button class="btn" onclick="closeEditor()">取消</button>
+        <button class="btn accent" onclick="onSave()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 弹窗：自定义延时二次确认（ContentDialog 样式） ═══════════ -->
+  <div class="scrim" id="confirmDelayScrim" style="z-index:50;">
+    <div class="dlg small">
+      <h3>确认自定义延时</h3>
+      <div class="dlg-body">
+        本条目将以自定义延时 <b style="color:var(--text);">45 秒</b> 提交。该值不在预设列表中，请确认。
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" onclick="closeEl('confirmDelayScrim')">返回修改</button>
+        <button class="btn accent" onclick="confirmDelayOk()">确认使用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 弹窗：删除预设二次确认 ═══════════ -->
+  <div class="scrim" id="deleteScrim">
+    <div class="dlg small">
+      <h3>删除预设延时</h3>
+      <div class="dlg-body">
+        将删除预设 <b style="color:var(--text);" id="deleteTarget">30 秒</b>。正在使用该延时值的条目不受影响，仍按原值启动。
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" onclick="closeEl('deleteScrim')">取消</button>
+        <button class="btn danger" onclick="deleteOk()">删除</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  /* 导航 */
+  function navTo(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    var pg = document.getElementById('page-' + id);
+    if (pg) pg.classList.add('active');
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => {
+      n.classList.toggle('active', n.getAttribute('data-page') === id);
+    });
+    document.getElementById('content').scrollTop = 0;
+  }
+  document.querySelectorAll('.nav-item[data-page]').forEach(el => {
+    el.addEventListener('click', function () { navTo(this.getAttribute('data-page')); });
+  });
+  document.querySelectorAll('.nav-parent').forEach(el => {
+    el.addEventListener('click', function () { this.parentElement.classList.toggle('open'); });
+  });
+
+  /* 主题 */
+  document.getElementById('btnTheme').addEventListener('click', function () {
+    document.body.classList.toggle('dark');
+  });
+
+  /* 总览演示切换 */
+  function toggleSched() {
+    var ok = document.getElementById('schedOk'), fail = document.getElementById('schedFail');
+    var showFail = ok.style.display !== 'none';
+    ok.style.display = showFail ? 'none' : 'block';
+    fail.style.display = showFail ? 'block' : 'none';
+  }
+  function toggleRecent() {
+    var full = document.getElementById('recentFull'), empty = document.getElementById('recentEmpty');
+    var showEmpty = full.style.display !== 'none';
+    full.style.display = showEmpty ? 'none' : 'block';
+    empty.style.display = showEmpty ? 'block' : 'none';
+  }
+
+  /* Expander */
+  function toggleExp(head) { head.parentElement.classList.toggle('open'); }
+
+  /* Toast */
+  var toastTimer = null;
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    document.getElementById('toastText').textContent = msg;
+    t.classList.remove('hide');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.add('hide'); }, 3500);
+  }
+
+  /* 编辑弹窗 */
+  var curTab = 'program';
+  var targetSel = { program: false, uwp: false };
+  function openEditor() { document.getElementById('editorScrim').classList.add('show'); }
+  function closeEditor() { document.getElementById('editorScrim').classList.remove('show'); }
+  function switchTab(tab) {
+    curTab = tab;
+    document.getElementById('tabProgram').classList.toggle('on', tab === 'program');
+    document.getElementById('tabUwp').classList.toggle('on', tab === 'uwp');
+    document.getElementById('paneProgram').style.display = tab === 'program' ? 'block' : 'none';
+    document.getElementById('paneUwp').style.display = tab === 'uwp' ? 'block' : 'none';
+    document.getElementById('idCaptionProgram').style.display = tab === 'program' ? 'block' : 'none';
+    document.getElementById('idCaptionUwp').style.display = tab === 'uwp' ? 'block' : 'none';
+    document.getElementById('idPillsProgram').style.display = tab === 'program' ? 'flex' : 'none';
+    document.getElementById('idPillsUwp').style.display = tab === 'uwp' ? 'flex' : 'none';
+    hideValidation();
+  }
+
+  /* 目标选择状态（演示：点拖放区 = 已选，「更换」回到未选） */
+  function pickTarget(tab) { targetSel[tab] = true; renderTarget(); hideValidation(); }
+  function resetPick(tab) { targetSel[tab] = false; renderTarget(); }
+  function renderTarget() {
+    document.getElementById('dzProgram').style.display = targetSel.program ? 'none' : 'block';
+    document.getElementById('pkProgram').style.display = targetSel.program ? 'flex' : 'none';
+    document.getElementById('dzUwp').style.display = targetSel.uwp ? 'none' : 'block';
+    document.getElementById('pkUwp').style.display = targetSel.uwp ? 'flex' : 'none';
+  }
+  function showValidation() { document.getElementById('validationBar').style.display = 'flex'; }
+  function hideValidation() { document.getElementById('validationBar').style.display = 'none'; }
+
+  /* 保存：未选目标 → 校验提示；已选 → 自定义延时二次确认（弹窗样式） */
+  function onSave() {
+    if (!targetSel[curTab]) { showValidation(); return; }
+    document.getElementById('confirmDelayScrim').classList.add('show');
+  }
+  function confirmDelayOk() {
+    closeEl('confirmDelayScrim'); closeEditor();
+    toast('已添加延时条目（45 秒）');
+  }
+
+  /* 删除预设二次确认 */
+  function askDelete(name) {
+    document.getElementById('deleteTarget').textContent = name;
+    document.getElementById('deleteScrim').classList.add('show');
+  }
+  function deleteOk() {
+    var name = document.getElementById('deleteTarget').textContent;
+    closeEl('deleteScrim');
+    toast('已删除预设延时 ' + name);
+  }
+  function closeEl(id) { document.getElementById(id).classList.remove('show'); }
+
+  /* 初始页 */
+  navTo('overview');
+</script>
+</body>
+</html>

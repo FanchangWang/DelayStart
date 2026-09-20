@@ -164,7 +164,7 @@ BGRA + AND 掩码）**。阈值取 96 而不是 256 是 D63 的量：96/128 两�
 | 桌面图标改为可选任务（D62） | 桌面项挂 `Tasks: desktopicon`（`[Tasks]` 里定义，描述「创建桌面快捷方式」，**默认勾选** —— Inno 不写 `unchecked` 就是勾选）。⚠️ **静默安装不自动勾选任何任务**：`/VERYSILENT`（或 `/SILENT`）要出桌面图标必须显式加 `/MERGETASKS="desktopicon"` |
 | 快捷方式图标（D61） | 图标来自 **exe 内嵌资源**（`UninstallDisplayIcon` 也指向它）。所以 `App.csproj` 必须设 `<ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>` —— 只声明 `<Content>` 是不够的（那只管"文件随程序发布"），漏设会让所有快捷方式与「应用和功能」显示**通用空白图标** |
 | 安装程序图标（D62） | iss 加 `SetupIconFile={#AppIconFile}`（缺省 `..\src\DelayStart.App\Assets\AppIcon.ico`）→ 安装程序自身与卸载入口都显示 DelayStart 图标。ico 由 `tools/make-icon.py` 从 `assets/icon/delay.png` 生成，见下方「应用图标」一节 |
-| 调度任务注册（D63 修订） | **不归安装器管**（它只有 `lowest` 权限，注册任务需要管理员）。落点是**管理端第一次启动**：`FirstRunBootstrap` 自动注册并发落一个"已初始化"标记，之后再不插手。🔴 只在首次运行做一次 —— 总览页那个开关（D3：开 = 注册，关 = 删除）表达的是用户意图，自动动作只允许发生在他表达意图**之前**，否则用户关掉开关的意愿会被无声推翻且永远关不掉。安装器仍提供「立即运行 DelayStart」的勾选（`[Run] ... postinstall shellexec`），UAC 只弹这一次 |
+| 调度任务注册（D63 → 2026-09-21 改判） | **不归安装器管**（它只有 `lowest` 权限，注册任务需要管理员）。落点是**管理端每次启动**：`SchedulerTaskBootstrap` 检测 `\DelayStartScheduler`，**缺失即自动补建**（原 D63 为"仅首启注册一次、之后不插手"—— 那是保护总览页开关的用户意图；本轮开关已删除，任务改为强制存在，缺失即视为故障自动修复）。安装器仍提供「立即运行 DelayStart」的勾选（`[Run] ... postinstall shellexec`），UAC 只弹这一次 |
 | 默认延时（D63） | `Settings.DefaultPreset` = **10 秒**（原 30）。⚠️ 与 D50 的预设列表同理：**已落盘的 `config.json` 原样保留**，默认值只影响新装 / 未改过该项的配置 |
 | 卸载可逆 | `[Code] InitializeUninstall` 用 `ShellExec('runas')` 拉起 `--restore-all --result-file <临时文件>`，轮询回读退出码，非 0 **中止卸载**（可强行跳过但需二次确认） |
 | 为什么不用 `[UninstallRun]` | 那里读不到退出码，恢复失败也会照删文件 |

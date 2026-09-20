@@ -1204,6 +1204,25 @@ C:\Program Files\dotnet\sdk\10.0.401\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NE
 
 **决定（2026-09-21，用户指令）：维持现状，不做任何补救。** 🔴 **并明确禁止"管理端启动调度端"这条修法** —— 调度端进程的生死只由计划任务决定，管理端不代管。本文档此前"倾向 ① 管理端拉起"的建议**已作废**；另两条（安装器补一次提权调用 / 调度端自己调 `RegisterApplicationRestart`）一并放弃，别再提。
 
+### 10.17 UI v3 批复同步（2026-09-21，原型 `docs/ui-mockup-v3.html` → WinUI 代码）
+
+用户按原型 v3 评审通过后整批同步。这一轮**没有缺陷修复，全部是 UI/交互/文案改判**，其中一处是**行为变更**：
+
+| 改动 | 内容 | 实现要点 |
+|---|---|---|
+| **开机调度任务改状态卡（行为变更）** | 总览页的开关（D3）删除；本软件强依赖调度器，任务缺失即自动补建，失败态红字强提示 +「重试创建」按钮 | 🔴 **D63「仅首启一次」语义废止**：`FirstRunBootstrap` 更名 `SchedulerTaskBootstrap`，改为每次启动 `IsRegistered()` 检测、缺失即 `RegisterOrUpdate()`；`Settings.SchedulerTaskInitialized` 标记随之删除（老配置残留键被 JSON 反序列化忽略）。原先"自动补建会无声推翻用户关掉开关的意愿"这条反对理由，随开关的删除而不复存在。总览页进入时经 `EnsureTaskCommand` 再检测一轮（页面与重试按钮共用同一命令，`IsWorkingOnTask` 防连点） |
+| 「最大延时」删除 | 总览页整节删除（意义不大） | `OverviewViewModel.MaxDelayText` 与计算一并删除 |
+| 「上次运行有失败」横幅删除 | 失败信息由「最近一次开机调度」结果列的红色承担，不再重复摆提示框 | `LastRunBanner / HasBanner / BuildLastRunBanner`（含连续失败 streak 文案）删除；`FailureStreakService` 在调度端侧仍有消费者 |
+| 总览分节顺序 | 延时启动 → 开机调度任务 → 系统自启动项 → 最近一次开机调度；各分节描述文字删除 | 删「最大延时」后顺序自然达成；chips 分节不再摆描述 |
+| 最近调度卡 | 有记录：表 + 右下角「查看运行日志 →」跳转（`HyperlinkButton` → `ShellNavigator.Navigate(RunsTag)`）；无记录：居中空状态 | `RecentRunTitle / RecentRunSummary` 删除（标题静态化） |
+| 列头居中 | 延时页 8 列、运行日志 4 列、总览小表 4 列、来源页（状态/操作）、系统页（启动类型/状态）表头 `HorizontalAlignment="Center"` | 原型即此效果；文本列（程序/描述）保持左对齐 |
+| 运行日志最新一组默认展开 | 进入页面时最新一组 Expander 展开态 | `RunGroupRow.IsExpanded`（可变普通属性）+ `x:Bind Mode=OneTime` —— 分组随筛选重填会重建容器，OneTime 求值即可，不需要 INPC |
+| 延时页常驻 InfoBar 删除 | 「延时不是累加」并入页头描述 | `DelayViewModel.Subtitle / BuildSubtitle` 删除，页头改静态描述；Grid 行号随之重排 |
+| 设置页预设延时 | 分节描述移入胶囊卡片内；垃圾桶 hover 变红（🔴 WinUI 每元素光标 API `UIElement.ProtectedCursor` 是 protected，行内按钮拿不到 → 变色是同等强度反馈）；删除走 `ContentDialog` 二次确认（说明"使用该值的条目不受影响"）；「添加」成功改走右下角自动消失通知；状态 InfoBar 只报错 | `SettingsViewModel` 删 `StatusSeverity / HasStatus`（`HasError` 改为 `StatusText.Length > 0`）；新增 `ToastService`（单例，事件广播）+ `MainWindow` 右下角 `ToastPanel`（`DispatcherQueueTimer` 3.5 s 自动消失，连发重置） |
+| 编辑弹窗 | 宽度钉死（根 `Grid MinWidth=500`，页签切换不再撑缩）；手动形态标题下描述与目标卡内提示全删（与下方 UI 重复）；UWP 页签不摆参数/工作目录维持 D53；延时描述改「相同延时的条目按列表顺序依次启动」并移入卡内，确认规则与自定义输入框同行；身份描述精简为一句定义（UWP：「UWP 应用由系统外壳激活，仅支持以普通用户身份启动。」）；自定义延时二次确认改**弹窗视觉**（遮罩 + 居中卡 + 标准按钮行；ContentDialog 不能嵌套，仍是同层 overlay）；未选目标校验文案对齐原型 | 弹窗视觉化只是 `ConfirmOverlay` 换皮，逻辑（`_manualDelayEdit / _manualDelayConfirmed / Hide()` 后 `DelayConfirmed` 判定）不变 |
+
+收尾验证：全解决方案 **0 警告 0 错误**；**292 用例全绿**（原 294：删 7 条 `FirstRunBootstrapTests`、增 5 条 `SchedulerTaskBootstrapTests`）。
+
 **验收 / 回归**：见 `build-and-test.md` 7.8（含"往安装目录扔一个伪造残留 → 装 → 断言被清掉"的一行命令式回归，以及中止分支怎么造）。
 
 收尾验证：

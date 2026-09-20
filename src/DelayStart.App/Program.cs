@@ -30,6 +30,17 @@ namespace DelayStart.App;
     /// </remarks>
 public static class Program
 {
+    /// <summary>管理端唤起事件的内核名（同会话内有效；见 <see cref="TrySignal"/>）。</summary>
+    internal const string ActivationEventName = @"Local\DelayStart.Manager.Activate";
+
+    /// <summary>管理端「仅前置窗口」事件的内核名（普通启动撞单实例互斥时用，不切页）。</summary>
+    internal const string ShowEventName = @"Local\DelayStart.Manager.Show";
+
+    /// <summary>管理端单实例互斥名（2026-09-20 用户批复：三进程都加互斥）。</summary>
+    private const string ManagerMutexName = @"Local\DelayStart.Manager";
+
+    private const string GotoLogArgument = "--goto-log";
+
     /// <summary>进程入口。</summary>
     /// <param name="args">命令行参数。</param>
     /// <returns>进程退出码。headless 子命令的退出码会被卸载脚本检查（D22）。</returns>
@@ -43,9 +54,39 @@ public static class Program
         // 容器的 Dispose 会连带释放它创建的 IDisposable（含 FileLogger 的文件句柄）。
         using var provider = services.BuildServiceProvider();
 
+        // 「唤起到运行日志」（调度端气泡点击，D18）。🔴 必须在 headless 分流**之前**：
+        // 它以 -- 开头，会被 <see cref="CliHost"/> 当未知子命令吞掉，GUI 永远起不来。
+        // 已有实例在跑 → 唤醒它然后本进程退出；没有 → 本次启动直接落在运行日志页。
+        var gotoLog = args.Any(static a => string.Equals(a, GotoLogArgument, StringComparison.OrdinalIgnoreCase));
+        if (gotoLog)
+        {
+            LogGotoLog("收到 --goto-log：准备唤起/启动管理端运行日志页。");
+        }
+        if (gotoLog && TrySignalRunningInstance())
+        {
+            LogGotoLog("已有管理端实例：唤起信号已发送，本进程退出。");
+            return 0;
+        }
+
+        if (gotoLog)
+        {
+            LogGotoLog("没有运行中的管理端实例：本次启动直接落到运行日志页。");
+        }
+
         if (CliHost.TryExecute(provider, args, out var exitCode))
         {
             return exitCode;
+        }
+
+        // 🔴 单实例互斥（2026-09-20 用户批复）在 headless 分流**之后**：CLI 子命令
+        // （还原 / 重注册任务等）必须不受"管理端已在跑"限制。互斥只管 GUI 实例。
+        // using：Application.Start 是阻塞的，返回即进程结束，此时才释放互斥。
+        using var instanceMutex = new Mutex(initiallyOwned: true, ManagerMutexName, out var isFirstInstance);
+        if (!isFirstInstance)
+        {
+            LogGotoLog("管理端已有实例（单实例互斥命中）：发送前台唤起信号后退出。");
+            _ = TrySignal(ShowEventName);
+            return 0;
         }
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
@@ -60,9 +101,54 @@ public static class Program
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
-            _ = new App(provider);
+            _ = new App(provider, gotoLog);
         });
 
         return 0;
+    }
+
+    /// <summary>
+    /// 向已运行的管理端实例发送「唤起到运行日志」信号（命名事件，同会话内有效）。
+    /// </summary>
+    /// <returns>是否成功发号。<see langword="false"/> 表示当前没有实例在跑，调用方应正常启动。</returns>
+    private static bool TrySignalRunningInstance() => TrySignal(ActivationEventName);
+
+    /// <summary>打开并置位一个命名事件；事件不存在（没有实例在跑）时返回 <see langword="false"/>。</summary>
+    private static bool TrySignal(string eventName)
+    {
+        if (!EventWaitHandle.TryOpenExisting(eventName, out var existing))
+        {
+            return false;
+        }
+
+        using (existing)
+        {
+            _ = existing.Set();
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 唤起链诊断日志写入 manager.log（2026-09-20 气泡点击不唤起问题）。
+    /// internal：供 <see cref="App.DispatchActivation"/> 与 <see cref="MainWindow.ShowRunsLog"/>
+    /// 在同一条链上留痕，任何一环断掉都能从日志定位。写失败静默忽略 —— 诊断日志绝不能挡住启动。
+    /// </summary>
+    internal static void LogGotoLog(string message)
+    {
+        try
+        {
+            var paths = new DelayStart.Core.Services.PathService();
+            paths.EnsureCreated();
+            var log = new DelayStart.Core.Logging.FileLogger(
+                paths.ManagerLogPath,
+                "Manager",
+                DelayStart.Core.Services.SystemClock.Instance);
+            log.Write(DelayStart.Core.Abstractions.LogLevel.Info, message);
+        }
+        catch
+        {
+            // 诊断日志失败不影响启动。
+        }
     }
 }

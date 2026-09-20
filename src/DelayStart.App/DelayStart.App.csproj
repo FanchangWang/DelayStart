@@ -91,4 +91,36 @@
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" />
   </ItemGroup>
 
+  <!--
+    ★ dev 布局下计划任务指向 App bin 里的调度器 exe（PathService.SchedulerExecutablePath =
+    AppContext.BaseDirectory + "DelayStart.Scheduler.exe"）。**只有** Scheduler 的
+    NativeAOT publish 单文件 exe 是可直接运行的形态 —— 普通引用拷贝过来的是 AppHost +
+    托管 dll，runtimeconfig 声明 includedFrameworks 却没有随附运行时文件，一启动就弹
+    "必须安装 .NET Desktop Runtime"（2026-09-20 真机踩坑）。
+    所以这里在 App 构建后把 publish 产物同步进来；还没 publish 过就只警告不失败
+    （正式安装布局由 Inno Setup 部署 publish 产物，不依赖本 target）。
+  -->
+  <Target Name="CopySchedulerPublishOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_SchedulerPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Scheduler\bin\$(Configuration)\net10.0-windows\win-x64\publish\DelayStart.Scheduler.exe</_SchedulerPublishExe>
+      <_AgentPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Agent\bin\$(Configuration)\net10.0-windows\win-x64\publish\DelayStart.Agent.exe</_AgentPublishExe>
+    </PropertyGroup>
+    <Copy
+      SourceFiles="$(_SchedulerPublishExe)"
+      DestinationFiles="$(OutDir)DelayStart.Scheduler.exe"
+      Condition="Exists($(_SchedulerPublishExe))" />
+    <Message
+      Text="DelayStart.Scheduler 尚未 publish（缺少 $(_SchedulerPublishExe)），App bin 里的调度器 exe 可能不可运行 —— 先跑 dotnet publish src/DelayStart.Scheduler"
+      Condition="!Exists($(_SchedulerPublishExe))"
+      Importance="high" />
+    <Copy
+      SourceFiles="$(_AgentPublishExe)"
+      DestinationFiles="$(OutDir)DelayStart.Agent.exe"
+      Condition="Exists($(_AgentPublishExe))" />
+    <Message
+      Text="DelayStart.Agent 尚未 publish（缺少 $(_AgentPublishExe)），App bin 里的普通用户代理 exe 可能不可运行 —— 先跑 dotnet publish src/DelayStart.Agent"
+      Condition="!Exists($(_AgentPublishExe))"
+      Importance="high" />
+  </Target>
+
 </Project>

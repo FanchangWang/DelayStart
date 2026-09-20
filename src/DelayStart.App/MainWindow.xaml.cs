@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 using DelayStart.App.Services;
 
 using Microsoft.UI.Windowing;
@@ -125,4 +127,67 @@ public sealed partial class MainWindow : Window
             NavFrame.GoBack();
         }
     }
+
+    /// <summary>唤起窗口并切到「运行日志」页（调度端气泡点击 / <c>--goto-log</c>，D18）。</summary>
+    public void ShowRunsLog()
+    {
+        Program.LogGotoLog("ShowRunsLog：开始执行唤起。");
+        BringToFront();
+
+        // 选中即触发 SelectionChanged → 导航；先激活再切页，视觉上是"弹出并落在日志页"。
+        foreach (var item in NavView.MenuItems)
+        {
+            if (item is NavigationViewItem { Tag: "runs" } runsItem)
+            {
+                NavView.SelectedItem = runsItem;
+                break;
+            }
+        }
+
+        Program.LogGotoLog("ShowRunsLog：已激活窗口并切换到运行日志页。");
+    }
+
+    /// <summary>仅把已有窗口带到前台（普通启动撞单实例互斥时的唤起语义，不切页）。</summary>
+    public void ShowForeground()
+    {
+        Program.LogGotoLog("ShowForeground：前置已有管理端窗口。");
+        BringToFront();
+    }
+
+    /// <summary>
+    /// 把窗口恢复并带到前台。🔴 Windows 前台锁会静默拒绝后台进程直接抢前台
+    /// （SetForegroundWindow 返回 false 只闪任务栏），所以失败时走
+    /// 最小化→还原路径 —— SW_RESTORE 走的是系统允许的激活路径，能真正弹到最前。
+    /// </summary>
+    private void BringToFront()
+    {
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        if (IsIconic(hwnd))
+        {
+            _ = ShowWindow(hwnd, SwRestore);
+        }
+        else if (!SetForegroundWindow(hwnd))
+        {
+            _ = ShowWindow(hwnd, SwMinimize);
+            _ = ShowWindow(hwnd, SwRestore);
+        }
+
+        _ = SetForegroundWindow(hwnd);
+        Activate();
+    }
+
+    private const int SwRestore = 9;
+    private const int SwMinimize = 6;
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsIconic(nint hWnd);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetForegroundWindow(nint hWnd);
 }

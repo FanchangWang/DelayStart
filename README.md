@@ -1,94 +1,82 @@
 # DelayStart
 
-扫描 Windows 全部自启动位置 → **软禁用**（不删除任何数据）→ 由独立的轻量调度进程按延时启动。
+**Windows 开机自启动的错峰管理器** —— 扫描全部自启动位置 → 软禁用（不删任何数据）→ 由独立调度进程按你设定的延时逐个启动。
 
-解决的痛点：Windows 的自启动是全有或全无的。要么所有程序在登录瞬间一起抢资源，让桌面卡一分钟；要么彻底禁用，从此忘了它的存在。DelayStart 给第三种选择 —— **晚 10 秒、晚 30 秒、晚 2 分钟再启动**。
-
----
-
-## 核心原则
-
-| 原则 | 含义 |
-|---|---|
-| **全部可逆** | 禁用 = 写软禁用标记（`StartupApproved` / `Enabled=false` / `State=0`），**绝不删除注册表值、绝不移动用户文件**。一键还原到接管前的状态 |
-| **判定可靠** | 延时是「相对登录时刻的绝对时间点」。软件能准确告诉你第几秒启动，而不是"大概" |
-| **不替用户做决定** | 启动失败时只提醒、不自动改系统状态。所有改变系统行为的动作，出口都在用户手上 |
+Windows 的自启动是全有或全无的：要么所有程序在登录瞬间一起抢资源，让桌面卡上一分钟；要么彻底禁用，从此忘了它的存在。**DelayStart 给第三种选择 —— 晚 10 秒、晚 30 秒、晚 2 分钟再启动。**
 
 ---
 
-## 技术栈
+## 它解决什么问题
 
-| 组件 | 技术 | 理由 |
+| | 不做处理 | 用 DelayStart |
 |---|---|---|
-| 管理端 | .NET 10 + WinUI 3（unpackaged） | 现代 Windows 原生观感 |
-| 调度端 | **纯 Win32 + NativeAOT**（D24 批复 B，目标约 6 MB，冷启动 < 0.3 秒） | 登录瞬间执行，体积和冷启动是硬指标；托盘与面板全部 P/Invoke，零 UI 框架依赖 |
-| 共享层 | `DelayStart.Core`（AOT 安全）+ `DelayStart.Management` | 见下方说明 |
-
-**为什么拆两个共享库**：调度端用 NativeAOT，它引用的一切代码都必须 AOT 兼容。而扫描所需的计划任务库、COM 互操作（`.lnk` 解析、图标提取）恰恰都不兼容。所以按 **AOT 兼容性** 切分而不是按领域切分——调度端只引用 `Core`，拿到一个零 COM、零反射的最小集合。
-
----
-
-## 项目结构
-
-```
-DelayStart.slnx
-├─ src/DelayStart.Core           # 模型 / 配置读写 / 时序 / 启动 / 日志 —— ★ 必须 NativeAOT 兼容
-├─ src/DelayStart.Management     # 各来源扫描器 / 软禁用 / 接管 / 计划任务 / COM 互操作
-├─ src/DelayStart.App            # WinUI 3 管理端（unpackaged，产出 DelayStart.exe）
-├─ src/DelayStart.Scheduler      # 纯 Win32 + NativeAOT 调度端（产出 DelayStart.Scheduler.exe）
-├─ src/DelayStart.LaunchBroker   # NativeAOT 降权中转器（产出 DelayStart.LaunchBroker.exe，D70）
-├─ tests/DelayStart.Core.Tests   # xUnit v3 单元测试（走 Microsoft.Testing.Platform）
-├─ scripts/                      # 开发期脚本：build / test / publish / all
-├─ installer/                    # Inno Setup 安装器与构建矩阵（D22 / D60）
-├─ tools/                        # 图标等资源生成脚本
-├─ assets/                       # 图标源图
-└─ docs/                         # design.md（方案）· decisions.md（D1–D73）· pitfalls.md（踩坑）
-```
-
-**依赖方向是单向的**：`App → Management → Core`，`Scheduler → Core`，`LaunchBroker → Core`，`Tests → Core + Management`。
-🔴 **`Scheduler` / `LaunchBroker` 绝不引用 `Management`** —— 那会让 NativeAOT 发布直接失败。
-🔴 **`Tests` 绝不引用 `App`** —— 一旦引用就要背上 WindowsAppSDK 自包含 + 运行时预装的包袱（见 `docs/design.md` 七）。
+| 登录瞬间 | 十几个程序同时抢磁盘和 CPU，桌面卡一分钟 | 只启动必要的几个，其余排队 |
+| 启动顺序 | 系统决定，不可控 | 按延时值排序，可精确到秒 |
+| 不想要的自启项 | 只能删掉，之后想用还得自己去找回来 | 软禁用：随时一键还原 |
+| 出了问题 | 不知道哪个程序拖慢的 | 逐条记录启动结果与耗时 |
 
 ---
 
-## 环境要求
+## 核心特性
 
-- Windows 10 21H2+ / Windows 11
-- .NET SDK **10.0.401**（实测版本）
-- Visual Studio 2026（18.x）— 用于 WinUI 3 开发
-
----
-
-## 快速开始
-
-```powershell
-.\scripts\build.ps1     # 编译（Release，0 警告验收）
-.\scripts\test.ps1      # 单元测试
-.\scripts\publish.ps1   # 发布三个 exe + 同步调度端产物进管理端 bin
-.\scripts\all.ps1       # 一条龙
-```
-
-> **构建要求零警告**（`TreatWarningsAsErrors=true`）—— 出现警告即编译失败，这是故意的。
->
-> 管理端带 `requireAdministrator` manifest，`dotnet run` 会弹 UAC。**要在 VS 之外双击 exe 才能测出提权是否真的生效**（在 VS 里跑会继承 VS 的权限，结果不可信）。
->
-> 安装包（自包含 / 精简 × x64 / arm64）走 `installer\build-all.ps1`，见 [`installer/README.md`](installer/README.md)。
-
-完整流程（含 NativeAOT 发布、本机环境已知坑）见 **[`docs/design.md`](docs/design.md)** 十。
+| 特性 | 说明 |
+|---|---|
+| **全部可逆** | 禁用 = 写一个"软禁用标记"，**绝不删除注册表值、绝不移动你的文件**。随时还原到接管前的状态 |
+| **精确时序** | 延时是"相对登录时刻的绝对时间点"，不是依次累加。软件能准确告诉你第几秒启动，而不是"大概" |
+| **不替你做决定** | 启动失败只提醒、不自动改系统状态。所有会改变系统行为的动作，出口都在你手上 |
+| **覆盖面广** | 注册表 Run 项、启动文件夹、计划任务、UWP 应用、任意 exe/lnk 手动添加 |
+| **轻量调度** | 调度进程是 NativeAOT 编译的原生程序，约 3.5 MB，冷启动 0.3 秒内，跑完即退 |
+| **失败可见** | 每个条目的启动结果、耗时、失败原因都落盘，可在运行日志里逐条查看 |
 
 ---
 
-## 安装位置与数据（D23）
+## 安装
 
-**per-user 安装，安装过程不弹 UAC**（`PrivilegesRequired=lowest`）。程序与数据严格分离：
+**per-user 安装，安装过程不弹 UAC**（不写系统目录，程序装在 `%LOCALAPPDATA%\Programs\DelayStart`）。
+
+安装包分两种形态 × 两种架构，共 4 个（由 CI 在打 tag 时产出，见 Releases）：
+
+| 形态 | 体积 | 说明 |
+|---|---|---|
+| **自包含版** | 约 60 MB | 自带 .NET 运行时，装完即用，不依赖系统装过什么 |
+| **精简版** | 约 10 MB | 依赖系统已装 .NET 10 运行时；缺运行库时安装器会提示并给出下载入口 |
+
+架构为 x64 / arm64（不含 x86）。
+
+**静默安装**（供批量部署）：桌面图标默认不创建，需要时用 `/MERGETASKS="desktopicon"`；静默卸载时"是否删除配置数据"一律按**否**处理。
+
+**卸载**：先从控制面板正常卸载。卸载程序会**先还原所有接管项**，还原失败会中止卸载而不是硬删文件 —— 你的自启动项不会因为卸载而丢失。
+
+---
+
+## 快速上手
+
+1. **启动管理端** —— 首次运行会自动扫描本机全部自启动位置（需要管理员权限，见下方 FAQ）。
+2. **看清单** —— 「启动项」页按来源列出所有自启项，可以筛选、搜索。
+3. **设置延时** —— 把想延后的项拖进「延时启动」页，给每项配一个延时值（预设 `0/5/10/15/20/30/60` 秒，也可以自己填）。
+4. **做完了** —— 不需要点"应用"。下次登录时，调度进程会按延时逐个启动它们。
+
+**中途想改主意**：
+
+- 想立刻看效果 → 调度端托盘右键「立即启动剩余任务」。
+- 某项不想延后了 → 在「延时启动」页把它**移出**，自启动状态会精确还原到接管前。
+- 全部放弃 → 卸载，或在设置里重置。
+
+**运行中会发生什么**：登录 3 秒后调度进程被拉起，托盘出现一个小图标，鼠标悬停能看到"已启动 3/8 · 下一项 12 秒"。跑完之后它会自动退出（完成情况会弹出一个面板，也可以事后在「运行日志」页查）。
+
+---
+
+## 数据与隐私
+
+程序与数据严格分离，**运行时绝不向安装目录写东西**，所以覆盖升级和卸载都不会留残留：
 
 | 类别 | 路径 |
 |---|---|
 | 程序（只读） | `%LOCALAPPDATA%\Programs\DelayStart\` |
-| 配置（Roaming） | `%APPDATA%\DelayStart\config.json` |
-| 日志 / 实时状态 / 运行归档（Local） | `%LOCALAPPDATA%\DelayStart\logs\` · `state\` · `runs\` |
+| 配置 | `%APPDATA%\DelayStart\config.json` |
+| 日志 / 实时状态 / 运行归档 | `%LOCALAPPDATA%\DelayStart\logs\` · `state\` · `runs\` |
 
-程序运行时**不向安装目录写任何东西**，所以覆盖升级与卸载不会留残留。计划任务在**管理端首次启动时**幂等检测创建，失败时管理端提供重试入口（D68）。
+**不联网、不采集、不上报**。所有数据都在本机，删掉配置目录即彻底清除。
 
 ---
 
@@ -99,22 +87,50 @@ DelayStart.slnx
 | 注册表 | `HKCU` / `HKLM` / `HKLM\WOW6432Node` 的 `CurrentVersion\Run` | ✅ |
 | 启动文件夹 | 用户 / 系统 `Startup` 目录（`.lnk` / `.url`） | ✅ |
 | 计划任务 | 带 `LogonTrigger` / `BootTrigger` 的任务 | ✅ |
-| UWP 应用 | `AppModel\SystemAppData` | ⚠️ 受限（系统不允许第三方延后，改为"禁系统自启 + 到点激活"） |
-| 手动添加 | 任意 exe / lnk | ✅ |
+| UWP 应用 | `AppModel\SystemAppData` | ⚠️ 受限（见 FAQ） |
+| 手动添加 | 任意 exe / lnk / bat / cmd / ps1 | ✅ |
 | 系统服务 | — | ❌ 用 Windows 原生「延迟自动启动」，不由本程序接管 |
 | 驱动 / Winlogon / 登录脚本 | — | ❌ 只读展示，不可操作 |
 
 ---
 
-## 文档
+## 常见问题
 
-AI 编码代理与新人请先读 **[`Agents.md`](Agents.md)** —— 硬约束速查、需求编号体系、常用命令。
+**为什么需要管理员权限？**
+读 `HKLM` 下的自启动项、操作计划任务、改 UWP 的启动状态，都必须管理员身份。核心链路 100% 依赖它，所以是全程提权，而不是运行到一半再弹一次 UAC。
+
+**接管之后，我还能手动打开那个程序吗？**
+能。接管只动"开机自启"这件事，程序本身、快捷方式、文件都没有被改动。
+
+**「延时启动 UWP」是什么意思？**
+UWP 应用的自启动由系统调度，第三方**无法延后**它。所以对 UWP 做的是"禁用系统自启 + 到点由本程序激活"—— 效果达到了，但确实绕过了系统的启动管理，UI 里也如实标注了这一点。
+
+**会不会让开机更慢？**
+不会。调度进程自己只有 3.5 MB、0.3 秒内启动完，它做的事是把原来同时抢资源的程序**错开**，总时长通常比原来短。
+
+**某项启动失败了怎么办？**
+记录失败原因并保留接管状态，不自动处理。连续失败 3 次后会常驻告警，唯一的出口是你手动点「移出延时启动」把该项还原 —— 软件不会替你改系统状态。
+
+**怎么彻底还原？**
+卸载即还原（卸载程序会先还原全部接管项）。也可以随时用命令行 `DelayStart.exe --restore-all` 单独还原。
+
+---
+
+## 开发与构建
+
+环境要求、项目结构、构建 / 测试 / 发布命令、调试技巧、打包流程 → **[docs/development.md](docs/development.md)**
+
+---
+
+## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/design.md`](docs/design.md) | **当前方案单一来源**：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发与交付流程 |
-| [`docs/decisions.md`](docs/decisions.md) | D1–D73 决策索引 + R1–R13 风险去向 |
-| [`docs/pitfalls.md`](docs/pitfalls.md) | 踩坑大全：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 / 本机环境 |
+| [docs/development.md](docs/development.md) | 环境要求、构建与测试、调试、发布打包、真机验收清单 |
+| [docs/design.md](docs/design.md) | **当前方案单一事实来源**：需求、架构与关键机制、调度端交互、编码规范 |
+| [docs/decisions.md](docs/decisions.md) | 每个决策的结论与取舍（D1–D73） |
+| [docs/pitfalls.md](docs/pitfalls.md) | 踩坑大全：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 |
+| [Agents.md](Agents.md) | AI 编码代理入口：硬约束、代码地图、命令速查、编号体系 |
 
 ---
 

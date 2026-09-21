@@ -22,8 +22,8 @@
 
 ## 硬约束（🔴 违反即构建失败或发布失败）
 
-1. **依赖方向单向**：`App → Management → Core`，`Scheduler → Core`，`Tests → Core + Management`。
-   - 🔴 `Scheduler` 绝不引用 `Management` —— NativeAOT 发布直接失败。
+1. **依赖方向单向**：`App → Management → Core`，`Scheduler → Core`，`LaunchBroker → Core`，`Tests → Core + Management`。
+   - 🔴 `Scheduler` / `LaunchBroker` 绝不引用 `Management` —— NativeAOT 发布直接失败。
    - 🔴 `Tests` 绝不引用 `App` —— 会背上 WindowsAppSDK 自包含包袱。
 2. **`DelayStart.Core` 必须 AOT 兼容**（`IsAotCompatible` 护栏）：零 COM、零反射。往 Core 放 `Microsoft.Win32.TaskScheduler`、`IShellLinkW` 之类的东西 = 打断调度端发布。
 3. **调度端是纯 Win32**（D24 批复 B）：不引用任何 UI 框架，托盘 / 面板全走 P/Invoke。禁止引入 WinForms/WPF。
@@ -39,14 +39,14 @@
 ```powershell
 .\scripts\build.ps1      # 编译全解决方案（Release，0 警告验收）
 .\scripts\test.ps1       # 单元测试（D26 约定：dotnet run，不用 dotnet test）
-.\scripts\publish.ps1    # AOT 发布双 exe + 同步进管理端 bin
+.\scripts\publish.ps1    # 发布三个 exe + 同步调度端产物进管理端 bin
 .\scripts\all.ps1        # 一条龙：build → test → publish
 .\installer\build-all.ps1  # 安装包矩阵（自包含版 / 精简版 × x64 / arm64）
 ```
 
 - 手动等价：`dotnet build DelayStart.slnx -c Release` / `dotnet run --project tests/DelayStart.Core.Tests -c Release`
 - 全解决方案 Debug 构建：`dotnet build DelayStart.slnx --no-incremental`（排查 XAML 编译问题时务必加 `--no-incremental`，obj 增量缓存会掩盖真相）
-- 验收口径：Release 0 警告 0 错误 + 全部单元测试绿（当前 292 个）
+- 验收口径：Release 0 警告 0 错误 + 全部单元测试绿（当前 359 个）
 
 ---
 
@@ -59,7 +59,7 @@
 | `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-2.3`、`NFR-1.2` |
 | `E-x` | 异常场景矩阵 | `docs/design.md` 五 | `E13` |
 | `R-x` | 技术风险（已全部闭环） | `docs/decisions.md` 附表 | `R11` |
-| `D-x` | 决策点（D1–D68） | `docs/decisions.md` | `D17` |
+| `D-x` | 决策点（D1–D73） | `docs/decisions.md` | `D17` |
 | `坑 x` | 技术陷阱（1–9 编号沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
 
 规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；踩到新坑必须追加进 `docs/pitfalls.md`。
@@ -73,7 +73,7 @@
 | 文档 | 回答什么问题 |
 |---|---|
 | `docs/design.md` | **当前方案单一来源**：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发与交付流程 |
-| `docs/decisions.md` | D1–D68 决策索引（每条 = 议题 + 最终批复）+ R1–R13 风险去向 |
+| `docs/decisions.md` | D1–D73 决策索引（每条 = 议题 + 最终批复）+ R1–R13 风险去向 |
 | `docs/pitfalls.md` | 踩坑大全：Win32/注册表/计划任务/UWP/降权/AOT/WinUI 3/安装器/本机环境，写相关代码前逐条看完 |
 
 ---

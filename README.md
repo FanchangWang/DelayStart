@@ -36,16 +36,17 @@ DelayStart.slnx
 ├─ src/DelayStart.Management     # 各来源扫描器 / 软禁用 / 接管 / 计划任务 / COM 互操作
 ├─ src/DelayStart.App            # WinUI 3 管理端（unpackaged，产出 DelayStart.exe）
 ├─ src/DelayStart.Scheduler      # 纯 Win32 + NativeAOT 调度端（产出 DelayStart.Scheduler.exe）
+├─ src/DelayStart.LaunchBroker   # NativeAOT 降权中转器（产出 DelayStart.LaunchBroker.exe，D70）
 ├─ tests/DelayStart.Core.Tests   # xUnit v3 单元测试（走 Microsoft.Testing.Platform）
 ├─ scripts/                      # 开发期脚本：build / test / publish / all
 ├─ installer/                    # Inno Setup 安装器与构建矩阵（D22 / D60）
 ├─ tools/                        # 图标等资源生成脚本
 ├─ assets/                       # 图标源图
-└─ docs/                         # design.md（方案）· decisions.md（D1–D68）· pitfalls.md（踩坑）
+└─ docs/                         # design.md（方案）· decisions.md（D1–D73）· pitfalls.md（踩坑）
 ```
 
-**依赖方向是单向的**：`App → Management → Core`，`Scheduler → Core`，`Tests → Core + Management`。
-🔴 **`Scheduler` 绝不引用 `Management`** —— 那会让 NativeAOT 发布直接失败。
+**依赖方向是单向的**：`App → Management → Core`，`Scheduler → Core`，`LaunchBroker → Core`，`Tests → Core + Management`。
+🔴 **`Scheduler` / `LaunchBroker` 绝不引用 `Management`** —— 那会让 NativeAOT 发布直接失败。
 🔴 **`Tests` 绝不引用 `App`** —— 一旦引用就要背上 WindowsAppSDK 自包含 + 运行时预装的包袱（见 `docs/design.md` 七）。
 
 ---
@@ -63,7 +64,7 @@ DelayStart.slnx
 ```powershell
 .\scripts\build.ps1     # 编译（Release，0 警告验收）
 .\scripts\test.ps1      # 单元测试
-.\scripts\publish.ps1   # AOT 发布双 exe + 同步进管理端 bin
+.\scripts\publish.ps1   # 发布三个 exe + 同步调度端产物进管理端 bin
 .\scripts\all.ps1       # 一条龙
 ```
 
@@ -112,7 +113,7 @@ AI 编码代理与新人请先读 **[`Agents.md`](Agents.md)** —— 硬约束�
 | 文档 | 内容 |
 |---|---|
 | [`docs/design.md`](docs/design.md) | **当前方案单一来源**：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发与交付流程 |
-| [`docs/decisions.md`](docs/decisions.md) | D1–D68 决策索引 + R1–R13 风险去向 |
+| [`docs/decisions.md`](docs/decisions.md) | D1–D73 决策索引 + R1–R13 风险去向 |
 | [`docs/pitfalls.md`](docs/pitfalls.md) | 踩坑大全：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 / 本机环境 |
 
 ---

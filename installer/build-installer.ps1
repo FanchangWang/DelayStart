@@ -164,6 +164,20 @@ if ($LASTEXITCODE -ne 0) { throw "调度端 publish 失败（exit $LASTEXITCODE�
 $schedulerExe = Join-Path $schedulerPublishDir 'DelayStart.Scheduler.exe'
 if (-not (Test-Path -LiteralPath $schedulerExe)) { throw "调度端产物缺失：$schedulerExe" }
 
+# ---- 2b) UIAccess 中转器 publish（D70：uiAccess="true" 目标的降权链第二跳）----
+# 与调度端同目录（{app}）部署；调度端按 AppContext.BaseDirectory 就近解析。
+$brokerPublishDir = Join-Path $repoRoot "src\DelayStart.LaunchBroker\bin\$Configuration\net10.0-windows\$Rid\publish"
+
+Write-Step "publish UIAccess 中转器 (NativeAOT $Rid)"
+& dotnet publish src\DelayStart.LaunchBroker\DelayStart.LaunchBroker.csproj -c $Configuration -r $Rid -v minimal
+if ($LASTEXITCODE -ne 0) { throw "UIAccess 中转器 publish 失败（exit $LASTEXITCODE）" }
+
+$brokerExe = Join-Path $brokerPublishDir 'DelayStart.LaunchBroker.exe'
+if (-not (Test-Path -LiteralPath $brokerExe)) { throw "UIAccess 中转器产物缺失：$brokerExe" }
+
+# iss 只认 SchedulerDir 一个来源目录 —— 把中转器并进调度端 publish 目录一起打包。
+Copy-Item -LiteralPath $brokerExe -Destination (Join-Path $schedulerPublishDir 'DelayStart.LaunchBroker.exe') -Force
+
 # ---- 3) 编译安装包 ----------------------------------------------------------
 $targetArch = if ($Rid -eq 'win-arm64') { 'arm64' } else { 'x64compatible' }
 $winAppRuntimeArch = if ($Rid -eq 'win-arm64') { 'arm64' } else { 'x64' }

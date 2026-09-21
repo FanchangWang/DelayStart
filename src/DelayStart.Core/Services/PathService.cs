@@ -78,6 +78,9 @@ public sealed class PathService
     /// <summary>管理端日志完整路径。</summary>
     public string ManagerLogPath => Path.Combine(LogsRoot, "manager.log");
 
+    /// <summary>UIAccess 中转器日志完整路径（D70：与调度端同目录，便于联合排查）。</summary>
+    public string BrokerLogPath => Path.Combine(LogsRoot, "launchbroker.log");
+
     /// <summary>实时状态文件完整路径（<c>current-run.json</c>）。</summary>
     public string CurrentRunFilePath => Path.Combine(StateRoot, "current-run.json");
 

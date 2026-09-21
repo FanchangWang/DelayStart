@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using DelayStart.Core.Launch;
 using DelayStart.Core.Models;
 
 namespace DelayStart.Core.Serialization;
@@ -36,5 +37,25 @@ namespace DelayStart.Core.Serialization;
 [JsonSerializable(typeof(RunRecord))]
 [JsonSerializable(typeof(LegacyConfigV1))]
 internal sealed partial class JsonContext : JsonSerializerContext
+{
+}
+
+/// <summary>
+/// UIAccess 中转器（<c>DelayStart.LaunchBroker.exe</c>）作业/结果的 JSON 上下文（D70）。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 与 <see cref="JsonContext"/> 分开成<b>公开</b>上下文，因为中转器是独立 AOT 工程
+/// （引用 Core 但不进调度端程序集），作业与结果两端都要用同一份 schema。
+/// 紧凑写出（WriteIndented=false）：作业/结果是机器间交接，不是给人看的。
+/// </para>
+/// </remarks>
+[JsonSourceGenerationOptions(
+    WriteIndented = false,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(BrokerLaunchJob))]
+[JsonSerializable(typeof(BrokerLaunchResult))]
+public sealed partial class BrokerJsonContext : JsonSerializerContext
 {
 }

@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Launch;
 using DelayStart.Core.Models;
+using DelayStart.Core.Serialization;
 using DelayStart.Core.Services;
 
 namespace DelayStart.Scheduler;
@@ -20,6 +22,11 @@ namespace DelayStart.Scheduler;
 /// 转主令牌 → <c>CreateProcessWithTokenW</c>，子进程为 0x2000 Medium（普通用户）。</description></item>
 /// <item><description><c>.lnk</c> / UWP：<b>降权起 explorer.exe 委托</b> —— 解析名交给外壳，
 /// 由外壳按自身普通用户令牌完成激活（D28=A，AOT 下零 COM）。</description></item>
+/// <item><description>uiAccess="true" 的 exe（如 Quicker）：<b>降权中转器链</b>（D70，
+/// 2026-09-21 用户批复）—— CPWT 直启必报 740（<c>TokenUIAccess</c> 需要 SeTcbPrivilege，
+/// 仅 SYSTEM 有），故预检清单识别后，降权拉起 <c>DelayStart.LaunchBroker.exe</c>（Medium），
+/// 由它 ShellExecute 目标（AppInfo 赋 UIAccess 并按调用方身份抬 IL），并回写
+/// <b>目标</b>的启动状态。</description></item>
 /// </list>
 /// </para>
 /// <para>
@@ -76,6 +83,22 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// </summary>
     private const int MaxCommandLineLength = 1023;
 
+    /// <summary>UIAccess 中转器可执行文件名（与调度端同目录部署，D70）。</summary>
+    private const string BrokerExecutableName = "DelayStart.LaunchBroker.exe";
+
+    /// <summary>
+    /// 中转器为识别"目标秒退"而等待目标退出的时长；超时即认为目标在正常运行并回写结果。
+    /// </summary>
+    private static readonly TimeSpan BrokerExitWaitTimeout = TimeSpan.FromMilliseconds(4_000);
+
+    /// <summary>
+    /// 调度端轮询中转器结果文件的超时（须明显大于秒退等待窗口：覆盖中转器启动、
+    /// ShellExecute、等待与回写的全过程）。
+    /// </summary>
+    private static readonly TimeSpan BrokerResultPollTimeout = TimeSpan.FromSeconds(20);
+
+    private static readonly TimeSpan BrokerPollInterval = TimeSpan.FromMilliseconds(200);
+
     private readonly ILogSink _log;
 
     /// <summary>特权只需开一次，失败也不阻断后续尝试（记录告警即可）。</summary>
@@ -127,6 +150,15 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             return LaunchViaShellDelegate(item, "快捷方式");
         }
 
+        // D70（2026-09-21 用户批复）：uiAccess="true" 的目标（如 Quicker）走 CPWT 必报
+        // 740（TokenUIAccess 需要 SeTcbPrivilege，仅 SYSTEM 有）—— 预检清单识别后改走
+        // 「降权中转器 → ShellExecute」链，由 AppInfo 赋予目标 UIAccess 标志。
+        // 清单读不出来（null）时不做特殊处理，沿用普通降权路径（失败时 740 有提示文案）。
+        if (IsUiAccessTarget(item.Path))
+        {
+            return LaunchViaUiAccessBroker(item);
+        }
+
         return LaunchDeElevated(item);
     }
 
@@ -141,6 +173,219 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// </summary>
     private static bool IsUwpItem(DelayedItem item)
         => item.Source == StartupSource.Uwp || UwpParsingName.IsParsingName(item.Path);
+
+    /// <summary>
+    /// UIAccess 目标预检（D70）：读目标 exe 的嵌入清单（RT_MANIFEST），判
+    /// <c>uiAccess="true"</c>。只读资源，不执行目标代码。
+    /// </summary>
+    /// <returns>true = 是 UIAccess 目标；false = 不是（或清单读不到，回普通路径）。</returns>
+    private static bool IsUiAccessTarget(string path)
+    {
+        if (!path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var manifest = NativeMethods.TryReadEmbeddedManifest(path);
+        return manifest is not null && UiAccessManifest.HasUiAccessFlag(manifest);
+    }
+
+    /// <summary>
+    /// UIAccess 目标的降权链（D70，2026-09-21 用户批复）：
+    /// 调度端 A（High）→ CPWT 降权拉起 <c>DelayStart.LaunchBroker.exe</c> B（Medium）→
+    /// B 经 <c>ShellExecuteEx</c> 启动目标 C → AppInfo 给 C 赋 UIAccess 标志并按调用方
+    /// 身份抬 IL（受限管理员 → High，与用户手动双击一致）→ B 把 <b>C 的</b>启动状态
+    /// （PID / 秒退 / Win32 错误）回写结果文件，调度端轮询读取。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 为什么必须经 ShellExecute：<c>TokenUIAccess</c> 需要 SeTcbPrivilege（仅 SYSTEM），
+    /// AppInfo 是用户侧唯一认可通道；普通 CreateProcess 创建目标时 UIAccess 标志静默丢失。
+    /// 🔴 回写的是目标 C 的状态，不是中转器 B 自己的 —— B 的退出码只表达"结果是否回写成功"。
+    /// 🔴 降权失败无回退（D20 红线）依旧适用：链上任何一环失败都判本条目失败。
+    /// </para>
+    /// </remarks>
+    private LaunchOutcome LaunchViaUiAccessBroker(DelayedItem item)
+    {
+        var broker = Path.Combine(AppContext.BaseDirectory, BrokerExecutableName);
+        if (!File.Exists(broker))
+        {
+            var missing = $"UIAccess 中转器缺失：{broker}（安装不完整或文件被删）。";
+            _log.Warn($"『{item.Name}』{missing}");
+            return LaunchOutcome.Failure(missing);
+        }
+
+        if (!File.Exists(item.Path))
+        {
+            return LaunchOutcome.Failure($"目标文件不存在：{item.Path}");
+        }
+
+        EnsurePrivilege();
+
+        // 作业/结果走 %TEMP% 下的一次性目录：无标签对象按 Medium 处理（MS Learn MIC），
+        // High 调度端创建的目录不挡 Medium 中转器读写。
+        var brokerTempDir = Path.Combine(
+            Path.GetTempPath(),
+            "DelayStart",
+            "broker",
+            Guid.NewGuid().ToString("N"));
+
+        BrokerLaunchJob job;
+        var jobFile = Path.Combine(brokerTempDir, "job.json");
+        try
+        {
+            Directory.CreateDirectory(brokerTempDir);
+
+            job = new BrokerLaunchJob
+            {
+                Target = item.Path,
+                Arguments = item.Arguments ?? string.Empty,
+                WorkingDirectory = ResolveWorkingDirectory(item),
+                ResultFile = Path.Combine(brokerTempDir, "result.json"),
+                WaitTimeoutMs = (int)BrokerExitWaitTimeout.TotalMilliseconds,
+            };
+
+            File.WriteAllText(jobFile, JsonSerializer.Serialize(job, BrokerJsonContext.Default.BrokerLaunchJob));
+        }
+        catch (Exception ex)
+        {
+            TryDeleteDirectory(brokerTempDir);
+            return LaunchOutcome.Failure($"准备 UIAccess 中转作业失败：{ex.Message}");
+        }
+
+        _log.Info(
+            $"『{item.Name}』目标清单声明 uiAccess=\"true\"，改走中转器降权链"
+            + "（A→B→ShellExecute；目标将由系统按 uiAccess 策略以高完整性启动，与手动双击一致）。");
+
+        var primaryToken = AcquireShellPrimaryToken(item);
+        if (primaryToken == 0)
+        {
+            TryDeleteDirectory(brokerTempDir);
+            return LaunchOutcome.Failure("取不到外壳主令牌，无法降权启动（原因见上方日志）。");
+        }
+
+        try
+        {
+            var brokerOutcome = CreateWithToken(
+                item,
+                primaryToken,
+                broker,
+                CommandLineService.Build(broker, $"\"{jobFile}\""),
+                string.Empty);
+
+            if (!brokerOutcome.Created)
+            {
+                return brokerOutcome;
+            }
+
+            var result = PollBrokerResult(job.ResultFile);
+            if (result is null)
+            {
+                var timeout = $"中转器超时未回写结果（超过 {(int)BrokerResultPollTimeout.TotalSeconds} 秒），"
+                    + "目标启动状态未知 —— 判失败，不提权回退。";
+                _log.Warn($"『{item.Name}』{timeout}");
+                return LaunchOutcome.Failure(timeout);
+            }
+
+            if (!result.Ok)
+            {
+                var failure = DescribeBrokerFailure(result);
+                _log.Warn($"『{item.Name}』{failure}（按 D20 不提权回退）。");
+                return LaunchOutcome.Failure(failure);
+            }
+
+            if (result.ExitedImmediately)
+            {
+                _log.Warn(
+                    $"『{item.Name}』目标进程创建后 {BrokerExitWaitTimeout.TotalMilliseconds} ms 内自行退出"
+                    + $"（exitCode={result.ExitCode}）—— 创建成功但可能启动失败，等复查判定。");
+            }
+
+            // 目标是 uiAccess 程序：系统的成文策略是 AppInfo 按调用方身份抬 IL
+            // （受限管理员 → High）。这不是我们提权，用户手动双击得到的结果完全相同。
+            var pidText = result.ProcessId is { } pid
+                ? pid.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "未知";
+
+            _log.Info($"『{item.Name}』已由中转器降权启动目标（目标 PID {pidText}）。");
+
+            return LaunchOutcome.Success(result.ProcessId);
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(primaryToken);
+            TryDeleteDirectory(brokerTempDir);
+        }
+    }
+
+    /// <summary>
+    /// 轮询中转器回写的结果文件：文件被中转器以「写临时名 + 原子改名」产出，
+    /// 出现即可安全读取。超时返回 <see langword="null"/>。
+    /// </summary>
+    private static BrokerLaunchResult? PollBrokerResult(string resultFile)
+    {
+        var deadline = DateTime.UtcNow + BrokerResultPollTimeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(BrokerPollInterval);
+
+            try
+            {
+                if (!File.Exists(resultFile))
+                {
+                    continue;
+                }
+
+                var json = File.ReadAllText(resultFile);
+                return JsonSerializer.Deserialize(json, BrokerJsonContext.Default.BrokerLaunchResult);
+            }
+            catch (IOException)
+            {
+                // 读取瞬间被占用等瞬时错误：继续轮询直到超时。
+            }
+            catch (JsonException)
+            {
+                // 理论上不该发生（中转器原子改名 + 源生成 schema 共享）；按坏结果处理。
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>把中转器的失败结果转成给用户看/写日志的中文描述。</summary>
+    private static string DescribeBrokerFailure(BrokerLaunchResult result)
+    {
+        var message = $"中转器报告目标启动失败：ShellExecuteEx 失败，Win32Error={result.Win32Error}";
+
+        if (result.Win32Error == 740)
+        {
+            message += "（740 = ERROR_ELEVATION_REQUIRED：目标要求提权或清单校验未过）";
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            message += $" —— {result.Message}";
+        }
+
+        return message;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception)
+        {
+            // 临时目录清理失败不影响启动结果（下次调度用新 GUID 目录，不积累）。
+        }
+    }
 
     /// <summary>管理员条目：继承调度端提权令牌直接启动（有意提权）。</summary>
     private LaunchOutcome LaunchDirect(DelayedItem item)
@@ -456,7 +701,19 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
                         ref startupInfo,
                         out var processInfo))
                 {
-                    return Fail("CreateProcessWithTokenW", item);
+                    var error = Marshal.GetLastWin32Error();
+                    var message = $"CreateProcessWithTokenW 失败，Win32Error={error}";
+
+                    // 740 特判（D70）：除"目标要求提权"外，uiAccess=true 清单也会走到这里 ——
+                    // 正常情况已被清单预检拦截改走中转器；到这说明清单读不到（加密/非 PE 壳）等。
+                    if (error == 740)
+                    {
+                        message += "（740 = ERROR_ELEVATION_REQUIRED：目标要求提权，"
+                            + "或清单声明 uiAccess=true 且预检未能识别）";
+                    }
+
+                    _log.Warn($"『{item.Name}』降权启动失败：{message}（按 D20 不提权回退）。");
+                    return LaunchOutcome.Failure(message);
                 }
 
                 NativeMethods.CloseHandle(processInfo.Thread);

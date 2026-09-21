@@ -192,6 +192,7 @@ Tests ──> Core (+ Management)
 4. **软禁用矩阵**：Registry→`StartupApproved\Run`（WOW64→`Run32`）；Folder→`StartupFolder`；ScheduledTask→任务级/触发器级细分（D67：单触发器切任务级；多触发器只切登录/启动触发器且**全部**切、任务级已关时禁用动作一个字节都不动、启用先开任务级）；UWP→`State=0/2`；Manual→无动作。
 5. **调度时序**：`remaining = DelaySeconds - elapsed`（绝对时间点）；`Stopwatch` 单调计时；只保证发起顺序（坑 7：同延时值不保证前者完成初始化）。
 6. **启动身份**：管理员条目继承令牌直启；普通条目 `GetShellWindow` 外壳令牌 → `DuplicateTokenEx` → `CreateProcessWithTokenW`（D40 方案 7）；**降权链任何一步失败 = 本条目失败并继续，绝不提权回退**；`.lnk`/UWP 经 explorer 外壳委托（UWP 恒降权委托，D45）；`.ps1` 走宿主（pwsh 优先，`-NoProfile -ExecutionPolicy Bypass -File`）。
+6a. **uiAccess 目标（D70，2026-09-21 用户批复）**：预检目标 RT_MANIFEST（`LoadLibraryEx` AS_DATAFILE 只读资源）判 `uiAccess="true"`（Quicker 类）——这类目标 CPWT 直启必 740（`TokenUIAccess` 需 SeTcbPrivilege，仅 SYSTEM 有）。改走**降权中转器链**：调度端 A（High）写作业 JSON → CPWT 降权拉起 `DelayStart.LaunchBroker.exe` B（Medium，AOT 单文件，与调度端同目录部署）→ B 对目标 C `ShellExecuteEx`（AppInfo 校验签名+安全位置+清单声明后赋 UIAccess、按调用方身份抬 IL：受限管理员 → High，与手动双击一致）→ B 把 **C 的**启动状态（PID/秒退/Win32 错误）经结果 JSON 回写（写 `.tmp` + 原子改名），调度端轮询读取；B 自身退出码只表达回写是否成功。作业/结果契约 = `BrokerLaunchJob`/`BrokerLaunchResult`（Core，`BrokerJsonContext` 源生成）。
 7. **成功判定**：创建成功 + 1500ms 后复查 `HasExited`；退出码 0 = 成功（拉起已有实例的必要宽容）；UWP 无 PID 收到 `null` 快照直接判成功（D28）。
 8. **原子写**：`<name>.tmp` → `File.Replace`（目标不存在则 `File.Move(overwrite:true)`）。
 9. **单实例**：`Local\DelayStartScheduler` / `Local\DelayStartManager` Mutex，重复触发立即退出零副作用。
@@ -234,13 +235,15 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 
 **结论先行：调度器是基础设施进程，不是应用程序。无主窗口，默认隐形，跑完即退。**
 
-**信息分级（0–4）**：完全静默 → 托盘悬停一行摘要（63 字符上限、不换行）→ 点击弹面板（右下角工作区、失焦即关、只读列表）→ 系统通知（默认仅失败）→ 管理端运行日志。任何升级必须用户主动触发（失败除外）。
+**信息分级（0–4）**：完全静默 → 托盘悬停一行摘要（127 字符上限、不换行；格式 `n/m 已启动 · 下一项 n 秒`，D3 批复 2026-09-21）→ 点击弹面板（右下角工作区、失焦即关、只读列表）→ 系统通知（默认仅失败）→ 管理端运行日志。任何升级必须用户主动触发（失败除外）。
+
+**右键菜单（D1=A / D2 批复 2026-09-21）**：托盘右键 → `打开管理端`（缺失时气泡报错，D5）、`打开运行日志`、`立即启动全部剩余条目`（等待条目到期时刻拨到当下）、`立即退出(跳过剩余条目)`（跳过 = **不启动**，标记 `Skipped` 落盘、日志与时间轴可见，随后走正常 Finish）。无等待条目时后两项置灰；菜单走 `SetForegroundWindow + TrackPopupMenu(TPM_RETURNCMD) + WM_NULL`（KB135788）。🔴 无裸「退出」项 —— 接管语义下中途退出会让剩余条目永不启动。**提权门槛**：非管理员令牌（手动双击）静默退出并记日志，调度端唯一合法入口是 `RunLevel=Highest` 计划任务。**面板双主题**（2026-09-21 批复）：跟随管理端设置主题（自动 = 读系统 `AppsUseLightTheme`），浅/深两套调色板在绘制帧解析。
 
 **通知约束（为什么不能只靠通知）**：elevated 进程发不了 AppNotification；AOT 用不了 WinRT 通知 API；Win11 气泡不进通知中心。⇒ 分层送达：气泡 + 角标 + **管理端运行记录兜底**。
 
-**文案矩阵**：全部成功默认不发（预期结果不是新闻）；部分失败 `N 个程序启动失败`（列前 2 项）；失败过多 `…等 N 项`。
+**文案矩阵**：全部成功默认不发（预期结果不是新闻）；部分失败 `N 个程序启动失败`（列前 2 项）；失败过多 `…等 N 项`；含跳过 `X 个已启动 · Y 个已跳过`。
 
-**成功判定与失败策略（D17=D）**：软件不自动处理——保持接管 + 提醒持续升级（第 1/2 次可忽略；**≥3 次角标不自动消失、告警条不提供忽略**，唯一出口 `[移出延时启动]`）；连续失败次数由 `FailureStreakService` 现算。状态机 `waiting → launching → done/failed(→重试→failed 最终)`。
+**成功判定与失败策略（D17=D）**：软件不自动处理——保持接管 + 提醒持续升级（第 1/2 次可忽略；**≥3 次角标不自动消失、告警条不提供忽略**，唯一出口 `[移出延时启动]`）；连续失败次数由 `FailureStreakService` 现算。状态机 `waiting → launching → done/failed(→重试→failed 最终)`，另有 `waiting → skipped`（仅用户主动触发，不计失败）。
 
 **跨进程状态**：调度端每次状态变化原子重写 `state/current-run.json`（含 pid）；管理端用 `Process.GetProcessById` 探测判"进行中"（D19）。点击通知 → `DelayStart.exe --goto-log --run=<runId>`。
 

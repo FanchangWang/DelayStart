@@ -188,7 +188,11 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 ; 调度端：AOT 单文件，放在安装根（调度任务按此路径注册）。
 ; ⚠️ 调度端两种形态都用 AOT —— 它不依赖 .NET 运行时，精简版用户因此只需补两个运行时而不是三个。
 Source: "{#SchedulerDir}\{#SchedulerExe}"; DestDir: "{app}"; Flags: ignoreversion
-; （D40：普通用户代理 DelayStart.Agent 已删除 —— 普通条目由调度端亲自降权启动，不再需要第二个 exe）
+; UIAccess 中转器（D70）：调度端降权链的第二跳，预检到 uiAccess="true" 目标时由调度端降权拉起；
+; 缺失时该类条目判失败（调度端有明确日志），不影响其他条目。
+Source: "{#SchedulerDir}\DelayStart.LaunchBroker.exe"; DestDir: "{app}"; Flags: ignoreversion
+; （D40：普通用户代理 DelayStart.Agent 已删除 —— 普通条目由调度端亲自降权启动，不再需要第二个 exe；
+;   D70 又引入了中转器 DelayStart.LaunchBroker，但它只服务 uiAccess 目标，与当年代理不是一回事）
 
 [Icons]
 ; 开始菜单恒建；桌面项由 [Tasks] 的 desktopicon 控制（D62）。

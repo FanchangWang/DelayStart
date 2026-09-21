@@ -114,11 +114,16 @@
   <Target Name="CopySchedulerPublishOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
       <_SchedulerPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.Scheduler\bin\$(Configuration)\net10.0-windows\$(RuntimeIdentifier)\publish\DelayStart.Scheduler.exe</_SchedulerPublishExe>
+      <_BrokerPublishExe>$(MSBuildThisFileDirectory)..\DelayStart.LaunchBroker\bin\$(Configuration)\net10.0-windows\$(RuntimeIdentifier)\publish\DelayStart.LaunchBroker.exe</_BrokerPublishExe>
     </PropertyGroup>
     <Copy
       SourceFiles="$(_SchedulerPublishExe)"
       DestinationFiles="$(OutDir)DelayStart.Scheduler.exe"
       Condition="Exists($(_SchedulerPublishExe))" />
+    <Copy
+      SourceFiles="$(_BrokerPublishExe)"
+      DestinationFiles="$(OutDir)DelayStart.LaunchBroker.exe"
+      Condition="Exists($(_BrokerPublishExe))" />
     <Message
       Text="DelayStart.Scheduler 尚未 publish（缺少 $(_SchedulerPublishExe)），App bin 里的调度器 exe 可能不可运行 —— 先跑 dotnet publish src/DelayStart.Scheduler"
       Condition="!Exists($(_SchedulerPublishExe))"

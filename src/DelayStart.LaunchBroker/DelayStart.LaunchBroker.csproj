@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>DelayStart.LaunchBroker</RootNamespace>
+    <AssemblyName>DelayStart.LaunchBroker</AssemblyName>
+
+    <!--
+      ★ UIAccess 中转器（D70，2026-09-21 用户批复）：降权链 A(High) → 本程序(Medium) →
+        ShellExecute → 目标 C（asInvoker + uiAccess="true"）。
+        目标由 AppInfo 赋予 UIAccess 标志并按调用方身份抬 IL（受限管理员 → High，
+        与用户手动双击一致）；本程序负责把**目标 C** 的启动状态（PID / 秒退 / Win32 错误）
+        回写给调度端 —— 不把中转器自己的状态当目标状态。
+      ★ WinExe：与调度端同理，登录/启动瞬间不能闪控制台黑框。
+    -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <StripSymbols>true</StripSymbols>
+
+    <!-- ShellExecuteInfoW 走 LibraryImport 源生成器 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 作业/结果契约与 JSON 源生成上下文都在 Core（BrokerJsonContext），两端共享 schema -->
+    <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <_WinSdkLibArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_WinSdkLibArch>
+    <_WinSdkLibArch Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</_WinSdkLibArch>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与调度端同款：本机 VS 2026 的 vcvarsall 不带 Windows SDK 库路径，显式补上 -->
+    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\$(_WinSdkLibArch)" Condition="Exists('C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\$(_WinSdkLibArch)')" />
+    <AdditionalNativeLibraryDirectories Include="C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\$(_WinSdkLibArch)" Condition="Exists('C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\$(_WinSdkLibArch)')" />
+  </ItemGroup>
+
+</Project>

@@ -715,22 +715,21 @@ internal sealed class SchedulerEngine
     /// <returns>被跳过（标记 <see cref="RunItemState.Skipped"/>）的条目数；0 = 没有可跳过的条目。</returns>
     private int SkipRemainingCore(bool fromPanel)
     {
+        // 可跳判定下沉到 Core 的 SkipPolicy；"入口 → 原因文案"的映射留在引擎层
+        // （策略层不产出面向用户的文案）。
+        var entry = fromPanel ? SkipEntry.Panel : SkipEntry.TrayMenu;
+        var reason = fromPanel ? "用户跳过（进度面板）" : "用户跳过（托盘右键菜单）";
+
         var count = 0;
         foreach (var runtime in _items)
         {
-            var state = runtime.Result.State;
-
-            // 面板入口只跳 Waiting —— Launching 的照常复查出结果（用户还要在面板上看）；
-            // 菜单入口连 Launching 一起跳（用户不想等复查窗口）。
-            var skippable = state == RunItemState.Waiting
-                || (!fromPanel && state == RunItemState.Launching);
-            if (!skippable)
+            if (!SkipPolicy.Decide(runtime.Result.State, entry).CanSkip)
             {
                 continue;
             }
 
             runtime.Result.State = RunItemState.Skipped;
-            runtime.Result.Reason = fromPanel ? "用户跳过（进度面板）" : "用户跳过（托盘右键菜单）";
+            runtime.Result.Reason = reason;
             count++;
         }
 

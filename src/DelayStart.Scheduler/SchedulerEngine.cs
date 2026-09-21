@@ -39,7 +39,7 @@ internal sealed class SchedulerEngine
     private readonly PathService _paths;
     private readonly Settings _settings;
 
-    private readonly List<RuntimeItem> _items = [];
+    private readonly List<SchedulerRuntimeItem> _items = [];
     private readonly Stopwatch _stopwatch = new();
 
     private TrayIconHost? _tray;
@@ -84,19 +84,6 @@ internal sealed class SchedulerEngine
         _paths = paths;
         _log = log;
         _settings = _configStore.Load().Settings;
-    }
-
-    /// <summary>单个条目的运行时状态。</summary>
-    private sealed class RuntimeItem
-    {
-        public required DelayedItem Item { get; init; }
-        public required RunItemResult Result { get; init; }
-        public int? ProcessId { get; set; }
-        public TimeSpan RecheckAt { get; set; }
-
-        /// <summary>到期启动时刻（自 <see cref="_stopwatch"/> 起算的绝对秒）。
-        /// 初值 = 配置延时；「立即启动全部剩余」把它拨到当下（托盘右键菜单，2026-09-21 批复）。</summary>
-        public TimeSpan LaunchAt { get; set; }
     }
 
     /// <summary>
@@ -172,7 +159,7 @@ internal sealed class SchedulerEngine
 
         for (var index = 0; index < enabled.Count; index++)
         {
-            _items.Add(new RuntimeItem { Item = enabled[index], Result = _record.Items[index], LaunchAt = TimeSpan.FromSeconds(enabled[index].DelaySeconds) });
+            _items.Add(new SchedulerRuntimeItem { Item = enabled[index], Result = _record.Items[index], LaunchAt = TimeSpan.FromSeconds(enabled[index].DelaySeconds) });
         }
 
         // D40：调度端亲自降权，没有代理进程，也就没有预热这一步。
@@ -290,7 +277,7 @@ internal sealed class SchedulerEngine
     }
 
     /// <summary>发起一次启动；失败且仍有重试额度时立即重试（同一次运行内，FR-9.6）。</summary>
-    private void Launch(RuntimeItem runtime)
+    private void Launch(SchedulerRuntimeItem runtime)
     {
         while (true)
         {
@@ -321,7 +308,7 @@ internal sealed class SchedulerEngine
     }
 
     /// <summary>复查窗口到期：探测进程状态并做最终判定（机制 7）。</summary>
-    private void Evaluate(RuntimeItem runtime)
+    private void Evaluate(SchedulerRuntimeItem runtime)
     {
         var snapshot = ProbeProcess(runtime.ProcessId);
         var evaluation = LaunchResultEvaluator.Evaluate(
@@ -336,7 +323,7 @@ internal sealed class SchedulerEngine
         }
     }
 
-    private void MarkResult(RuntimeItem runtime, LaunchEvaluation evaluation)
+    private void MarkResult(SchedulerRuntimeItem runtime, LaunchEvaluation evaluation)
     {
         runtime.Result.State = evaluation.State;
         runtime.Result.FailureReason = evaluation.Reason;

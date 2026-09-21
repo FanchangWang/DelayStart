@@ -6,7 +6,7 @@ using DelayStart.Management.Models;
 namespace DelayStart.Management.Services;
 
 /// <summary>
-/// 接管（加入延时启动）与释放（移出延时启动）的复合操作（FR-3 / <c>architecture.md</c> 3.3）。
+/// 接管（加入延时启动）与释放（移出延时启动）的复合操作（FR-3 / <c>design.md</c> 7.3）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -246,7 +246,7 @@ public sealed class TakeoverService
     }
 
     /// <summary>
-    /// 把系统启动项恢复成**接管前**的样子（FR-2.7 / FR-3.4 与 <c>requirements.md</c> 9.3 第 4 条）。
+    /// 把系统启动项恢复成**接管前**的样子（FR-2.7 / FR-3.4 与 <c>design.md</c> NFR-3.2 安全验收）。
     /// </summary>
     /// <param name="item">配置中的条目，靠 <see cref="DelayedItem.OriginalState"/> 回答"接管前是什么样"。</param>
     /// <param name="source">该条目所属来源。</param>

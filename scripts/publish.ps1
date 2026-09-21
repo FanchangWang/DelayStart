@@ -1,5 +1,5 @@
 # DelayStart —— AOT 发布双 exe + 同步进管理端 bin
-# 用法: .\publish.ps1 [-Rid win-x64]
+# 用法: .\scripts\publish.ps1 [-Rid win-x64]
 # 说明: Scheduler 为 NativeAOT 单文件发布；最后 build App 触发 csproj 同步钩子拷入。
 #       （D40：普通用户代理 DelayStart.Agent 已删除，普通条目由调度端亲自降权启动。）
 #       （D60：架构参数化 —— 安装包构建走 installer\build-installer.ps1，本脚本只服务开发期。）
@@ -10,7 +10,7 @@ param(
     [string]$Rid = 'win-x64'
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Set-Location $PSScriptRoot
+Set-Location "$PSScriptRoot\.."
 
 $ErrorActionPreference = 'Continue'
 

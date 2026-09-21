@@ -1,7 +1,7 @@
 namespace DelayStart.Core.Services;
 
 /// <summary>
-/// 全项目**唯一**的路径解析入口（D23 / <c>docs/architecture.md</c> §1.5）。
+/// 全项目**唯一**的路径解析入口（D23 / <c>docs/design.md</c> 六）。
 /// </summary>
 /// <remarks>
 /// <para>

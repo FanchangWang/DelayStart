@@ -3,11 +3,11 @@ using DelayStart.Core.Models;
 namespace DelayStart.Management.Abstractions;
 
 /// <summary>
-/// 一类自启动来源的扫描与软禁用（<c>docs/architecture.md</c> 3.2）。
+/// 一类自启动来源的扫描与软禁用（<c>docs/design.md</c> 7.4）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 四个实现（注册表 / 启动文件夹 / 计划任务 / UWP）覆盖 <c>requirements.md</c> 4.1 的全部来源。
+/// 四个实现（注册表 / 启动文件夹 / 计划任务 / UWP）覆盖 <c>design.md</c> 二 的全部来源。
 /// 注册表与启动文件夹各需要**两个或三个实例**（不同 scope），所以实现类的数量少于实例数 ——
 /// <c>ScanService</c> 拿到的是实例列表，不是类型列表。
 /// </para>

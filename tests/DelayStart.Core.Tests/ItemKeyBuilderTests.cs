@@ -14,7 +14,7 @@ public sealed class ItemKeyBuilderTests
         // Arrange / Act
         var key = ItemKeyBuilder.Build(StartupSource.Registry, StartupScope.Hkcu, "Weixin");
 
-        // Assert：格式与 docs/architecture.md §4.5 的示例一致
+        // Assert：格式与 docs/design.md §4.5 的示例一致
         Assert.Equal("registry:hkcu:weixin", key);
     }
 

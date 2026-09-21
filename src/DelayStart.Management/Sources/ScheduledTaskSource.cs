@@ -9,13 +9,13 @@ using Microsoft.Win32.TaskScheduler;
 // 🔴 R2：TaskScheduler 包里的 Task 与 System.Threading.Tasks.Task 同名。
 // 本文件明明只需要前者，仍然显式起别名 —— 这样以后有人在这个文件里加
 // 一个 async 方法时，不会因为 "Task" 突然解析到错误的类型而写出难查的 bug。
-// 见 docs/architecture.md 第九节 R2。
+// 见 docs/decisions.md 附表 R2。
 using TaskSchedulerTask = Microsoft.Win32.TaskScheduler.Task;
 
 namespace DelayStart.Management.Sources;
 
 /// <summary>
-/// 计划任务来源（FR-1 / <c>api-analysis.md</c> 1.4）。只收**登录触发**与**启动触发**的任务。
+/// 计划任务来源（FR-1 / <c>pitfalls.md</c> 二）。只收**登录触发**与**启动触发**的任务。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -87,7 +87,7 @@ public sealed class ScheduledTaskSource : IStartupSource
             }
             catch (Exception ex)
             {
-                // FR-1.4 / api-analysis.md 1.4：坏任务必须跳过，不能让一个任务打断整次枚举。
+                // FR-1.4 / pitfalls.md 二：坏任务必须跳过，不能让一个任务打断整次枚举。
                 // 这里不筛异常类型是刻意的：TaskScheduler 会抛 COMException、TargetInvocationException、
                 // XmlException 等多种类型，逐个列举必然漏。
                 _log.Warn(ex, $"读取计划任务『{SafeName(task)}』失败，已跳过（FR-1.4）");

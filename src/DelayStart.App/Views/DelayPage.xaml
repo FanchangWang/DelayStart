@@ -9,7 +9,7 @@
     mc:Ignorable="d">
 
     <!--
-        「延时启动」页（docs/design-spec.md 页面 3）。
+        「延时启动」页（docs/design.md 7.5）。
         ⚠️ 本页**只有列表**一种视图 —— 时间轴视图已按 D37 = B 整体删除。
         列：顺序 / 图标 / 程序 / 延时 / 身份 / 开关 / ↑↓ / 操作。
 
@@ -309,7 +309,7 @@
                 </ItemsControl>
             </ScrollViewer>
 
-        <!-- 空状态（design-spec 页面 3） -->
+        <!-- 空状态（docs/design.md 7.5） -->
         <StackPanel
             Grid.Row="3"
             HorizontalAlignment="Center"

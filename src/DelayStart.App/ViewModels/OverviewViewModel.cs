@@ -11,7 +11,7 @@ using DelayStart.Management.Abstractions;
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 总览页 ViewModel（UI v3，<c>docs/ui-mockup-v3.html</c>）：
+/// 总览页 ViewModel（UI v3，2026-09-21 批复）：
 /// 延时列表来源计数 / 开机调度任务状态卡 / 扫描来源计数 / 最近一次开机调度。
 /// </summary>
 /// <remarks>

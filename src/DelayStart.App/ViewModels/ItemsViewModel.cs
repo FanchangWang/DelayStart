@@ -14,7 +14,7 @@ namespace DelayStart.App.ViewModels;
 
 /// <summary>
 /// 「自启动项」来源页的 ViewModel（UI v2：四个来源共用本类，由
-/// <see cref="SourceFilter"/> 区分当前页，docs/ui-mockup-v2.html）。
+/// <see cref="SourceFilter"/> 区分当前页）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -47,7 +47,7 @@ public sealed partial class ItemsViewModel : ObservableObject
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
 
-    /// <summary>状态筛选的序号：0 全部状态 / 1 已启用 / 2 已禁用 / 3 已接管（design-spec 页面 2）。</summary>
+    /// <summary>状态筛选的序号：0 全部状态 / 1 已启用 / 2 已禁用 / 3 已接管（docs/design.md 7.5）。</summary>
     [ObservableProperty]
     public partial int StatusFilterIndex { get; set; }
 

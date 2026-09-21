@@ -12,7 +12,7 @@ public static class FailureAlertPolicy
 {
     /// <summary>
     /// 升级为 <see cref="FailureStreakLevel.Escalated"/> 所需的连续失败次数
-    /// （<c>docs/scheduler-design.md</c> 9.2：「≥ 3 次 → 角标不自动消失」）。
+    /// （<c>docs/design.md</c> 八：「≥ 3 次 → 角标不自动消失」）。
     /// </summary>
     public const int EscalationThreshold = 3;
 

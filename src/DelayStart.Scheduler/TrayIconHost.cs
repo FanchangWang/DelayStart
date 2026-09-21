@@ -1,7 +1,7 @@
 namespace DelayStart.Scheduler;
 
 /// <summary>
-/// 托盘图标（信息分级 1 级，<c>scheduler-design.md</c> 第三节）。
+/// 托盘图标（信息分级 1 级，<c>design.md</c> 八）。
 /// </summary>
 /// <remarks>
 /// <para>

@@ -11,7 +11,7 @@ using Microsoft.UI.Xaml.Controls;
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「延时启动」页（<c>design-spec.md</c> 页面 3）。数据来自 <c>config.json</c>。
+/// 「延时启动」页（<c>design.md</c> 7.5）。数据来自 <c>config.json</c>。
 /// </summary>
 public sealed partial class DelayPage : Page
 {
@@ -184,7 +184,7 @@ public sealed partial class DelayPage : Page
     /// <remarks>
     /// 🔴 **两种变体文案不能合并成一句**：手动条目与系统条目被移除后对系统的影响完全不同
     /// （前者不动系统、后者恢复原自启动）。写成一句"确定要移除吗"等于让用户赌。
-    /// 文案取自 <c>docs/ui-mockup.html</c> 的 <c>unlink()</c>。
+    /// 文案取自 UI 原型评审定稿的 <c>unlink()</c>。
     /// </remarks>
     private async void OnRemoveRequested(object sender, RoutedEventArgs e)
     {

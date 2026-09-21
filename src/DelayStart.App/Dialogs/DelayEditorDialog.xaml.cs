@@ -13,7 +13,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 namespace DelayStart.App.Dialogs;
 
 /// <summary>
-/// 延时配置编辑器（<c>design-spec.md</c> 三之二）。4 种进入方式共用这一个弹窗，
+/// 延时配置编辑器（<c>design.md</c> 7.5）。4 种进入方式共用这一个弹窗，
 /// 靠"这条记录有没有系统来源"分叉成 2 种形态（目标程序块：只读卡片 / 可选目标 + 页签）。
 /// </summary>
 /// <remarks>
@@ -688,7 +688,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// 🔴 WinRT 的 <c>FileOpenPicker</c> 在提权进程里打不开（选择器 broker 拒绝高完整性
     /// 令牌，表现为"点击选择程序没反应"—— 2026-09-19 用户实测）。改用 Win32 的
     /// <see cref="Win32FilePicker"/>（记事本等系统提权程序用的同一套对话框）。
-    /// 这是「手动添加」的**主路径**，拖放只是增强 —— 按 <c>architecture.md</c> 第九节，
+    /// 这是「手动添加」的**主路径**，拖放只是增强 —— 按 <c>design.md</c> 7.5 的提权交互约束，
     /// 这条路径必须 100% 可用。对话框自己泵模态消息循环，同步调用即可。
     /// </remarks>
     private Task<string?> PickProgramAsync()

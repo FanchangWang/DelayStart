@@ -5,7 +5,7 @@ namespace DelayStart.Core.Models;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 这是 <c>docs/scheduler-design.md</c> 9.1 要求的**现算**结果，不是持久化字段 ——
+/// 这是 <c>docs/design.md</c> 八 要求的**现算**结果，不是持久化字段 ——
 /// 存计数会在"用户手动移出条目"和"归档被清理"时产生不一致（D31）。
 /// </para>
 /// <para>

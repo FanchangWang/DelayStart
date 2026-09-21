@@ -8,7 +8,7 @@ using DelayStart.Core.Services;
 namespace DelayStart.Scheduler;
 
 /// <summary>
-/// 调度引擎（机制 5–8，<c>docs/scheduler-design.md</c>）。
+/// 调度引擎（机制 5–8，<c>docs/design.md 八</c>）。
 /// </summary>
 /// <remarks>
 /// <para>

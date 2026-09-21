@@ -6,13 +6,13 @@ namespace DelayStart.Core.Models;
 /// <remarks>
 /// <para>
 /// 这是给**程序**判断用的结构化原因；面向用户的文案另有一层映射
-/// （见 <c>docs/design-spec.md</c> 错误文案）。两者分离是为了让 UI 文案可改而不动逻辑。
+/// （见 <c>docs/design.md</c> 7.3）。两者分离是为了让 UI 文案可改而不动逻辑。
 /// </para>
 /// <para>
 /// ⚠️ <see cref="AccessDenied"/> 的语义在 D20 之后**已经变了**：管理端全程提权，
 /// 所以它不再表示「需要提权」，而是「该项受 ACL / 组策略保护」。
 /// UI 不得据此提示用户「请以管理员身份运行」—— 他已经在管理员身份下了。
-/// 见 <c>docs/coding-standards.md</c> 第八节、E2。
+/// 见 <c>docs/design.md</c> 9.3、E2。
 /// </para>
 /// </remarks>
 public enum StartupFailureReason

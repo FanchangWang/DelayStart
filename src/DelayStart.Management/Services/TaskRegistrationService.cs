@@ -11,7 +11,7 @@ namespace DelayStart.Management.Services;
 
 /// <summary>
 /// 计划任务 <c>\DelayStartScheduler</c> 的注册 / 更新 / 删除
-/// （FR-11 / D39 单任务方案 / <c>api-analysis.md</c> 3.1）。
+/// （FR-11 / D39 单任务方案 / <c>pitfalls.md</c> 二）。
 /// </summary>
 /// <remarks>
 /// <para>

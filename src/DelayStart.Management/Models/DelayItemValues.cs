@@ -14,7 +14,7 @@ namespace DelayStart.Management.Models;
 /// 只在**手动条目**上生效。
 /// </para>
 /// <para>
-/// 这条分叉来自 <c>design-spec.md</c> 三之二：分叉的唯一依据是"这条记录有没有系统来源"。
+/// 这条分叉来自 <c>design.md</c> 7.5：分叉的唯一依据是"这条记录有没有系统来源"。
 /// 有来源 → 路径由系统项决定，改了就和"接管时记录的原始状态"对不上，
 /// 释放时按 <see cref="DelayedItem.SourceKey"/> 恢复的是另一个位置的项；
 /// 没来源 → 路径就是这个记录的全部意义，必须能改。

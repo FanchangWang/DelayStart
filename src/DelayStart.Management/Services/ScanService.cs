@@ -6,7 +6,7 @@ using DelayStart.Management.Models;
 namespace DelayStart.Management.Services;
 
 /// <summary>
-/// 遍历全部来源、汇总扫描结果（FR-1.1–FR-1.3 / <c>architecture.md</c> 3.2）。
+/// 遍历全部来源、汇总扫描结果（FR-1.1–FR-1.3 / <c>design.md</c> 7.4）。
 /// </summary>
 /// <remarks>
 /// <para>

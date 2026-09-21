@@ -5,7 +5,7 @@ namespace DelayStart.Core.Models;
 /// </summary>
 /// <remarks>
 /// 该枚举直接决定托盘角标、管理端时间轴颜色与「上次运行结果」横幅，取值不得随意增删
-/// （见 <c>docs/scheduler-design.md</c> 第九节状态文案矩阵）。
+/// （见 <c>docs/design.md</c> 八状态文案矩阵）。
 /// </remarks>
 public enum RunItemState
 {

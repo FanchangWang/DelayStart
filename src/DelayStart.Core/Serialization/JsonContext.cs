@@ -16,7 +16,7 @@ namespace DelayStart.Core.Serialization;
 /// 会让这类调用在构建期直接报 <c>IL2026</c> / <c>IL3050</c>（R5 守门）。
 /// </para>
 /// <para>
-/// 命名策略固定 camelCase（与 <c>docs/architecture.md</c> §4.4 的示例一致）；
+/// 命名策略固定 camelCase（与 <c>docs/design.md</c> 7.4 的示例一致）；
 /// 枚举序列化为**字符串**而非数字，因为配置文件是给人看的，也是跨版本演进时更稳的格式。
 /// </para>
 /// <para>

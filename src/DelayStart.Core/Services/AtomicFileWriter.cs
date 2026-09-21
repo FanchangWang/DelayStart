@@ -17,7 +17,7 @@ namespace DelayStart.Core.Services;
 /// 拿到一个被掩盖的失败原因，得不偿失。
 /// </para>
 /// <para>
-/// 编码固定 UTF-8 **无 BOM**，与 <c>coding-standards.md</c> §3.1 一致。
+/// 编码固定 UTF-8 **无 BOM**，与 <c>design.md</c> 9.2 一致。
 /// </para>
 /// </remarks>
 public static class AtomicFileWriter

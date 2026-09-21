@@ -52,7 +52,7 @@ internal static partial class NativeConsole
     }
 
     /// <remarks>
-    /// 坑 9（<c>build-and-test.md</c> 9.0）：<c>LibraryImport</c> 不会自动封送 <c>bool</c> 返回值，
+    /// 坑 9（<c>pitfalls.md</c> 四）：<c>LibraryImport</c> 不会自动封送 <c>bool</c> 返回值，
     /// 必须显式写 <c>[return: MarshalAs(UnmanagedType.Bool)]</c>，否则读到的值永远是错的。
     /// </remarks>
     [LibraryImport("kernel32.dll", EntryPoint = "AttachConsole", SetLastError = true)]

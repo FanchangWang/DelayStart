@@ -6,7 +6,7 @@ namespace DelayStart.Core.Models;
 /// <remarks>
 /// <para>
 /// 抽象成一个值类型而不是直接用 <c>System.Diagnostics.Process</c>，是为了让
-/// <c>LaunchResultEvaluator</c> 保持纯函数、可单元测试 —— 按 <c>coding-standards.md</c>
+/// <c>LaunchResultEvaluator</c> 保持纯函数、可单元测试 —— 按 <c>docs/design.md</c>
 /// §14.1，"进程实际启动"属于真机手工验证，不进单元测试。
 /// </para>
 /// <para>

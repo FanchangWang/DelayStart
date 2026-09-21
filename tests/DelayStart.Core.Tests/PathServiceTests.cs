@@ -174,7 +174,7 @@ public sealed class PathServiceTests : IDisposable
     [Fact]
     public void EnvironmentVariable_IsUsedWhenNoExplicitOverride()
     {
-        // 调试覆盖开关（architecture.md §1.5 规则 3）：只用于开发与测试
+        // 调试覆盖开关（docs/design.md §1.5 规则 3）：只用于开发与测试
         var fromEnvironment = _temp.Combine("from-env");
         var previous = Environment.GetEnvironmentVariable(PathService.LocalRootOverrideVariable);
 

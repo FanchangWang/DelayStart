@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「总览」页（UI v3，<c>docs/ui-mockup-v3.html</c>）。
+/// 「总览」页（UI v3，2026-09-21 批复）。
 /// </summary>
 /// <remarks>
 /// 2026-09-21 批复：开机调度任务从开关改为状态卡（缺失自动补建、失败给重试按钮），

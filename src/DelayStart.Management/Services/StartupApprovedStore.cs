@@ -12,7 +12,7 @@ namespace DelayStart.Management.Services;
 /// 这是整个"软件永不改用户数据"承诺的技术底座：禁用一个自启动项时，
 /// 我们**不碰** <c>Run</c> 下的原值、**不移动**启动文件夹里的文件，
 /// 只在并行的 <c>StartupApproved</c> 子键下写一个 12 字节标记 ——
-/// 与任务管理器 / MSCONFIG 的做法完全一致（<c>docs/api-analysis.md</c> 1.2）。
+/// 与任务管理器 / MSCONFIG 的做法完全一致（<c>docs/pitfalls.md</c> 一）。
 /// </para>
 /// <para>
 /// 🔴 标记写错位置是**静默失效**：没有任何报错，用户以为禁用了其实没有。
@@ -242,7 +242,7 @@ public static class StartupApprovedStore
     /// </summary>
     /// <remarks>
     /// 全部走 <see cref="RegistryView.Registry64"/>：即使进程是 64 位，显式指定视图也能避免
-    /// 在 32 位宿主下被重定向到 WOW6432Node（<c>api-analysis.md</c> 1.1 的读取要点）。
+    /// 在 32 位宿主下被重定向到 WOW6432Node（<c>pitfalls.md</c> 一的读取要点）。
     /// WOW6432Node 的位置是用**显式子键路径**表达的，不靠视图切换。
     /// </remarks>
     private static T WithMarkerKey<T>(StartupScope scope, string subKeyPath, bool writable, Func<RegistryKey?, T> action)

@@ -19,7 +19,7 @@ public enum ThemePreference
 /// 全局设置，持久化在 <c>config.json</c> 的 <c>settings</c> 节点下（FR-9）。
 /// </summary>
 /// <remarks>
-/// 每一项都对应设置页的一个控件，字段名与 <c>docs/design-spec.md</c> 的设置项一一对应，
+/// 每一项都对应设置页的一个控件，字段名与 <c>docs/design.md</c> FR-9 的设置项一一对应，
 /// 增删字段时必须同步改设置页文案。
 /// <para>
 /// 2026-09-19 用户批复精简：

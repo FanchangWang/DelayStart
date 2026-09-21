@@ -274,7 +274,7 @@ public sealed class TakeoverServiceTests
         Assert.Equal(0, harness.Source.EnableCount);
     }
 
-    // ── 恢复成接管前的状态（FR-2.7 / requirements.md 9.3 第 4 条）────────────
+    // ── 恢复成接管前的状态（FR-2.7 / docs/design.md 9.3 第 4 条）────────────
 
     [Fact]
     public void Release_ItemDisabledBeforeTakeover_KeepsItDisabled()

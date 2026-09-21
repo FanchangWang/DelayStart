@@ -4,13 +4,13 @@ using Microsoft.UI.Xaml.Controls;
 namespace DelayStart.App.Services;
 
 /// <summary>
-/// 顶层模块之间的导航（<c>design-spec.md</c> 二、信息架构）。
+/// 顶层模块之间的导航（<c>design.md</c> 7.5）。
 /// </summary>
 /// <remarks>
 /// <para>
 /// 为什么不直接用 <see cref="Frame.Navigate(Type)"/>：那样框架会用
 /// <c>Activator.CreateInstance</c> 构造页面，只认无参构造函数 —— 而本项目的页面
-/// 一律构造函数注入 ViewModel（<c>coding-standards.md</c> 12）。所以这里显式从容器解析页面，
+/// 一律构造函数注入 ViewModel（<c>design.md</c> 9.5）。所以这里显式从容器解析页面，
 /// 再赋给 <c>Frame.Content</c>。
 /// </para>
 /// <para>

@@ -1,7 +1,7 @@
 namespace DelayStart.Core.Models;
 
 /// <summary>
-/// 失败提醒的升级级别（<c>docs/scheduler-design.md</c> 9.2 的三级表）。
+/// 失败提醒的升级级别（<c>docs/design.md</c> 八 的三级表）。
 /// </summary>
 /// <remarks>
 /// <para>

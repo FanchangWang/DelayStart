@@ -24,7 +24,7 @@ internal sealed record PanelSnapshot(
 internal sealed record PanelItemRow(RunItemState State, string Name, string RightText);
 
 /// <summary>
-/// 托盘点击弹出的进度面板（信息分级 2 级，<c>scheduler-design.md</c> 第四节）。
+/// 托盘点击弹出的进度面板（信息分级 2 级，<c>design.md</c> 八）。
 /// </summary>
 /// <remarks>
 /// <para>

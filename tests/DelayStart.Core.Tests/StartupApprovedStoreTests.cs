@@ -8,7 +8,7 @@ namespace DelayStart.Core.Tests;
 /// </summary>
 /// <remarks>
 /// 只测不碰注册表的三件事：键名三级回退的候选序列、标记子键路径的映射矩阵、标记字节格式。
-/// 真正写注册表的部分需要管理员权限，由 <c>build-and-test.md</c> 9.1 的注册表导出对比覆盖 ——
+/// 真正写注册表的部分需要管理员权限，由 <c>docs/design.md</c> 9.1 的注册表导出对比覆盖 ——
 /// 测试项目按约定**不得**触碰真实注册表。
 /// </remarks>
 public sealed class StartupApprovedStoreTests

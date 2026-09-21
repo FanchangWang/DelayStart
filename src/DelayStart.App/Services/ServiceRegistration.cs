@@ -140,7 +140,7 @@ internal static class ServiceRegistration
     /// ① 自启动项页按来源分组的展示顺序；② <c>--scan</c> 的输出顺序。
     /// <see cref="ServiceCollectionServiceExtensions"/> 解析 <c>IEnumerable&lt;T&gt;</c>
     /// 时保持注册顺序，所以改这里的次序会同时改掉两处行为。
-    /// 顺序与 <c>architecture.md</c> 4.1 的表一致：注册表三项 → 启动文件夹两项 → 计划任务 → UWP。
+    /// 顺序与 <c>design.md</c> 7.4 的表一致：注册表三项 → 启动文件夹两项 → 计划任务 → UWP。
     /// </remarks>
     /// <param name="services">目标容器。</param>
     private static void AddStartupSources(IServiceCollection services)

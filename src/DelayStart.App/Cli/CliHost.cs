@@ -12,7 +12,7 @@ namespace DelayStart.App.Cli;
 /// <remarks>
 /// <para>
 /// 存在的理由：Phase 2 交付的写入链路（软禁用 / 接管 / 恢复 / 计划任务）**没有 UI 消费者** ——
-/// 界面在 Phase 3。若不做这一层，<c>requirements.md</c> 9.3 的"三个 <c>Run</c> 键值数量与内容零变化"
+/// 界面在 Phase 3。若不做这一层，<c>design.md</c> NFR-3.2 安全验收的"三个 <c>Run</c> 键值数量与内容零变化"
 /// 这条验收就只能等到 Phase 3 之后才可能执行，整个 Phase 2 的产物一次都没真跑过。
 /// </para>
 /// <para>

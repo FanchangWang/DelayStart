@@ -3,7 +3,7 @@ using DelayStart.Core.Models;
 namespace DelayStart.Core.Services;
 
 /// <summary>
-/// 连续失败次数聚合（<c>docs/scheduler-design.md</c> 9.1 / 9.2 / E13）。**纯函数**：只吃运行记录列表。
+/// 连续失败次数聚合（<c>docs/design.md</c> 八 / E13）。**纯函数**：只吃运行记录列表。
 /// </summary>
 /// <remarks>
 /// <para>

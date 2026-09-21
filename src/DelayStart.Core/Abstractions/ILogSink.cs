@@ -2,7 +2,7 @@ namespace DelayStart.Core.Abstractions;
 
 /// <summary>
 /// 日志接收端抽象。通过构造函数注入，**禁止在类内部直接 new 具体日志实现**
-/// （<c>docs/coding-standards.md</c> 第九节）。
+/// （<c>docs/design.md</c> 9.3）。
 /// </summary>
 /// <remarks>
 /// <para>

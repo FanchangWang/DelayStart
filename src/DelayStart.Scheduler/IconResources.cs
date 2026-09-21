@@ -3,7 +3,7 @@ using System.Reflection;
 namespace DelayStart.Scheduler;
 
 /// <summary>
-/// 嵌入资源图标的加载（<c>scheduler-design.md</c> 六：禁止 <c>.resx</c>，AOT 下加载必失败）。
+/// 嵌入资源图标的加载（<c>pitfalls.md</c> 五：禁止 <c>.resx</c>，AOT 下加载必失败）。
 /// </summary>
 /// <remarks>
 /// <para>

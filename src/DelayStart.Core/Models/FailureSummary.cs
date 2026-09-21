@@ -6,7 +6,7 @@ namespace DelayStart.Core.Models;
 /// <remarks>
 /// <para>
 /// 🔴 这个类型住在 <c>Core</c> 而不是 <c>Management</c> 是刻意的（D31）。原设计把它放在管理端，
-/// 但 <c>docs/scheduler-design.md</c> 9.2 要求**调度端**的托盘角标按连续失败次数升级，
+/// 但 <c>docs/design.md</c> 八 要求**调度端**的托盘角标按连续失败次数升级，
 /// 而调度端只引用 Core —— 登录那一刻管理端根本没运行，算不出这个数。
 /// </para>
 /// <para>

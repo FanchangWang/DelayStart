@@ -3,13 +3,13 @@ using System.Runtime.InteropServices;
 namespace DelayStart.Management.Interop;
 
 /// <summary>
-/// Shell 图标提取的 COM 接口与 GDI 互操作声明（D30 / architecture.md 3.4）。
+/// Shell 图标提取的 COM 接口与 GDI 互操作声明（D30 / docs/design.md 7.5）。
 /// </summary>
 /// <remarks>
 /// <para>
 /// 🔴 用 <c>IShellItemImageFactory</c> 而不是 <c>SHGetFileInfo</c>：
-/// 后者在高 DPI 下只有 16/32px 两种尺寸，64px 的列表行会糊（architecture.md 3.4 与 D30 的定论，
-/// 与 design-spec 五不一致时**以此处为准**）。工厂按请求尺寸生成高分辨率图标。
+/// 后者在高 DPI 下只有 16/32px 两种尺寸，64px 的列表行会糊（docs/design.md 7.5 与 D30 的定论，
+/// 与 旧视觉规范不一致时**以此处为准**）。工厂按请求尺寸生成高分辨率图标。
 /// </para>
 /// <para>
 /// <c>[ComImport]</c> 声明只能住 Management 层 —— NativeAOT 无 built-in COM（R12），

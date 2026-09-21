@@ -9,7 +9,7 @@ using Microsoft.Win32;
 namespace DelayStart.Management.Sources;
 
 /// <summary>
-/// 注册表 <c>Run</c> 来源（FR-1 / <c>api-analysis.md</c> 1.1）。同一实现按 <see cref="StartupScope"/>
+/// 注册表 <c>Run</c> 来源（FR-1 / <c>pitfalls.md</c> 一）。同一实现按 <see cref="StartupScope"/>
 /// 实例化三次：HKCU / HKLM / HKLM-WOW6432Node。
 /// </summary>
 /// <remarks>
@@ -20,7 +20,7 @@ namespace DelayStart.Management.Sources;
 /// <para>
 /// 🔴 读取一律用 <see cref="RegistryView.Registry64"/> 打开，WOW6432Node 通过
 /// **显式子键路径**访问，而不是切到 <see cref="RegistryView.Registry32"/> ——
-/// 后者会让"64 位进程读 32 位视图"依赖宿主位数，行为不稳定（<c>api-analysis.md</c> 1.1）。
+/// 后者会让"64 位进程读 32 位视图"依赖宿主位数，行为不稳定（<c>pitfalls.md</c> 一）。
 /// </para>
 /// </remarks>
 public sealed class RegistryStartupSource : IStartupSource

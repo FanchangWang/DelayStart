@@ -15,7 +15,7 @@ namespace DelayStart.App;
 /// <remarks>
 /// 导航壳的职责只有两件：把菜单项映射到页面、向 <see cref="ShellNavigator"/> 登记外壳。
 /// 页面内容一律在各自的 Page + ViewModel 里，本类不碰业务
-/// （<c>coding-standards.md</c> 12：code-behind 只放视图相关逻辑）。
+/// （<c>design.md</c> 9.5：code-behind 只放视图相关逻辑）。
 /// </remarks>
 public sealed partial class MainWindow : Window
 {

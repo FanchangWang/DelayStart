@@ -7,7 +7,7 @@ using DelayStart.Management.Services;
 namespace DelayStart.Management.Sources;
 
 /// <summary>
-/// 启动文件夹来源（FR-1 / <c>api-analysis.md</c> 1.3）。按 <see cref="StartupScope"/> 实例化两次：
+/// 启动文件夹来源（FR-1 / <c>pitfalls.md</c> 一）。按 <see cref="StartupScope"/> 实例化两次：
 /// <see cref="StartupScope.UserFolder"/>（<c>%APPDATA%</c>）与 <see cref="StartupScope.SystemFolder"/>（<c>%PROGRAMDATA%</c>）。
 /// </summary>
 /// <remarks>

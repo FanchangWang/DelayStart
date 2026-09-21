@@ -11,7 +11,7 @@ namespace DelayStart.Management.Models;
 /// Inno Setup 的 <c>[UninstallRun]</c> **读不到被调程序的退出码**，所以卸载脚本必须写在
 /// <c>[Code] InitializeUninstall()</c> 里用 <c>ewWaitUntilTerminated</c> 调用本程序并检查返回码，
 /// 非 0 就**中止卸载**。违反的后果是用户卸载后所有程序永久不自启且毫不知情 ——
-/// 本项目最严重的潜在缺陷（<c>requirements.md</c> 9.4）。
+/// 本项目最严重的潜在缺陷（<c>design.md</c> NFR-6.4）。
 /// </para>
 /// </remarks>
 public sealed class RestoreOutcome

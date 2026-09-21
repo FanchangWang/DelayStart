@@ -16,7 +16,7 @@ namespace DelayStart.Core.Models;
 /// </remarks>
 public sealed class StartupEntry
 {
-    /// <summary>稳定主键，由 <c>ItemKeyBuilder</c> 生成（见 architecture.md 机制 1）。</summary>
+    /// <summary>稳定主键，由 <c>ItemKeyBuilder</c> 生成（见 docs/design.md 7.3 机制 1）。</summary>
     public required string Id { get; init; }
 
     /// <summary>显示名：注册表值名 / 文件名 / 任务名 / 应用显示名。</summary>

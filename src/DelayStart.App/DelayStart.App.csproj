@@ -13,7 +13,7 @@
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
 
     <RootNamespace>DelayStart.App</RootNamespace>
-    <!-- 产出 DelayStart.exe，与安装目录布局一致（architecture.md 1.5 / build-and-test.md 7.1） -->
+    <!-- 产出 DelayStart.exe，与安装目录布局一致（docs/design.md 1.5 / design.md 十） -->
     <AssemblyName>DelayStart</AssemblyName>
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -38,7 +38,7 @@
       ★ unpackaged（D22）：不走 MSIX 打包，直接产出可执行的 exe。
       模板生成的是 MSIX 打包工程，这两行是"转 unpackaged"的核心；配套还要删掉
       EnableMsixTooling / PublishProfile / MSIX ProjectCapability / WinApp 包引用。
-      详见 docs/build-and-test.md 2.1 的改造清单。
+      详见 docs/pitfalls.md 八（WinUI 模板）。
     -->
     <WindowsPackageType>None</WindowsPackageType>
 
@@ -48,7 +48,7 @@
       Windows App SDK 1.8 + .NET 10 组合下，app.manifest 的
       requestedExecutionLevel **没有**被 WindowsAppSDKSelfContained 忽略，取值保持 true。
       （若日后升版 Windows App SDK 出现 R9 回归，降级路径是改 false 走框架依赖，
-        由 Inno 安装器代部署 Windows App Runtime。见 docs/architecture.md 第九节 R9。）
+        由 Inno 安装器代部署 Windows App Runtime。见 docs/decisions.md 附表 R9。）
     -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
 
@@ -60,12 +60,12 @@
     -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
 
-    <!-- [LibraryImport] 的硬要求（build-and-test.md 坑 9），当前只有 AttachConsole 一处用到。 -->
+    <!-- [LibraryImport] 的硬要求（pitfalls.md 坑 9），当前只有 AttachConsole 一处用到。 -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 依赖方向：App → Management → Core（architecture.md 1.2）。
+    <!-- 依赖方向：App → Management → Core（docs/design.md 7.1）。
          Scheduler 绝不出现于此，硬边界。 -->
     <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
     <ProjectReference Include="..\DelayStart.Management\DelayStart.Management.csproj" />
@@ -91,9 +91,9 @@
 
   <!--
     D35：MVVM 源生成器 + 官方 DI 容器。
-    CommunityToolkit.Mvvm 是 architecture.md 5.2 与 coding-standards.md 12 指定的
+    CommunityToolkit.Mvvm 是 docs/design.md 7.5 与 docs/design.md 12 指定的
     [ObservableProperty] / [RelayCommand] 实现；两者都只服务管理端 —— 调度端绝不引用
-    本项目的任何包（它只引用 Core，见 architecture.md 1.2）。
+    本项目的任何包（它只引用 Core，见 docs/design.md 7.1）。
   -->
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" />
@@ -129,7 +129,7 @@
     🔴 D61（2026-09-21 真机实测）：**publish 输出缺 XAML 产物与资源包**。
 
     背景：unpackaged 转换时按官方改造清单删掉了 <EnableMsixTooling>true</EnableMsixTooling>
-    （见 docs/build-and-test.md 2.1），而 XBF / PRI / Content 资源原本是靠 MSIX 工具链
+    （见 docs/pitfalls.md 七），而 XBF / PRI / Content 资源原本是靠 MSIX 工具链
     进 publish 清单的。结果这些东西只落在 build 输出（bin），publish 目录一个都没有。
 
     实测证据（Compare-Object bin\...\win-x64 与 artifacts\publish\win-x64\full，

@@ -10,7 +10,7 @@ using Microsoft.Win32;
 namespace DelayStart.Management.Sources;
 
 /// <summary>
-/// UWP / MSIX 应用的自启动任务来源（FR-1 / <c>api-analysis.md</c> 1.5）。
+/// UWP / MSIX 应用的自启动任务来源（FR-1 / <c>docs/pitfalls.md</c> 1.5）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -137,7 +137,7 @@ public sealed class UwpStartupSource : IStartupSource
             {
                 Id = id,
                 Name = ResolveDisplayName(root, packageFamilyName, aumid),
-                // 机制 4 / api-analysis.md 1.5：UWP 的"路径"就是 AUMID。
+                // 机制 4 / pitfalls.md 三：UWP 的"路径"就是 AUMID。
                 // D28 = A 决定用 `explorer.exe shell:AppsFolder\<AUMID>` 激活它。
                 Path = aumid,
                 Arguments = string.Empty,

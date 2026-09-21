@@ -8,12 +8,12 @@ namespace DelayStart.App.ViewModels;
 /// <remarks>
 /// <para>
 /// 单独一个类而不是写成 <c>StartupEntry</c> 上的计算属性：界面文案的唯一来源是
-/// <c>docs/design-spec.md</c>，而 <c>Core</c> 的模型不承载任何中文展示串 ——
+/// <c>docs/design.md</c>，而 <c>Core</c> 的模型不承载任何中文展示串 ——
 /// 它是调度端与管理端共用的数据契约，把文案塞进去会让"改一句话"变成"改数据契约"。
 /// </para>
 /// <para>
 /// 同时这也让文案可被单测断言（本类无依赖、无副作用）。注意管理端的 ViewModel
-/// 本身进不了测试项目（<c>architecture.md</c> 1.3 禁止测试项目引用 <c>App</c>），
+/// 本身进不了测试项目（<c>design.md</c> 7.1 禁止测试项目引用 <c>App</c>），
 /// 所以能抽出来的纯函数就在这里。
 /// </para>
 /// </remarks>

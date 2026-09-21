@@ -7,7 +7,7 @@ namespace DelayStart.Core.Models;
 /// <para>
 /// 刻意用可变属性（<c>{ get; set; }</c>）而非 <c>init</c>：配置在管理端会被**原地修改**
 /// （改延时、调顺序、切开关），<c>init</c> 会强迫每次编辑都重建整棵配置对象树。
-/// 这与 <c>coding-standards.md</c> 第六节对 <c>Core.Models</c> 的建议不同，
+/// 这与 <c>design.md</c> 9.2对 <c>Core.Models</c> 的建议不同，
 /// 属于有明确理由的偏离。
 /// </para>
 /// <para>

@@ -6,7 +6,7 @@ using DelayStart.Management.Models;
 namespace DelayStart.Management.Services;
 
 /// <summary>
-/// 按解析名提取程序图标（D30，architecture.md 3.4）。
+/// 按解析名提取程序图标（D30，docs/design.md 7.5）。
 /// </summary>
 /// <remarks>
 /// <para>

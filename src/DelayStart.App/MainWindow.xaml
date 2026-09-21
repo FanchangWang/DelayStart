@@ -13,7 +13,7 @@
     </Window.SystemBackdrop>
 
     <!--
-        UI v2（PowerToys 风格，docs/ui-mockup-v2.html）：
+        UI v2（PowerToys 风格）：
         ① 标题栏不带应用图标，折叠按钮由 TitleBar 的 pane toggle 承担；
         ② 内容区与标题栏 / 菜单同背景（Mica 通透），页面内不铺底色；
         ③ 底部调度任务状态条已移除 —— 任务状态改由总览页的开关承担。

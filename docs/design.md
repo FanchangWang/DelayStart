@@ -1,7 +1,6 @@
 # DelayStart — 设计文档（当前方案单一事实来源）
 
-> 本文合并了原 requirements / architecture / design-spec / scheduler-design / coding-standards / build-and-test 六份文档，
-> 只保留**当前仍然成立**的方案。历史论证与全部决策过程见 `decisions.md`（D1–D73），技术陷阱见 `pitfalls.md`。
+> 本文是**当前方案的单一事实来源**：只写"现在成立什么"，不写论证过程。每个决策的结论与取舍见 [`decisions.md`](decisions.md)，技术陷阱见 [`pitfalls.md`](pitfalls.md)，构建 / 调试 / 打包见 [`development.md`](development.md)。
 > 代码注释、提交信息、测试用例引用的编号（`FR-x` / `NFR-x` / `E-x` / `D-x` / `坑 x`）以本文与另两份为准。
 
 ---
@@ -192,7 +191,7 @@ Tests ──> Core (+ Management)
 4. **软禁用矩阵**：Registry→`StartupApproved\Run`（WOW64→`Run32`）；Folder→`StartupFolder`；ScheduledTask→任务级/触发器级细分（D67：单触发器切任务级；多触发器只切登录/启动触发器且**全部**切、任务级已关时禁用动作一个字节都不动、启用先开任务级）；UWP→`State=0/2`；Manual→无动作。
 5. **调度时序**：`remaining = DelaySeconds - elapsed`（绝对时间点）；`Stopwatch` 单调计时；只保证发起顺序（坑 7：同延时值不保证前者完成初始化）。
 6. **启动身份**：管理员条目继承令牌直启；普通条目 `GetShellWindow` 外壳令牌 → `DuplicateTokenEx` → `CreateProcessWithTokenW`（D40 方案 7）；**降权链任何一步失败 = 本条目失败并继续，绝不提权回退**；`.lnk`/UWP 经 explorer 外壳委托（UWP 恒降权委托，D45）；`.ps1` 走宿主（pwsh 优先，`-NoProfile -ExecutionPolicy Bypass -File`）。
-6a. **uiAccess 目标（D70，2026-09-21 用户批复）**：预检目标 RT_MANIFEST（`LoadLibraryEx` AS_DATAFILE 只读资源）判 `uiAccess="true"`（Quicker 类）——这类目标 CPWT 直启必 740（`TokenUIAccess` 需 SeTcbPrivilege，仅 SYSTEM 有）。改走**降权中转器链**：调度端 A（High）写作业 JSON → CPWT 降权拉起 `DelayStart.LaunchBroker.exe` B（Medium，AOT 单文件，与调度端同目录部署）→ B 对目标 C `ShellExecuteEx`（AppInfo 校验签名+安全位置+清单声明后赋 UIAccess、按调用方身份抬 IL：受限管理员 → High，与手动双击一致）→ B 把 **C 的**启动状态（PID/秒退/Win32 错误）经结果 JSON 回写（写 `.tmp` + 原子改名），调度端轮询读取；B 自身退出码只表达回写是否成功。作业/结果契约 = `BrokerLaunchJob`/`BrokerLaunchResult`（Core，`BrokerJsonContext` 源生成）。
+6a. **uiAccess 目标（D70）**：预检目标 RT_MANIFEST（`LoadLibraryEx` AS_DATAFILE 只读资源）判 `uiAccess="true"`（Quicker 类）——这类目标 CPWT 直启必 740（`TokenUIAccess` 需 SeTcbPrivilege，仅 SYSTEM 有）。改走**降权中转器链**：调度端 A（High）写作业 JSON → CPWT 降权拉起 `DelayStart.LaunchBroker.exe` B（Medium，AOT 单文件，与调度端同目录部署）→ B 对目标 C `ShellExecuteEx`（AppInfo 校验签名+安全位置+清单声明后赋 UIAccess、按调用方身份抬 IL：受限管理员 → High，与手动双击一致）→ B 把 **C 的**启动状态（PID/秒退/Win32 错误）经结果 JSON 回写（写 `.tmp` + 原子改名），调度端轮询读取；B 自身退出码只表达回写是否成功。作业/结果契约 = `BrokerLaunchJob`/`BrokerLaunchResult`（Core，`BrokerJsonContext` 源生成）。
 7. **成功判定**：创建成功 + 1500ms 后复查 `HasExited`；退出码 0 = 成功（拉起已有实例的必要宽容）；UWP 无 PID 收到 `null` 快照直接判成功（D28）。
 8. **原子写**：`<name>.tmp` → `File.Replace`（目标不存在则 `File.Move(overwrite:true)`）。
 9. **单实例**：`Local\DelayStartScheduler` / `Local\DelayStartManager` Mutex，重复触发立即退出零副作用。
@@ -235,17 +234,25 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 
 **结论先行：调度器是基础设施进程，不是应用程序。无主窗口，默认隐形，跑完即退。**
 
-**信息分级（0–4）**：完全静默 → 托盘悬停一行摘要（127 字符上限、不换行；格式 `n/m 已启动 · 下一项 n 秒`，D3 批复 2026-09-21）→ 点击弹面板（右下角工作区、只读列表）→ **完成后自动弹出面板**（取代气泡，UI v2 批复 2026-09-21）→ 管理端运行日志。任何升级必须用户主动触发（失败除外）。
+**信息分级（0–4）**：完全静默 → 托盘悬停一行摘要（127 字符上限、不换行；格式 `n/m 已启动 · 下一项 n 秒`，D3）→ 点击弹面板（右下角工作区、只读列表）→ **完成后自动弹出面板**（取代气泡，D71）→ 管理端运行日志。任何升级必须用户主动触发（失败除外）。
 
-**面板 UI v2（批复 2026-09-21，原型 `demo/ui-v2.html`）**：右上角只两枚图标 —— **置顶**（默认不置顶，点击 `HWND_TOPMOST` 并高亮，再点取消）与 **关闭**；🔴 启动过程中**不自动关闭**（已删除原来的 `WM_ACTIVATE` 失焦即关），只认 ✕；完成后**倒计时自动关闭**（全成功 10 秒 / 有失败 60 秒），**鼠标移入暂停**（`TrackMouseEvent(TME_LEAVE)` + `WM_MOUSELEAVE`，移出继续且不重置）；完成态底部两枚按钮 `打开 DelayStart` + `运行日志`，启动中主按钮 `立即启动剩余 N 项` + 次行 `跳过剩余任务 / 运行日志`；分段进度条按条目着色（绿/金/灰/红）。启动中**不再有脚下提示行**（原「下一项 N 秒后启动 · 剩余 M 项」与当前项 ETA、统计行重复，2026-09-21 批复删除，`PanelSnapshot.FooterText` 一并移除）；倒计时卡仍只在完成态出现。🔴 **完成态关闭面板（倒计时归零或手动 ✕）= 退出调度器整个应用**，托盘图标随之 `NIM_DELETE` 移除；启动中 ✕ 只 `SW_HIDE` 不退出。**面板刷新源**：GDI 自绘面板没有独立刷新源，重绘只在 `InvalidateRect` 时发生 —— 状态变化（`changed`）之外，启动中的实时秒数（当前项卡片右侧的 ETA）由引擎 `RefreshLiveCountdown()` **按秒驱动**（节拍 250ms，用"下一项剩余秒数"做节流签名，变了才重绘）；完成态倒计时则由面板自带的 1 秒 `WM_TIMER`(id=2) 驱动。漏了前者就会表现为"几秒才跳一次"。
+**面板 UI v2（D71）**：
+
+- **右上角两枚图标**：**置顶**（默认不置顶，点击 `HWND_TOPMOST` 并高亮，再点取消）与**关闭**。
+- 🔴 **启动过程中不自动关闭**（已删除原来的 `WM_ACTIVATE` 失焦即关），只认 ✕。
+- **完成后倒计时自动关闭**：全成功 10 秒 / 有失败 60 秒；**鼠标移入暂停**（`TrackMouseEvent(TME_LEAVE)` + `WM_MOUSELEAVE`），移出继续且**不重置**。
+- 🔴 **完成态关闭面板（倒计时归零或手动 ✕）= 退出调度器整个应用**，托盘图标随之 `NIM_DELETE` 移除；启动中 ✕ 只 `SW_HIDE` 不退出。
+- **按钮**：完成态底部两枚 `打开 DelayStart` + `运行日志`；启动中主按钮 `立即启动剩余 N 项` + 次行 `跳过剩余任务 / 运行日志`。倒计时卡只在完成态出现。
+- **绘制**：分段进度条按条目着色（绿/金/灰/红）。启动中**不再有脚下提示行**（原「下一项 N 秒后启动 · 剩余 M 项」与当前项 ETA、统计行重复，D71 删除，`PanelSnapshot.FooterText` 一并移除）。
+- 🔴 **刷新源**：GDI 自绘面板没有独立刷新源，重绘只在 `InvalidateRect` 时发生 —— 状态变化（`changed`）之外，启动中的实时秒数（当前项卡片右侧 ETA）由引擎 `RefreshLiveCountdown()` **按秒驱动**（节拍 250ms，用"下一项剩余秒数"做节流签名，变了才重绘）；完成态倒计时由面板自带的 1 秒 `WM_TIMER`(id=2) 驱动。漏了前者就表现为"几秒才跳一次"。
 
 **面板双主题**：跟随管理端设置主题（自动 = 读系统 `AppsUseLightTheme`），浅/深两套调色板在绘制帧解析。
 
-**右键菜单（两套，随状态切换）**：顶部是**灰显不可点的状态头**（`启动中 · 4/8 已启动 · 剩余 3 项` / `启动完成 · 成功 6 · 失败 1`）。启动中 → `打开 DelayStart`、`查看启动进度`、`立即启动剩余任务`、`跳过剩余任务并退出`（无等待条目时后两项置灰；跳过 = **不启动**，标记 `Skipped` 落盘、日志与时间轴可见；收尾**不弹面板**且**不等复查窗口**，归档后立刻退）。🔴 与面板同名按钮的区别：面板那条只跳 `Waiting`、`Launching` 照常复查出结果并留在面板上看；菜单这条连 `Launching` 一起跳（用户不想等），代价是这些条目拿不到真实成败判定。启动完毕 → `打开 DelayStart`、`查看运行日志`、**`退出`**（结束调度端进程、托盘消失；已完成不存在"剩余条目永不启动"的问题，裸退出此时是安全的）。菜单走 `SetForegroundWindow + TrackPopupMenu(TPM_RETURNCMD) + WM_NULL`（KB135788）。**提权门槛**：非管理员令牌（手动双击）静默退出并记日志，调度端唯一合法入口是 `RunLevel=Highest` 计划任务。
+**右键菜单（两套，随状态切换）**：顶部是**灰显不可点的状态头**（`启动中 · 4/8 已启动 · 剩余 3 项` / `启动完成 · 成功 6 · 失败 1`）。启动中 → `打开 DelayStart`、`查看启动进度`、`立即启动剩余任务`、`跳过剩余任务并退出`（无等待条目时后两项置灰；跳过 = **不启动**这些条目，标 `Skipped` 落盘，在日志与时间轴里可见）。启动完毕 → `打开 DelayStart`、`查看运行日志`、**`退出`**（结束调度端进程、托盘消失；此时已无剩余条目，裸退出是安全的）。菜单与面板同名按钮的语义差异见上方入口表。菜单走 `SetForegroundWindow + TrackPopupMenu(TPM_RETURNCMD) + WM_NULL`（KB135788）。**提权门槛**：非管理员令牌（手动双击）静默退出并记日志，调度端唯一合法入口是 `RunLevel=Highest` 计划任务。
 
-**通知约束（为什么完成通知改成面板）**：elevated 进程发不了 AppNotification；AOT 用不了 WinRT 通知 API；Win11 气泡不进通知中心、时长由系统控制不可控。⇒ UI v2 起完成通知的载体改为**面板**（可停留、可查看失败明细、可跳转），气泡只保留给"管理端缺失/启动失败"这类报错。**退出时机**：`NotifyMode` 判定要弹面板 → 等面板关闭再退（hover 暂停期间不退）；判定不弹 → 在**同一次 `Tick()` 内**退出（`Finish()` 把 `_quitAt` 置为当前时刻，紧随其后的 `_quitAt` 判定立即成立，**不存在"下一拍"这种状态**）。
+**通知约束（为什么完成通知改成面板）**：elevated 进程发不了 `AppNotification`；AOT 用不了 WinRT 通知 API；Win11 气泡不进通知中心、时长由系统控制不可控。⇒ 完成通知的载体改为**面板**（可停留、可查看失败明细、可跳转），气泡只保留给"管理端缺失 / 启动失败"这类报错。
 
-**收尾行为基线（`CompletionPolicy` 抽取的对照基准，2026-09-22 批复）**：
+**收尾行为基线（`CompletionPolicy` 的对照基准，D71–D73）**：
 
 | 场景 | 期望行为 |
 |---|---|
@@ -255,23 +262,27 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 | 面板「立即启动剩余 N 项」 | 剩余项立即启动，完成后**保留面板** + 起倒计时 |
 | 面板「跳过剩余任务」 | 显示完成态 + 起倒计时，**不退出** |
 
-**收尾判据（代码里就是这一条）**：
+**收尾判据已下沉为 `CompletionPolicy`**（纯函数、可单测，D73）。它接收 `QuitImmediately` / `PanelRequestedCompletion` / `PanelVisible` / `FailedCount` / `NotifyMode`，按优先级短路给出 `ExitMode`：
 
-```
-showPanel = !quitImmediately
-         && (_panelRequestedCompletion          // 用户在面板上点的按钮
-             || 面板此刻已显示                   // 🔴 策略管不到已弹出的面板
-             || ShouldShowPanel(failedCount));  // 策略判定该弹
-```
+| 优先级 | 条件 | 结论 |
+|---|---|---|
+| 1 | `QuitImmediately`（菜单「跳过剩余任务并退出」） | 不等面板，立即退出 |
+| 2 | `PanelRequestedCompletion`（用户在面板上点了按钮） | 等面板关闭 |
+| 3 | `PanelVisible`（面板此刻已显示） | 等面板关闭 |
+| 4 | `NotifyMode = Always` | 等面板关闭 |
+| 5 | `NotifyMode = FailuresOnly` 且有失败 | 等面板关闭 |
+| 6 | 其余 | 不弹面板，同一次 `Tick()` 内退出 |
 
-🔴 **关键语义：`NotifyMode` 只决定"要不要主动弹面板"，不决定"已显示的面板要不要留"** —— 用户手动打开过面板就该看到结果，否则面板会在全部成功后毫无理由地自己消失（2026-09-21 实测 bug）。下面两个入口例外都压过 `NotifyMode`，方向相反：
+🔴 **关键语义：`NotifyMode` 只决定"要不要主动弹面板"，不决定"已显示的面板要不要留"** —— 用户手动打开过面板就该看到结果，否则面板会在全部成功后毫无理由地自己消失（D73）；上表第 3 条就是为此而加。两条"不等面板"的路径速度也不同：`QuitImmediately` 直接 `Quit()`（不等 `Launching` 条目的 1.5 秒复查窗口）；其余情况把 `_quitAt` 拨到当下，由紧随其后的同一次 `Tick()` 判定退出（**不存在"下一拍退"这种状态**）。
+
+**同一个动作在菜单与面板上语义不同**（D72），因此有两套入口：
 
 | 入口 | 「立即启动剩余」 | 「跳过剩余任务」 |
 |---|---|---|
-| **右键菜单** | 遵循通知策略（该弹就弹、该退就退） | **不弹面板、直接退出**，且**不等** Launching 条目的 1.5 秒复查窗口 —— 正在复查的条目一并标记 `Skipped`（原因文案与未执行的等待项一致），落盘 + 归档后立刻 `Quit()`（`Finish(quitImmediately: true)`），不走下一拍。菜单文案保持 `跳过剩余任务并退出` |
-| **面板按钮** | **必定留在面板上给结果**：切完成态 + 起倒计时 | 同上，切完成态 + 起倒计时（**不退出**）。面板按钮文案按批复去掉"并退出" → `跳过剩余任务` |
+| **右键菜单** | 遵循通知策略（该弹就弹、该退就退） | **不弹面板、直接退出**，且**不等** Launching 条目的 1.5 秒复查窗口 —— 正在复查的条目一并标 `Skipped`（原因文案与未执行的等待项一致），落盘 + 归档后立刻 `Quit()`。菜单文案保持 `跳过剩余任务并退出` |
+| **面板按钮** | **必定留在面板上给结果**：切完成态 + 起倒计时 | 同上，切完成态 + 起倒计时（**不退出**）；且**只跳 `Waiting`**，`Launching` 照常复查出结果、留在面板上看。面板按钮文案去掉"并退出" → `跳过剩余任务` |
 
-理由：用户已经手动弹出面板在看，点了按钮之后面板反而消失是明显倒退；而菜单那条是"不看结果直接走"。引擎用 `_panelRequestedCompletion` 标记实现"面板发起→必弹"；菜单跳过则走 `Finish(quitImmediately: true)` 直接进退出分支，**不经过面板决策**，因此不需要单独的抑制标记。同一个动作因此有菜单/面板两套入口（`LaunchRemainingNow`/`LaunchRemainingFromPanel`、`SkipRemaining`/`SkipRemainingFromPanel`），托盘宿主构造时分别接线。
+理由：用户已经手动弹出面板在看，点了按钮之后面板反而消失是明显倒退；而菜单那条是"不看结果直接走"。引擎用 `_panelRequestedCompletion` 实现"面板发起 → 必弹"；菜单跳过走 `Finish(quitImmediately: true)` 直接进退出分支，**不经过面板决策**，因此不需要单独的抑制标记。对应两套入口方法：`LaunchRemainingNow` / `LaunchRemainingFromPanel`、`SkipRemaining` / `SkipRemainingFromPanel`，托盘宿主构造时分别接线。
 
 **文案矩阵（面板内）**：全部成功 `启动完成` + `全部 N 项已启动`；部分失败 `完成 · N 项失败` + `成功 X · 失败 Y`（失败明细在中部卡片列第一条）；倒计时行只写 `面板 N 秒后自动关闭`（不重复统计数字）。
 

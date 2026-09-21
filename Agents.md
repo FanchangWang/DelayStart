@@ -1,94 +1,176 @@
-# Agents.md — AI 协作指南
+# Agents.md — AI 编码代理入口
 
-> 供 AI 编码代理（与新人）快速建立约束意识的入口文件。
-> `docs/design.md` 是当前方案的**单一事实来源**：代码与文档冲突时，以文档为准，并立即修正另一方——不允许两边长期不一致。
+> 本文档是 AI 编码代理（和新人）进入本仓库的**第一站**：先建立约束意识，再动手。
+>
+> 文档体系：[`docs/design.md`](docs/design.md) 是**当前方案的单一事实来源**（代码与它冲突时以它为准，并立即修正另一方）；[`docs/decisions.md`](docs/decisions.md) 记录每个决策的结论与取舍；[`docs/pitfalls.md`](docs/pitfalls.md) 是踩坑大全（**写相关代码前逐条看完**）；[`docs/development.md`](docs/development.md) 面向人，讲构建/调试/打包。
 
 ---
 
-## 项目是什么
+## 〇、30 秒速览
 
-**DelayStart**：扫描 Windows 全部自启动位置 → **软禁用**（不删数据）→ 独立轻量调度进程按延时启动。
-把「登录瞬间全有或全无」的自启动变成「晚 10 秒 / 30 秒 / 2 分钟错峰启动」。
-
-三原则（违反任何一条即架构性错误）：
-
-| 原则 | 含义 |
+| 项 | 内容 |
 |---|---|
-| **全部可逆** | 禁用 = 写软禁用标记（`StartupApproved` / `task.Enabled=false` / UWP `State=0`），绝不删注册表值、绝不移动用户文件 |
-| **判定可靠** | 延时 = 相对登录时刻的绝对时间点，不是累加；必须能准确说出第几秒启动 |
-| **不替用户做决定** | 启动失败只提醒、不自动改系统状态（D17）；改变系统行为的动作出口都在用户手上 |
+| 项目 | **DelayStart** —— 扫描 Windows 全部自启动位置 → 软禁用（不删数据）→ 独立轻量调度进程按延时启动 |
+| 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
+| 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· xUnit v3（测试） |
+| 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
+| 测试 | `.\scripts\test.ps1` → **359 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 状态 | 功能完整，进安装包阶段；四份文档与代码同步 |
 
 ---
 
-## 硬约束（🔴 违反即构建失败或发布失败）
+## 一、🔴 硬约束（违反即构建失败或发布失败）
 
-1. **依赖方向单向**：`App → Management → Core`，`Scheduler → Core`，`LaunchBroker → Core`，`Tests → Core + Management`。
-   - 🔴 `Scheduler` / `LaunchBroker` 绝不引用 `Management` —— NativeAOT 发布直接失败。
-   - 🔴 `Tests` 绝不引用 `App` —— 会背上 WindowsAppSDK 自包含包袱。
-2. **`DelayStart.Core` 必须 AOT 兼容**（`IsAotCompatible` 护栏）：零 COM、零反射。往 Core 放 `Microsoft.Win32.TaskScheduler`、`IShellLinkW` 之类的东西 = 打断调度端发布。
-3. **调度端是纯 Win32**（D24 批复 B）：不引用任何 UI 框架，托盘 / 面板全走 P/Invoke。禁止引入 WinForms/WPF。
-4. **0 警告构建**（`TreatWarningsAsErrors=true`）：出现警告即失败，这是故意的。
-5. **调度端计划任务禁止 SYSTEM**（NFR-6.8）：`LogonType=Interactive` + `RunLevel=Highest`。
-6. **应用名只用英文 `DelayStart`**（D61），中文名「延时启动管理器」仅文档使用。
+1. **依赖方向单向**：`App → Management → Core`、`Scheduler → Core`、`LaunchBroker → Core`、`Tests → Core + Management`。
+   - `Scheduler` / `LaunchBroker` 绝不引用 `Management` —— NativeAOT 发布直接失败。
+   - `Tests` 绝不引用 `App` —— 会背上 WindowsAppSDK 自包含的包袱。
+2. **`DelayStart.Core` 必须 AOT 兼容**（`IsAotCompatible=true` 构建期守门）：零 COM、零反射。往 Core 放 `TaskScheduler` 包、`IShellLinkW` 之类的东西 = 打断调度端发布。
+3. **调度端是纯 Win32**（D24）：不引用任何 UI 框架，托盘 / 面板全走 P/Invoke；禁止引入 WinForms / WPF。
+4. **0 警告构建**：出现警告即失败，这是故意的。
+5. **调度端计划任务禁止 SYSTEM**（NFR-6.8）：必须 `LogonType=Interactive` + `RunLevel=Highest`。SYSTEM 下 `%APPDATA%` 会解析到 systemprofile，配置读不到、日志写错位置**且不报错**。
+6. **应用名只用英文 `DelayStart`**（D61）；中文名「延时启动管理器」仅出现在文档里。
 7. **可逆优先**：任何改变系统状态的操作必须有配对的还原路径；失败必须可见，禁止静默吞异常。
 
 ---
 
-## 常用命令
+## 二、代码地图（先找到地方，再动手）
 
-```powershell
-.\scripts\build.ps1      # 编译全解决方案（Release，0 警告验收）
-.\scripts\test.ps1       # 单元测试（D26 约定：dotnet run，不用 dotnet test）
-.\scripts\publish.ps1    # 发布三个 exe + 同步调度端产物进管理端 bin
-.\scripts\all.ps1        # 一条龙：build → test → publish
-.\installer\build-all.ps1  # 安装包矩阵（自包含版 / 精简版 × x64 / arm64）
-```
+**`src/DelayStart.Core`** —— 纯逻辑与契约，调度端与管理端共用：
 
-- 手动等价：`dotnet build DelayStart.slnx -c Release` / `dotnet run --project tests/DelayStart.Core.Tests -c Release`
-- 全解决方案 Debug 构建：`dotnet build DelayStart.slnx --no-incremental`（排查 XAML 编译问题时务必加 `--no-incremental`，obj 增量缓存会掩盖真相）
-- 验收口径：Release 0 警告 0 错误 + 全部单元测试绿（当前 359 个）
+| 要改什么 | 去哪 |
+|---|---|
+| 调度计划（过滤 / 排序 / 到点计算） | `Services/SchedulePlan.cs` |
+| 收尾判据（弹不弹面板 / 退不退出） | `Services/CompletionPolicy.cs` |
+| 「跳过剩余」可跳判定 | `Services/SkipPolicy.cs` |
+| 同一次运行内的重试判定 | `Services/RetryPolicy.cs` |
+| 延时计算（绝对时刻语义） | `Services/DelayCalculator.cs` |
+| 条目稳定主键 | `Services/ItemKeyBuilder.cs` |
+| 路径布局（唯一来源，禁止硬编码） | `Services/PathService.cs` |
+| 配置读写与迁移 | `Services/ConfigService.cs` + `Models/AppConfig.cs` |
+| 实时状态 / 运行归档 | `Services/RunStateService.cs` |
+| 失败连击计算 | `Services/FailureStreakService.cs` |
+| JSON 源生成 | `Serialization/JsonContext.cs` |
+| 日志落地 | `Logging/FileLogger.cs` |
+| 启动结果判定 | `Services/LaunchResultEvaluator.cs` + `Launch/` |
+| uiAccess 作业 / 结果契约 | `Launch/BrokerContracts.cs` |
+
+**`src/DelayStart.Management`** —— 一切 COM / 系统 API / 计划任务：
+
+| 要改什么 | 去哪 |
+|---|---|
+| 扫描编排（逐源 try/catch） | `Services/ScanService.cs` |
+| 某个来源的扫描 / 禁用 / 启用 | `Sources/{Registry,StartupFolder,ScheduledTask,Uwp}StartupSource.cs` |
+| 接管与还原（事务性） | `Services/TakeoverService.cs` |
+| 软禁用标记读写（三级回退） | `Services/StartupApprovedStore.cs` |
+| 计划任务注册 / 更新 | `Services/TaskRegistrationService.cs` |
+| 计划任务自检自愈（每次启动） | `Services/SchedulerTaskBootstrap.cs` |
+| `.lnk` 解析 / 图标提取 | `Services/ShellLinkResolver.cs` · `Services/IconProvider.cs` |
+| UWP TaskId → AppId | `Services/UwpAppIdResolver.cs` |
+| 系统启动项检查（服务 / 驱动 / Winlogon） | `Services/SystemStartupInspector.cs` |
+
+**`src/DelayStart.Scheduler`** —— 调度端（NativeAOT，无 DI，手工构造）：
+
+| 要改什么 | 去哪 |
+|---|---|
+| 调度循环 / 时序 / 收尾 / 落盘 | `SchedulerEngine.cs` |
+| 进行中状态（条目运行时状态） | `SchedulerRuntimeItem.cs` |
+| 托盘图标与右键菜单 | `TrayIconHost.cs` |
+| 面板绘制（GDI 自绘） | `PanelWindow.cs` |
+| 降权启动（外壳令牌 → CPWT） | `DeElevatedProcessLauncher.cs` |
+| Win32 声明（🔴 注意模块归属） | `NativeMethods.cs` |
+| 图标资源按尺寸取用 | `IconResources.cs` |
+
+**`src/DelayStart.LaunchBroker`** —— `Program.cs`：uiAccess 目标的降权中转器（D70）。
+
+**`src/DelayStart.App`** —— 管理端：页面 `Views/*.xaml`、视图模型 `ViewModels/*.cs`、组合根 `Services/ServiceRegistration.cs`（**CLI 与 GUI 共用一个容器，容器在 CLI 分流之前构建**）、对话框 `Dialogs/DelayEditorDialog.xaml`、提权相关互操作 `Interop/`。
+
+**`tests/DelayStart.Core.Tests`** —— 22 个测试类 + `Fakes/` 假实现。🔴 **单元测试禁止触碰真实注册表 / 文件系统 / 进程**，全部注入假实现。
 
 ---
 
-## 编号体系（可追溯性）
+## 三、命令速查
+
+```powershell
+.\scripts\build.ps1        # 编译全解决方案（Release，0 警告验收）
+.\scripts\test.ps1         # 单元测试（D26 约定：dotnet run，不用 dotnet test）
+.\scripts\publish.ps1      # 发布三个 exe + 同步调度端产物进管理端 bin
+.\scripts\all.ps1          # 一条龙：build → test → publish
+.\installer\build-all.ps1  # 安装包矩阵（自包含 / 精简 × x64 / arm64）
+```
+
+- 手动等价：`dotnet build DelayStart.slnx -c Release` / `dotnet run --project tests/DelayStart.Core.Tests -c Release`
+- 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
+- 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
+- **验收口径**：Release 0 警告 0 错误 + 359 个用例全绿。
+
+---
+
+## 四、改代码前必读（按任务类型）
+
+| 你要做的事 | 先读这些 |
+|---|---|
+| 动调度端时序 / 收尾 / 面板 | `design.md` 八 · `decisions.md` D71–D73 · `pitfalls.md` 二（倒计时与退出耦合） |
+| 动扫描 / 接管 / 计划任务 | `design.md` 二、七.3–7.4 · `pitfalls.md` 一、二（键名回退 / 禁用粒度 / 身份） |
+| 写 P/Invoke | `design.md` 9.4 · `pitfalls.md` 五（模块归属 / bool 封送） |
+| 改 XAML 或 ViewModel | `design.md` 9.5 · `pitfalls.md` 六（WMC1506 / pass-1 崩溃） |
+| 改安装器或 iss | `pitfalls.md` 九 · `installer/README.md` |
+| 新增 NuGet 包 | 硬约束 2 · `pitfalls.md` 五（先发一次 AOT 看 IL2026/IL3050） |
+| 动启动链路 / 降权 | `design.md` 7.3 机制 6 / 6a · `decisions.md` D40、D70 |
+| 改文档 | 见下方「文档地图」的更新义务 |
+
+---
+
+## 五、编号体系（可追溯性）
 
 代码注释、提交信息、测试用例都用这套编号互相引用：
 
 | 前缀 | 含义 | 定义处 | 举例 |
 |---|---|---|---|
-| `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-2.3`、`NFR-1.2` |
+| `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-5.3`、`NFR-1.2` |
 | `E-x` | 异常场景矩阵 | `docs/design.md` 五 | `E13` |
 | `R-x` | 技术风险（已全部闭环） | `docs/decisions.md` 附表 | `R11` |
 | `D-x` | 决策点（D1–D73） | `docs/decisions.md` | `D17` |
-| `坑 x` | 技术陷阱（1–9 编号沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
+| `坑 x` | 技术陷阱（编号 1–10 沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
 
-规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；踩到新坑必须追加进 `docs/pitfalls.md`。
-
----
-
-## 文档地图
-
-> 2026-09-21 重组：原 7 个文档 + 原型 HTML 合并为 3 个，过时内容已删除。
-
-| 文档 | 回答什么问题 |
-|---|---|
-| `docs/design.md` | **当前方案单一来源**：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发与交付流程 |
-| `docs/decisions.md` | D1–D73 决策索引（每条 = 议题 + 最终批复）+ R1–R13 风险去向 |
-| `docs/pitfalls.md` | 踩坑大全：Win32/注册表/计划任务/UWP/降权/AOT/WinUI 3/安装器/本机环境，写相关代码前逐条看完 |
+规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；**新踩的坑必须追加进 `pitfalls.md`**。
 
 ---
 
-## 本机已知坑（摘自 docs/pitfalls.md，编码前先看）
+## 六、文档地图与更新义务
 
-- XAML 编译器 pass-1 可能静默崩溃（exit 1 且不写 output.json）：字符串字面量三元表达式、DataTemplate 内裸元素挂 Pointer/Tapped 事件都实锤触发过；排查用二分 + `dotnet clean` + `--no-incremental`，勿信增量构建结果。
-- `x:Bind OneWay` 的目标必须有通知源：VM 的 get-only 派生属性挂 `[NotifyPropertyChangedFor]`；非 INPC 快照行类只能 `OneTime`。
-- 管理端 `requireAdministrator`：`dotnet run` 弹 UAC；提权验证必须在 VS 之外双击 exe。
-- NuGet 未配国内镜像，慢时先项目级镜像再代理；连续失败 2 次停手查因，禁止重试循环。
+| 文档 | 回答什么问题 | 什么时候必须改 |
+|---|---|---|
+| `docs/design.md` | 当前方案单一来源：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发流程 | 需求 / 机制 / 交互行为发生变化 |
+| `docs/decisions.md` | 每个决策的结论与取舍（D1–D73）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
+| `docs/pitfalls.md` | 技术陷阱：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 | 踩到新坑，或旧坑被修掉 / 定性变化 |
+| `docs/development.md` | 面向人：环境、构建测试、调试、发布打包、真机验收 | 环境要求 / 命令 / 流程变化 |
+| `README.md` | 面向用户：项目介绍、安装、快速上手、FAQ | 用户可见行为或安装方式变化 |
 
 ---
 
-## 协作约定
+## 七、协作约定
 
-- 提交遵循 Conventional Commits，一次一个逻辑变更；AI 产出 commit message，提交动作按用户指示执行。
-- 行尾统一 LF（见 `.gitattributes`）；`.sln` 例外 CRLF。
-- UI 改动以代码为当前事实；界面文案改动不需要维护独立文案副本（原 design-spec.md / 原型 HTML 已删除）。
+- 提交遵循 Conventional Commits（type 英文 + 中文摘要），正文写"为什么"，引用 FR/NFR/D 编号；**一次提交一个逻辑变更**。
+- 🔴 **AI 只生成 commit message，不自动 commit**（用户明确指示时除外）。
+- 行尾统一 LF（见 `.gitattributes`），`.sln` 例外 CRLF；源文件 UTF-8 **无 BOM**、恰好一个末尾换行。
+- UI 文案改动**不需要**维护独立文案副本（design-spec / 原型 HTML 已删除，代码即事实）。
+- 编码规范细节见 `design.md` 九；测试命名 `被测方法_场景_期望结果`。
+- 构建 / 测试产物（`bin` / `obj` / `artifacts` / `TestResults`）不入库。
+
+---
+
+## 八、不要做什么（反模式清单）
+
+以下每一条都是踩过的坑，别重犯：
+
+- ❌ 让 `Scheduler` / `LaunchBroker` 引用 `Management`，或往 `Core` 放 COM / 反射 / 计划任务包。
+- ❌ 删除注册表原始值、移动用户文件 —— 只能写软禁用标记。
+- ❌ 降权链失败后"提权回退"重试（必须判该条目失败并继续）。
+- ❌ 用 `(Name, Source)` 二元组判断"是不是同一项" → 用 `ItemKeyBuilder` 三元组。
+- ❌ 用字符串猜 registry hive → `StartupScope` 必须显式枚举。
+- ❌ 对非 INPC 属性写 `Mode=OneWay`，或在 `x:Bind` 里写三元表达式 / `bool→Visibility`。
+- ❌ 空 `catch`、静默吞异常、失败后不写日志。
+- ❌ 让单元测试碰真实注册表 / 文件系统 / 进程，或让 `Tests` 引用 `App`。
+- ❌ 给 Core / Scheduler 设 `InvariantGlobalization`（计划任务注册必崩）。
+- ❌ 用 `dotnet test`（报"零个测试"）、或在 XAML 排查时用增量构建下结论。
+- ❌ 安装器形态用 `bin` 代替真实安装目录验收（**bin 能跑 ≠ publish 能跑**）。

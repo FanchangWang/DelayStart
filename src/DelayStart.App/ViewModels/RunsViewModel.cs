@@ -155,10 +155,18 @@ public sealed class RunGroupRow
         {
             var ok = _record.Items.Count(static item => item.State == RunItemState.Done);
             var failed = _record.Items.Count(static item => item.State == RunItemState.Failed);
+            var skipped = _record.Items.Count(static item => item.State == RunItemState.Skipped);
 
             if (!_record.CompletedNormally)
             {
                 return $"{_record.StartedAt:yyyy-MM-dd HH:mm:ss} · 上次调度未正常完成";
+            }
+
+            // 有跳过项时不能用「全部成功」—— 未启动的条目不是成功（D2 批复 2026-09-21）。
+            if (skipped > 0)
+            {
+                var suffix = failed > 0 ? $" · 失败 {failed}" : string.Empty;
+                return $"{_record.StartedAt:yyyy-MM-dd HH:mm:ss} · 成功 {ok} · 跳过 {skipped}{suffix}";
             }
 
             return failed > 0
@@ -207,6 +215,7 @@ public sealed class RunItemRow
         RunItemState.Done => "✓ 成功",
         RunItemState.Failed => "✗ 失败",
         RunItemState.Launching => "◐ 启动中",
+        RunItemState.Skipped => "◌ 已跳过",
         _ => "· 未执行",
     };
 

@@ -47,19 +47,60 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
     private const int ButtonHeight = 34;
     private const int Padding = 12;
 
-    private const uint BackgroundColor = 0x00201F1F; // BGR：#1F1F1F
-    private const uint RowColor = 0x002B2A2A;
-    private const uint BarTrackColor = 0x003D3D3D;
-    private const uint BarFillColor = 0x00C8A857;   // 强调金
-    private const uint TextColor = 0x00F2F0EE;
-    private const uint MutedTextColor = 0x00A8A29C;
-    private const uint GreenColor = 0x006CC878;
-    private const uint BlueColor = 0x00E0A050;
-    private const uint GrayColor = 0x00808080;
-    private const uint RedColor = 0x00555CD6;
+    /// <summary>面板配色（BGR 直填 GDI）。浅/深两套，2026-09-21 批复跟随设置主题（自动=读系统 <c>AppsUseLightTheme</c>）。</summary>
+    /// <param name="Background">面板底色。</param>
+    /// <param name="Row">条目行分隔/底色。</param>
+    /// <param name="Track">进度条轨道。</param>
+    /// <param name="Fill">进度条填充（强调金，浅色下加深保证对比度）。</param>
+    /// <param name="Text">主文本。</param>
+    /// <param name="Muted">次要文本（延时/倒计时）。</param>
+    /// <param name="Green">成功状态点。</param>
+    /// <param name="Blue">启动中状态点。</param>
+    /// <param name="Red">失败状态点。</param>
+    /// <param name="Gray">等待（空心）/跳过（实心）状态点。</param>
+    /// <param name="Button">底部按钮底色。</param>
+    private sealed record PanelPalette(
+        uint Background,
+        uint Row,
+        uint Track,
+        uint Fill,
+        uint Text,
+        uint Muted,
+        uint Green,
+        uint Blue,
+        uint Red,
+        uint Gray,
+        uint Button);
+
+    private static readonly PanelPalette DarkPalette = new(
+        Background: 0x00201F1F, // #1F1F1F
+        Row: 0x002B2A2A,
+        Track: 0x003D3D3D,
+        Fill: 0x00C8A857,       // 强调金
+        Text: 0x00F2F0EE,
+        Muted: 0x00A8A29C,
+        Green: 0x006CC878,
+        Blue: 0x00E0A050,
+        Red: 0x00555CD6,
+        Gray: 0x00808080,
+        Button: 0x003D3838);
+
+    private static readonly PanelPalette LightPalette = new(
+        Background: 0x00F6F5F5, // #F5F5F6
+        Row: 0x00ECEAE9,
+        Track: 0x00DFDDDC,
+        Fill: 0x003A82A8,       // 金加深（#A8823A），浅底上可读
+        Text: 0x00201F1F,
+        Muted: 0x00716C66,
+        Green: 0x002E7D33,      // #337D2E
+        Blue: 0x00C4771D,       // #1D77C4
+        Red: 0x00323AC0,        // #C03A32
+        Gray: 0x00808080,
+        Button: 0x00E6E3E1);
 
     private readonly Func<PanelSnapshot> _snapshotProvider;
     private readonly Action _openRunLog;
+    private readonly Func<ThemePreference> _themeProvider;
 
     private nint _window;
     private NativeMethods.Rect _buttonRect;
@@ -67,14 +108,25 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
     /// <summary>构造面板。</summary>
     /// <param name="snapshotProvider">绘制时读取的数据源。</param>
     /// <param name="openRunLog">「查看运行日志」动作。</param>
-    public PanelWindow(Func<PanelSnapshot> snapshotProvider, Action openRunLog)
+    /// <param name="themeProvider">主题偏好来源（管理端设置 Theme；每帧求值，设置热改即时生效）。</param>
+    public PanelWindow(Func<PanelSnapshot> snapshotProvider, Action openRunLog, Func<ThemePreference> themeProvider)
     {
         ArgumentNullException.ThrowIfNull(snapshotProvider);
         ArgumentNullException.ThrowIfNull(openRunLog);
+        ArgumentNullException.ThrowIfNull(themeProvider);
 
         _snapshotProvider = snapshotProvider;
         _openRunLog = openRunLog;
+        _themeProvider = themeProvider;
     }
+
+    /// <summary>解析当前配色：浅/深直接取，自动读系统注册表（读不到默认深色）。</summary>
+    private PanelPalette CurrentPalette => _themeProvider() switch
+    {
+        ThemePreference.Light => LightPalette,
+        ThemePreference.Dark => DarkPalette,
+        _ => NativeMethods.SystemPrefersLight() ? LightPalette : DarkPalette,
+    };
 
     /// <summary>面板是否可见。</summary>
     public bool IsVisible => _window != 0 && IsWindowVisible(_window);
@@ -94,6 +146,11 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
             NativeMethods.WsPopup, // 无边框
             0, 0, PanelWidth, 200,
             0, 0, NativeMethods.GetModuleHandle(), 0);
+
+        // 🔴 必须挂消息处理器（2026-09-21 修复「左键无法弹出面板」）：共享窗口过程的默认实现
+        // 不处理任何消息 —— WM_PAINT 无人接，窗口显示出来也永远画不出内容（视觉上=没弹出）。
+        // 此前只有托盘窗口挂了 handler，面板窗口一直缺失，属历史遗留 bug。
+        NativeMethods.AttachHandler(_window, this);
     }
 
     /// <summary>显示或隐藏面板（托盘左键点击）。</summary>
@@ -216,6 +273,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
     private void Paint(nint hwnd)
     {
         var snapshot = _snapshotProvider();
+        var palette = CurrentPalette;
         var paint = new NativeMethods.PaintStruct();
         var hdc = NativeMethods.BeginPaint(hwnd, ref paint);
         if (hdc == 0)
@@ -226,12 +284,12 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         try
         {
             _ = NativeMethods.GetClientRect(hwnd, out var client);
-            var background = NativeMethods.CreateSolidBrush(BackgroundColor);
+            var background = NativeMethods.CreateSolidBrush(palette.Background);
             _ = NativeMethods.FillRect(hdc, ref client, background);
             _ = NativeMethods.DeleteObject(background);
 
             _ = NativeMethods.SetBkMode(hdc, 1); // TRANSPARENT
-            _ = NativeMethods.SetTextColor(hdc, TextColor);
+            _ = NativeMethods.SetTextColor(hdc, palette.Text);
 
             var x = client.Left + Padding;
             var width = client.Right - client.Left - (Padding * 2);
@@ -255,7 +313,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
                 Right = x + width,
                 Bottom = barTop + 8,
             };
-            var trackBrush = NativeMethods.CreateSolidBrush(BarTrackColor);
+            var trackBrush = NativeMethods.CreateSolidBrush(palette.Track);
             _ = NativeMethods.FillRect(hdc, ref track, trackBrush);
             _ = NativeMethods.DeleteObject(trackBrush);
 
@@ -271,7 +329,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
                         Right = x + fillWidth,
                         Bottom = barTop + 8,
                     };
-                    var fillBrush = NativeMethods.CreateSolidBrush(BarFillColor);
+                    var fillBrush = NativeMethods.CreateSolidBrush(palette.Fill);
                     _ = NativeMethods.FillRect(hdc, ref fill, fillBrush);
                     _ = NativeMethods.DeleteObject(fillBrush);
                 }
@@ -286,9 +344,9 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
                     break; // 超高面板裁掉溢出行（MaxPanelHeight 内滚动不做，条目数量级小）
                 }
 
-                DrawStatusDot(hdc, x + 6, rowTop + (RowHeight / 2), row.State);
+                DrawStatusDot(hdc, x + 6, rowTop + (RowHeight / 2), row.State, palette);
 
-                _ = NativeMethods.SetTextColor(hdc, TextColor);
+                _ = NativeMethods.SetTextColor(hdc, palette.Text);
                 var nameRect = new NativeMethods.Rect
                 {
                     Left = x + 18,
@@ -298,7 +356,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
                 };
                 _ = NativeMethods.DrawTextW(hdc, row.Name, -1, ref nameRect, 0x0800); // END_ELLIPSIS
 
-                _ = NativeMethods.SetTextColor(hdc, MutedTextColor);
+                _ = NativeMethods.SetTextColor(hdc, palette.Muted);
                 var rightRect = new NativeMethods.Rect
                 {
                     Left = client.Right - Padding - 66,
@@ -312,7 +370,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
             }
 
             // 倒计时行
-            _ = NativeMethods.SetTextColor(hdc, MutedTextColor);
+            _ = NativeMethods.SetTextColor(hdc, palette.Muted);
             var footerRect = new NativeMethods.Rect
             {
                 Left = x,
@@ -330,11 +388,11 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
                 Right = x + 130,
                 Bottom = client.Bottom - Padding,
             };
-            var buttonBrush = NativeMethods.CreateSolidBrush(0x003D3838);
+            var buttonBrush = NativeMethods.CreateSolidBrush(palette.Button);
             _ = NativeMethods.FillRect(hdc, ref _buttonRect, buttonBrush);
             _ = NativeMethods.DeleteObject(buttonBrush);
 
-            _ = NativeMethods.SetTextColor(hdc, TextColor);
+            _ = NativeMethods.SetTextColor(hdc, palette.Text);
             var buttonTextRect = _buttonRect;
             buttonTextRect.Left += 10;
             _ = NativeMethods.DrawTextW(hdc, "查看运行日志", -1, ref buttonTextRect, 0x0024); // VCENTER | SINGLELINE
@@ -345,14 +403,15 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         }
     }
 
-    private static void DrawStatusDot(nint hdc, int centerX, int centerY, RunItemState state)
+    private static void DrawStatusDot(nint hdc, int centerX, int centerY, RunItemState state, PanelPalette palette)
     {
         var color = state switch
         {
-            RunItemState.Done => GreenColor,
-            RunItemState.Launching => BlueColor,
-            RunItemState.Failed => RedColor,
-            _ => GrayColor,
+            RunItemState.Done => palette.Green,
+            RunItemState.Launching => palette.Blue,
+            RunItemState.Failed => palette.Red,
+            RunItemState.Skipped => palette.Gray, // 跳过：实心灰（等待是空心灰，视觉可区分）
+            _ => palette.Gray,
         };
 
         var brush = NativeMethods.CreateSolidBrush(color);

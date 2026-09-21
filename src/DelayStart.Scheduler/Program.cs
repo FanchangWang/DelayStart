@@ -43,6 +43,14 @@ internal static class Program
             "Scheduler",
             SystemClock.Instance);
 
+        // 提权门槛（2026-09-21 批复）：正常入口是计划任务（RunLevel=Highest）；
+        // 手动双击 exe 会以未提权令牌运行 —— 静默退出，防止产生第二条调度路径。
+        if (!NativeMethods.IsElevated())
+        {
+            log.Error("调度端未以管理员身份运行（疑似手动双击启动），自动退出。");
+            return 0;
+        }
+
         var engine = new SchedulerEngine(
             new ConfigService(paths, log, SystemClock.Instance),
             new RunStateService(paths, log),

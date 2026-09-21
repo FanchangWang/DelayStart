@@ -33,6 +33,9 @@ internal static unsafe partial class NativeMethods
     /// <summary>Shell_NotifyIcon 返回的鼠标动作：左键抬起（WM_LBUTTONUP）。</summary>
     public const uint NimLup = 0x0202;
 
+    /// <summary>Shell_NotifyIcon 返回的鼠标动作：右键抬起（WM_RBUTTONUP）→ 托盘右键菜单入口。</summary>
+    public const uint NimRup = 0x0205;
+
     /// <summary>气泡通知被用户点击（NIN_BALLOONUSERCLICK）。</summary>
     public const uint NinBalloonUserClick = 0x0405;
 
@@ -74,19 +77,33 @@ internal static unsafe partial class NativeMethods
         nint HandleMessage(nint hwnd, uint message, nuint wParam, nint lParam);
     }
 
+    /// <summary>窗口回调内未捕获异常的记录钩子（引擎启动时接入 FileLogger）。
+    /// 🔴 异常绝不能冲出 <see cref="WndProcThunk"/>：AOT 下托管异常穿越原生帧无法展开，
+    /// 运行时直接 fail-fast（0xC0000409）整个进程闪退 —— 只能就地吞掉并留日志。</summary>
+    public static Action<Exception>? MessageCallbackExceptionLogger { get; set; }
+
     // x64 只有一种调用约定，无需显式 CallConvStdcall。
     [UnmanagedCallersOnly]
     private static nint WndProcThunk(nint hwnd, uint message, nuint wParam, nint lParam)
     {
-        var handler = GetHandler(hwnd);
-        if (handler is null)
+        try
         {
-            // WM_NCCREATE 之前（WM_GETMINMAXINFO 等）没有实例可路由。
+            var handler = GetHandler(hwnd);
+            if (handler is null)
+            {
+                // WM_NCCREATE 之前（WM_GETMINMAXINFO 等）没有实例可路由。
+                return DefWindowProcW(hwnd, message, wParam, lParam);
+            }
+
+            var result = handler.HandleMessage(hwnd, message, wParam, lParam);
+            return result != 0 ? result : DefWindowProcW(hwnd, message, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            // 兜底防闪退：P/Invoke 签名错误、空引用等在此落地为一条日志，而不是整个进程消失。
+            try { MessageCallbackExceptionLogger?.Invoke(ex); } catch { /* 日志失败不能再抛 */ }
             return DefWindowProcW(hwnd, message, wParam, lParam);
         }
-
-        var result = handler.HandleMessage(hwnd, message, wParam, lParam);
-        return result != 0 ? result : DefWindowProcW(hwnd, message, wParam, lParam);
     }
 
     private static IMessageHandler? GetHandler(nint hwnd)
@@ -302,6 +319,109 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PostQuitMessage(int exitCode);
 
+    // ---- 托盘右键菜单（2026-09-21 批复 D1=A）----
+
+    public const uint MfString = 0x00000000;
+    public const uint MfGrayed = 0x00000001;
+    public const uint MfSeparator = 0x00000800;
+
+    public const uint TpmRightButton = 0x0002;
+    public const uint TpmNonotify = 0x0080;
+    public const uint TpmReturncmd = 0x0100;
+
+    public const uint WmNull = 0x0000;
+
+    [LibraryImport("user32.dll")]
+    public static partial nint CreatePopupMenu();
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DestroyMenu(nint menu);
+
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool AppendMenuW(nint menu, uint flags, nuint id, string text);
+
+    /// <summary>弹出菜单。<paramref name="flags"/> 含 <see cref="TpmReturncmd"/> 时返回所选项 id（未选返回 0）。</summary>
+    [LibraryImport("user32.dll")]
+    public static partial int TrackPopupMenu(nint menu, uint flags, int x, int y, int reserved, nint hwnd, nint rect);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PostMessageW(nint hwnd, uint message, nuint wparam, nint lparam);
+
+    // ---- 提权检测（2026-09-21 批复：非管理员静默退出，防手动双击）----
+
+    public const int TokenElevation = 20;
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetCurrentProcess();
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TokenElevationValue
+    {
+        public uint IsElevated;
+    }
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool GetTokenInformation(
+        nint token,
+        int infoClass,
+        TokenElevationValue* info,
+        uint length,
+        out uint returnLength);
+
+    /// <summary>当前进程令牌是否已提权（Admin Approval已批准 / RunLevel=Highest）。</summary>
+    public static bool IsElevated()
+    {
+        if (!OpenProcessToken(GetCurrentProcess(), TokenQuery, out var token))
+        {
+            return false;
+        }
+
+        try
+        {
+            var value = new TokenElevationValue();
+            var ok = GetTokenInformation(token, TokenElevation, &value, (uint)sizeof(TokenElevationValue), out _);
+            return ok && value.IsElevated != 0;
+        }
+        finally
+        {
+            _ = CloseHandle(token);
+        }
+    }
+
+    // ---- 系统主题探测（面板双主题，2026-09-21 批复：跟随设置「自动/浅色/深色」）----
+
+    private static readonly nint HkeyCurrentUser = unchecked((nint)0x80000001);
+    private const uint RrfRtRegDword = 0x00000010;
+
+    [LibraryImport("advapi32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int RegGetValueW(
+        nint hkey,
+        string subKey,
+        string value,
+        uint flags,
+        out uint type,
+        ref uint data,
+        ref uint size);
+
+    /// <summary>系统应用主题是否为浅色（读 <c>AppsUseLightTheme</c>；读不到默认深色）。</summary>
+    public static bool SystemPrefersLight()
+    {
+        var data = 0u;
+        uint size = sizeof(uint);
+        return RegGetValueW(
+            HkeyCurrentUser,
+            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "AppsUseLightTheme",
+            RrfRtRegDword,
+            out _,
+            ref data,
+            ref size) == 0 && data != 0;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct WinMessage
     {
@@ -481,7 +601,10 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool DeleteObject(nint objectHandle);
 
-    [LibraryImport("gdi32.dll")]
+    // 🔴 FillRect 是 user32.dll 的导出（winuser.h），不是 gdi32（2026-09-21 真机踩坑：
+    //    声明到 gdi32 → WM_PAINT 里 EntryPointNotFoundException，在 UnmanagedCallersOnly
+    //    窗口回调中无法穿越原生帧展开 → AOT fail-fast 0xC0000409 托盘左键闪退）。
+    [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool FillRect(nint hdc, ref Rect rect, nint brush);
 

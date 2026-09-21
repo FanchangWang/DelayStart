@@ -75,6 +75,10 @@ internal sealed class SchedulerEngine
         public required RunItemResult Result { get; init; }
         public int? ProcessId { get; set; }
         public TimeSpan RecheckAt { get; set; }
+
+        /// <summary>到期启动时刻（自 <see cref="_stopwatch"/> 起算的绝对秒）。
+        /// 初值 = 配置延时；「立即启动全部剩余」把它拨到当下（托盘右键菜单，2026-09-21 批复）。</summary>
+        public TimeSpan LaunchAt { get; set; }
     }
 
     /// <summary>
@@ -91,6 +95,11 @@ internal sealed class SchedulerEngine
             typeof(SchedulerEngine).Assembly,
             "DelayStart.Scheduler.Assets.Scheduler.ico",
             "DelayStart.Scheduler.Assets.SchedulerWarning.ico");
+
+        // 窗口回调异常兜底（2026-09-21 托盘左键闪退教训）：AOT 下异常冲出
+        // UnmanagedCallersOnly 会 fail-fast，必须就地吞掉并留日志。
+        NativeMethods.MessageCallbackExceptionLogger = ex =>
+            _log.Error(ex, "窗口消息处理发生未捕获异常（已吞掉防闪退）。");
 
         _tray = CreateTrayHost(_icons);
         if (_tray is null)
@@ -145,7 +154,7 @@ internal sealed class SchedulerEngine
 
         for (var index = 0; index < enabled.Count; index++)
         {
-            _items.Add(new RuntimeItem { Item = enabled[index], Result = _record.Items[index] });
+            _items.Add(new RuntimeItem { Item = enabled[index], Result = _record.Items[index], LaunchAt = TimeSpan.FromSeconds(enabled[index].DelaySeconds) });
         }
 
         // D40：调度端亲自降权，没有代理进程，也就没有预热这一步。
@@ -159,7 +168,15 @@ internal sealed class SchedulerEngine
     {
         // 托盘只属调度端、恒显示（用户批复 2026-09-19：托盘设置已移除，
         // 生命周期 = 调度期间显示 → 最后一条通知消失后退出）。
-        var host = new TrayIconHost(icons, BuildPanelSnapshot, OpenRunLog);
+        var host = new TrayIconHost(
+            icons,
+            BuildPanelSnapshot,
+            OpenRunLog,
+            OpenManager,
+            LaunchRemainingNow,
+            SkipRemaining,
+            HasWaitingItems,
+            () => _settings.Theme);
         if (!host.TryCreate(BuildTooltip(), withIcon: icons is not null))
         {
             host.Dispose();
@@ -179,7 +196,7 @@ internal sealed class SchedulerEngine
         foreach (var runtime in _items)
         {
             if (runtime.Result.State == RunItemState.Waiting
-                && DelayCalculator.IsDue(runtime.Item.DelaySeconds, elapsed))
+                && elapsed >= runtime.LaunchAt) // LaunchAt 初值=配置延时；「立即启动」把它拨到当下
             {
                 Launch(runtime);
                 changed = true;
@@ -197,7 +214,7 @@ internal sealed class SchedulerEngine
             _tray?.RefreshPanel();
         }
 
-        if (!_finishing && _items.All(static runtime => runtime.Result.State is RunItemState.Done or RunItemState.Failed))
+        if (!_finishing && _items.All(static runtime => runtime.Result.State is RunItemState.Done or RunItemState.Failed or RunItemState.Skipped))
         {
             Finish();
         }
@@ -319,11 +336,12 @@ internal sealed class SchedulerEngine
         _log.Info($"调度结束：{_record.RunId}。");
 
         var failedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
+        var skippedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Skipped);
         _tray?.SetIcon(IconFor(failedCount > 0));
 
         if (ShouldNotify(failedCount))
         {
-            var (title, text) = BuildBalloon(failedCount);
+            var (title, text) = BuildBalloon(failedCount, skippedCount);
             _tray?.ShowBalloon(title, text);
         }
 
@@ -341,11 +359,16 @@ internal sealed class SchedulerEngine
         _ => failedCount > 0,
     };
 
-    private (string Title, string Text) BuildBalloon(int failedCount)
+    private (string Title, string Text) BuildBalloon(int failedCount, int skippedCount)
     {
-        if (failedCount == 0)
+        if (failedCount == 0 && skippedCount == 0)
         {
             return ("延时启动完成", $"{_record.PlannedCount} 个程序已全部启动");
+        }
+
+        if (failedCount == 0 && skippedCount > 0)
+        {
+            return ("延时启动完成", $"{_record.PlannedCount - skippedCount} 个已启动 · {skippedCount} 个已跳过");
         }
 
         var failedNames = _items
@@ -379,7 +402,7 @@ internal sealed class SchedulerEngine
 
     private string BuildTooltip()
     {
-        var done = _items.Count(static runtime => runtime.Result.State is RunItemState.Done or RunItemState.Failed);
+        var done = _items.Count(static runtime => runtime.Result.State == RunItemState.Done);
         var failed = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
         var total = _record.PlannedCount;
 
@@ -392,7 +415,7 @@ internal sealed class SchedulerEngine
 
         var next = _items
             .Where(static runtime => runtime.Result.State == RunItemState.Waiting)
-            .OrderBy(static runtime => runtime.Result.Delay)
+            .OrderBy(static runtime => runtime.LaunchAt)
             .ToList();
 
         if (next.Count == 0)
@@ -400,12 +423,13 @@ internal sealed class SchedulerEngine
             return "延时启动 · 正在完成…";
         }
 
+        // D3 批复（2026-09-21）：「n/m 已启动 · 下一项 n 秒」进度摘要，上限 127 字符。
         var first = next[0];
-        var remaining = DelayCalculator.Remaining(first.Item.DelaySeconds, _stopwatch.Elapsed);
+        var remaining = first.LaunchAt - _stopwatch.Elapsed;
 
         return remaining <= TimeSpan.FromSeconds(2)
-            ? $"延时启动 {done}/{total} · 正在启动 {first.Result.Name}…"
-            : $"延时启动 {done}/{total} · 下一项 {first.Result.Name}（{(int)Math.Ceiling(remaining.TotalSeconds)}s）";
+            ? $"延时启动 {done}/{total} 已启动 · 正在启动 {first.Result.Name}…"
+            : $"延时启动 {done}/{total} 已启动 · 下一项 {(int)Math.Ceiling(remaining.TotalSeconds)} 秒";
     }
 
     private PanelSnapshot BuildPanelSnapshot()
@@ -420,6 +444,7 @@ internal sealed class SchedulerEngine
             {
                 RunItemState.Done => $"{runtime.Result.Delay} 秒",
                 RunItemState.Failed => runtime.Result.Reason ?? "启动失败",
+                RunItemState.Skipped => "已跳过",
                 _ => $"{runtime.Result.Delay} 秒",
             })).ToList();
 
@@ -432,7 +457,7 @@ internal sealed class SchedulerEngine
         {
             var next = _items
                 .Where(static runtime => runtime.Result.State == RunItemState.Waiting)
-                .OrderBy(static runtime => runtime.Result.Delay)
+                .OrderBy(static runtime => runtime.LaunchAt)
                 .ToList();
 
             if (next.Count == 0)
@@ -441,7 +466,7 @@ internal sealed class SchedulerEngine
             }
             else
             {
-                var remaining = DelayCalculator.Remaining(next[0].Item.DelaySeconds, elapsed);
+                var remaining = next[0].LaunchAt - elapsed;
                 footer = $"下一项还有 {(int)Math.Ceiling(Math.Max(remaining.TotalSeconds, 0))} 秒";
             }
         }
@@ -484,6 +509,90 @@ internal sealed class SchedulerEngine
         {
             _log.Warn(ex, "启动管理端失败。");
         }
+    }
+
+    /// <summary>打开管理端主窗口（托盘右键菜单，2026-09-21 批复 D1=A / D5=气泡报错）。</summary>
+    /// <remarks>
+    /// 与 <see cref="OpenRunLog"/> 的区别：不带 <c>--goto-log</c> 参数（进总览页）；
+    /// 管理端缺失时按 D5 批复发气泡报错（运行日志入口保持静默降级 —— 那里还有日志文件兜底）。
+    /// </remarks>
+    private void OpenManager()
+    {
+        try
+        {
+            var manager = _paths.ManagerExecutablePath;
+            if (!File.Exists(manager))
+            {
+                _log.Warn($"管理端不存在，无法打开：{manager}");
+                _tray?.ShowBalloon("管理端缺失", $"未找到管理端程序：{Path.GetFileName(manager)}");
+                return;
+            }
+
+            _log.Info("正在启动管理端（托盘右键菜单）。");
+            _ = Process.Start(new ProcessStartInfo
+            {
+                FileName = manager,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(ex, "启动管理端失败。");
+            _tray?.ShowBalloon("管理端启动失败", ex.Message);
+        }
+    }
+
+    /// <summary>是否还有等待条目（决定右键菜单后两项的可用态）。</summary>
+    private bool HasWaitingItems() =>
+        !_finishing && _items.Exists(static runtime => runtime.Result.State == RunItemState.Waiting);
+
+    /// <summary>立即启动全部剩余条目（托盘右键菜单，2026-09-21 批复）。
+    /// 把所有等待条目的到期时刻拨到当下，下一节拍（250ms）统一发起。</summary>
+    private void LaunchRemainingNow()
+    {
+        var count = 0;
+        var now = _stopwatch.Elapsed;
+        foreach (var runtime in _items)
+        {
+            if (runtime.Result.State == RunItemState.Waiting)
+            {
+                runtime.LaunchAt = now;
+                count++;
+            }
+        }
+
+        if (count > 0)
+        {
+            _log.Info($"用户请求立即启动全部剩余条目（{count} 项）。");
+        }
+    }
+
+    /// <summary>跳过剩余条目并结束调度（托盘右键菜单，2026-09-21 批复 D2=不启动）。
+    /// 等待条目标记 <see cref="RunItemState.Skipped"/>，随后节拍里走正常 Finish（落盘 + 归档 + 通知）。</summary>
+    private void SkipRemaining()
+    {
+        var count = 0;
+        foreach (var runtime in _items)
+        {
+            if (runtime.Result.State != RunItemState.Waiting)
+            {
+                continue;
+            }
+
+            runtime.Result.State = RunItemState.Skipped;
+            runtime.Result.Reason = "用户跳过（托盘右键菜单）";
+            count++;
+        }
+
+        if (count == 0)
+        {
+            return;
+        }
+
+        _log.Info($"用户跳过剩余 {count} 个条目，本次调度收尾。");
+        PersistState();
+        _tray?.RefreshPanel();
+        _tray?.UpdateTip(BuildTooltip());
     }
 
     private void PersistState()

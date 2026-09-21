@@ -20,4 +20,10 @@ public enum RunItemState
 
     /// <summary>已失败：创建失败，或启动后立即以非零退出码退出（E5）。</summary>
     Failed,
+
+    /// <summary>
+    /// 已跳过：用户在调度期间通过托盘右键菜单「跳过剩余条目」主动放弃启动（D2 批复 2026-09-21：跳过 = 不启动）。
+    /// 不计入失败（<c>FailureStreakService</c> 只认 <see cref="Failed"/>），但运行日志与时间轴可见。
+    /// </summary>
+    Skipped,
 }

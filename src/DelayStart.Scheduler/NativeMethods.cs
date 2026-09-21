@@ -24,8 +24,24 @@ internal static unsafe partial class NativeMethods
     public const uint WmTimer = 0x0113;
     public const uint WmActivate = 0x0006;
     public const uint WmLButtonDown = 0x0201;
+    public const uint WmLButtonUp = 0x0202;
     public const uint WmEraseBkgnd = 0x0014;
     public const ushort WaInactive = 0;
+
+    /// <summary>鼠标在窗口内移动（面板用它首帧判定"指针已进入"）。</summary>
+    public const uint WmMouseMove = 0x0200;
+
+    /// <summary>鼠标离开窗口（由 <c>TrackMouseEvent(TME_LEAVE)</c> 订阅后才会收到）。</summary>
+    public const uint WmMouseLeave = 0x02A3;
+
+    /// <summary>置顶 / 取消置顶的 <c>SetWindowPos</c> 插入位置。</summary>
+    public const nint HwndTopmost = -1;
+
+    /// <summary>取消置顶。</summary>
+    public const nint HwndNotopmost = -2;
+
+    /// <summary>TrackMouseEvent 只订阅"离开"通知。</summary>
+    public const uint TmeLeave = 0x00000002;
 
     /// <summary>托盘回调消息基址（<c>WM_APP</c> 段，应用私有）。</summary>
     public const uint WmTrayCallback = 0x8000;
@@ -201,6 +217,16 @@ internal static unsafe partial class NativeMethods
         public uint DwFlags;
     }
 
+    /// <summary>TRACKMOUSEEVENT（<c>TrackMouseEvent</c> 入参）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TrackMouseEventType
+    {
+        public uint CbSize;
+        public uint DwFlags;
+        public nint HWndTrack;
+        public uint DwHoverTime;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct PaintStruct
     {
@@ -296,6 +322,21 @@ internal static unsafe partial class NativeMethods
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool InvalidateRect(nint hwnd, nint rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
+
+    /// <summary>订阅"鼠标离开窗口"通知（面板 hover 暂停自动关闭用）。
+    /// 未订阅就收不到 <see cref="WmMouseLeave"/>。</summary>
+    [LibraryImport("user32.dll", EntryPoint = "TrackMouseEvent")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool TrackMouseEvent(ref TrackMouseEventType track);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool BringWindowToTop(nint hwnd);
+
+    /// <summary>给窗口套一个圆角裁剪区域（面板圆角外观）。
+    /// 区域句柄交给系统后由系统负责释放，本进程不要再 DeleteObject。</summary>
+    [LibraryImport("user32.dll")]
+    public static partial int SetWindowRgn(nint hwnd, nint region, [MarshalAs(UnmanagedType.Bool)] bool redraw);
 
     [LibraryImport("user32.dll")]
     public static partial nint BeginPaint(nint hwnd, ref PaintStruct paint);
@@ -597,6 +638,13 @@ internal static unsafe partial class NativeMethods
     [LibraryImport("gdi32.dll")]
     public static partial nint CreateSolidBrush(uint color);
 
+    /// <summary>取库存 GDI 对象。面板画空心状态点用 <c>NULL_BRUSH</c>（索引 5）。</summary>
+    [LibraryImport("gdi32.dll")]
+    public static partial nint GetStockObject(int index);
+
+    /// <summary>NULL_BRUSH（不填充，配合 pen 得到空心图形）。</summary>
+    public const int NullBrush = 5;
+
     [LibraryImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool DeleteObject(nint objectHandle);
@@ -621,6 +669,15 @@ internal static unsafe partial class NativeMethods
     [LibraryImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool Rectangle(nint hdc, int left, int top, int right, int bottom);
+
+    /// <summary>圆角矩形（当前 brush 填充 + 当前 pen 描边）。面板里的卡片/按钮都用它。</summary>
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RoundRect(nint hdc, int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
+
+    /// <summary>圆角区域（交给 <see cref="SetWindowRgn"/> 做无边框窗口的圆角裁剪）。</summary>
+    [LibraryImport("gdi32.dll")]
+    public static partial nint CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
 
     [LibraryImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -170,7 +170,7 @@
                 <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="调度" />
 
                 <StackPanel Spacing="2">
-                    <stc:SettingsCard Description="全部启动完成后的通知方式" Header="通知策略">
+                    <stc:SettingsCard Description="启动计划全部结束后，自动弹出进度面板（不再使用右下角气泡）" Header="通知策略">
                         <ComboBox
                             MinWidth="160"
                             ItemsSource="{x:Bind ViewModel.NotifyModes}"

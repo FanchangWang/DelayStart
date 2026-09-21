@@ -110,7 +110,9 @@ public partial class SettingsViewModel : ObservableObject
     public bool HasError => StatusText.Length > 0;
 
     /// <summary>通知策略下拉框的选项。</summary>
-    public ObservableCollection<string> NotifyModes { get; } = ["仅失败时通知", "总是通知", "从不通知"];
+    // UI v2（2026-09-21 批复）：完成通知的载体从右下角气泡改为进度面板，
+    // 文案点明「面板」，避免用户以为还是气泡。枚举取值与下标对应关系不变。
+    public ObservableCollection<string> NotifyModes { get; } = ["仅失败时弹出面板", "总是弹出面板", "从不弹出面板"];
 
     /// <summary>主题下拉框的选项。</summary>
     public ObservableCollection<string> ThemeOptions { get; } = ["跟随系统", "浅色", "深色"];

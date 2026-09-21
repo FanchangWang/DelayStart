@@ -1,4 +1,4 @@
-# DelayStart — 决策索引（D1–D68）
+# DelayStart — 决策索引（D1–D73）
 
 > 每条只记**最终批复**（含被后续推翻的指向）。完整论证随原稿废弃；现状以 `design.md` 为准。
 > 标注 ✅ = 已批复；⚠️ = 被后续决策修订或推翻。
@@ -73,8 +73,14 @@
 | D66 | 过滤误伤"名字带 Microsoft" | ✅ 判据 `@"\Microsoft"` 少尾分隔符 → `IsProtectedFolderPath` 钉死只认根级 `\Microsoft\` 文件夹；16 例单测 + 红/绿对照 |
 | D67 | 接管连带禁用其他触发器 | ✅ 禁用粒度四层规则（任务级关则不动 / 单触发器切任务级 / 多触发器只切自启动触发器且全切 / 启用先开任务级）；`Trigger.Id` 记账方案实测不可行（id 普遍为空） |
 | D68 | UI v3 批复同步（R6–R8） | ✅ 调度任务改状态卡 + `SchedulerTaskBootstrap` 每次启动自检自愈（D63"仅首启一次"废止）；总览删最大延时/横幅；运行日志最新组默认展开；设置页 Toast（`ToastService`）与删除确认；编辑器钉宽/描述精简/确认 overlay 弹窗化；列头居中 |
+| D69 | 托盘左键闪退（0xC0000409） | ✅ `FillRect` 误声明在 gdi32（实为 user32 导出）→ WM_PAINT 抛 `EntryPointNotFoundException`，`UnmanagedCallersOnly` 帧无法展开 → AOT fail-fast；`WndProcThunk` 加兜底 catch + 日志钩子。定位法：把 PanelWindow 原样编进 CoreCLR 复现工程，异常当场抛出 |
+| D70 | uiAccess 目标降权（Quicker 报 740） | ✅ 预检 RT_MANIFEST 命中 uiAccess → 走 A(High) → CPWT → `DelayStart.LaunchBroker`(Medium) → `ShellExecuteEx` → 目标 C 链，broker 回传**目标**真实状态；`SHELLEXECUTEINFOW` 必须补 union（x64 sizeof=112）；COM STA 初始化 |
+| D71 | 调度端 UI v2（面板 + 菜单） | ✅ 完成通知从气泡改为**自动弹面板**（已开则激活）；启动中面板不自动关闭（去掉 `WM_ACTIVATE` 失焦即关）；完成后倒计时自动关闭（成功 10s / 失败 60s，鼠标移入暂停不重置）；完成态关闭面板（倒计时归零或手动 ✕）= 退出调度器 + 托盘消失；右键菜单两套（启动中 / 启动完毕，完成态含「退出」）；管理端通知策略文案改为「弹出面板」 |
 
-> **现状**：D1–D68 仅 D26 待决策（只影响测试命令，不阻塞编码）。
+| D73 | 已显示的面板被通知策略关掉 | ✅ 判据漏了「面板此刻已显示」这一条：`FailuresOnly` + 全成功 → `showPanel=false` → 下一拍 `Quit()` → 面板连同托盘一起消失，用户手动打开的面板自己没了。语义澄清：**`NotifyMode` 只管"要不要主动弹"，管不到已弹出的面板**；判据加 `|| IsPanelVisible`，已显示就切完成态起倒计时（成功 10s / 失败 60s，hover 暂停），关闭才退。`Never` 同理 —— 面板已在屏幕上时照样给倒计时 |
+| D72 | 收尾动作按入口分流（菜单 vs 面板） | ✅ 同一个「立即启动剩余 / 跳过剩余」在菜单与面板上语义不同，拆成两套入口：菜单「立即启动剩余任务」遵循通知策略；菜单「跳过剩余任务并退出」不弹面板直接退（**菜单文案不动**），且**不等**复查窗口：Launching 条目一并标记 `Skipped`（原因文案同未执行项），归档后立刻 `Quit()`；面板按钮「跳过剩余任务」按批复去掉"并退出"且不退出 —— 面板上两者都**必定**留在面板上给结果（切完成态 + 起倒计时），用户已手动打开面板，点了之后面板反而消失是倒退。引擎用 `_panelRequestedCompletion` / `_suppressCompletionPanel` 两标记，都压过 `NotifyMode` |
+
+> **现状**：D1–D73 仅 D26 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

@@ -295,7 +295,7 @@ internal sealed class SchedulerEngine
                 var evaluation = LaunchResultEvaluator.Evaluate(outcome, snapshotAfterDelay: null);
                 MarkResult(runtime, evaluation);
 
-                if (runtime.Result.Attempts > _settings.RetryCount)
+                if (RetryPolicy.Decide(runtime.Result.Attempts, _settings.RetryCount) == RetryDecision.Fail)
                 {
                     return;
                 }
@@ -320,7 +320,8 @@ internal sealed class SchedulerEngine
 
         MarkResult(runtime, evaluation);
 
-        if (!evaluation.IsSuccess && runtime.Result.Attempts <= _settings.RetryCount)
+        if (!evaluation.IsSuccess
+            && RetryPolicy.Decide(runtime.Result.Attempts, _settings.RetryCount) == RetryDecision.Retry)
         {
             Launch(runtime);
         }

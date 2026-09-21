@@ -393,25 +393,23 @@ internal sealed class SchedulerEngine
         var failedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
         _tray?.SetIcon(IconFor(failedCount > 0));
 
-        // 面板决策（UI v2 批复 + 2026-09-21 实测修复）：完成通知的载体是面板而非气泡，
-        // 退出时机 = 面板关闭（倒计时归零 / 用户点 ✕）。三选一，任一成立就把面板留在屏幕上：
-        //  1. `_panelRequestedCompletion` —— 用户是在面板上点的按钮，结果必须回到面板；
-        //  2. 面板此刻就显示着 —— 🔴 通知策略只决定"要不要主动弹"，**管不到已弹出的面板**；
-        //     用户手动打开过就该看到结果，否则面板会毫无理由地自己消失（2026-09-21 实测 bug）；
-        //  3. `ShouldShowPanel` —— 策略判定该弹。
-        // 例外：菜单「跳过剩余任务并退出」走 quitImmediately，直接退，不看面板。
-        var showPanel = !quitImmediately
-            && (_panelRequestedCompletion
-                || (_tray?.IsPanelVisible ?? false)
-                || ShouldShowPanel(failedCount));
+        // 收尾判据下沉到 Core 的 CompletionPolicy（判定表可单测；D71–D73 三个缺陷都出在这一处）。
+        var decision = CompletionPolicy.Decide(new CompletionPolicyInput(
+            QuitImmediately: quitImmediately,
+            PanelRequestedCompletion: _panelRequestedCompletion,
+            PanelVisible: _tray?.IsPanelVisible ?? false,
+            FailedCount: failedCount,
+            NotifyMode: _settings.NotifyMode));
 
-        if (showPanel)
+        if (decision.ExitMode == CompletionExitMode.WaitForPanelClose)
         {
             _awaitingPanelClose = true;
             _tray?.ShowCompletionPanel();
             return;
         }
 
+        // 两种"不等面板"的速度：菜单「跳过剩余任务并退出」要立刻离开（不等 Launching 条目的
+        // 1.5 秒复查窗口）；其余情况把 _quitAt 拨到当下，由紧随其后的同一次 Tick 判定退出。
         if (quitImmediately)
         {
             Quit();
@@ -420,14 +418,6 @@ internal sealed class SchedulerEngine
 
         _quitAt = _stopwatch.Elapsed;
     }
-
-    /// <summary>本次完成是否弹出面板（<see cref="NotifyMode"/> 语义不变，载体从气泡换成面板）。</summary>
-    private bool ShouldShowPanel(int failedCount) => _settings.NotifyMode switch
-    {
-        NotifyMode.Never => false,
-        NotifyMode.Always => true,
-        _ => failedCount > 0,
-    };
 
     /// <summary>
     /// UI v2（2026-09-21 批复）：完成态关闭面板（倒计时归零或用户点 ✕）与右键菜单「退出」都走这里 ——

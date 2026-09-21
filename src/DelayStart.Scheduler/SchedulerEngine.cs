@@ -132,12 +132,10 @@ internal sealed class SchedulerEngine
             return false;
         }
 
-        var enabled = config.Items
-            .Where(static item => item.Enabled)
-            .OrderBy(static item => item, StartupSortComparer.Instance)
-            .ToList();
+        // 计划生成（过滤 + 排序 + 到点时刻）下沉到 Core 的 SchedulePlan，便于单测（FR-5.3 / FR-5.4）。
+        var plan = SchedulePlan.Build(config.Items);
 
-        if (enabled.Count == 0)
+        if (plan.Count == 0)
         {
             _log.Info("没有启用的延时条目，静默退出（FR-5.10）。");
             return false;
@@ -148,18 +146,23 @@ internal sealed class SchedulerEngine
         {
             RunId = RunStateService.CreateRunId(now),
             StartedAt = now,
-            PlannedCount = enabled.Count,
-            Items = enabled.Select(static item => new RunItemResult
+            PlannedCount = plan.Count,
+            Items = plan.Select(static entry => new RunItemResult
             {
-                Id = item.Id,
-                Name = item.Name,
-                Delay = item.DelaySeconds,
+                Id = entry.Item.Id,
+                Name = entry.Item.Name,
+                Delay = entry.Item.DelaySeconds,
             }).ToList(),
         };
 
-        for (var index = 0; index < enabled.Count; index++)
+        for (var index = 0; index < plan.Count; index++)
         {
-            _items.Add(new SchedulerRuntimeItem { Item = enabled[index], Result = _record.Items[index], LaunchAt = TimeSpan.FromSeconds(enabled[index].DelaySeconds) });
+            _items.Add(new SchedulerRuntimeItem
+            {
+                Item = plan[index].Item,
+                Result = _record.Items[index],
+                LaunchAt = plan[index].LaunchAt,
+            });
         }
 
         // D40：调度端亲自降权，没有代理进程，也就没有预热这一步。

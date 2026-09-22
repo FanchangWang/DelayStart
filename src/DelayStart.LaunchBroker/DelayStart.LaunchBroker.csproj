@@ -29,6 +29,15 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <!--
+      ★ exe 自身图标：与守卫/通知中转器同批（tools/make-icon.py 的 broker 角色生成）。
+        本程序无窗口/托盘/计划任务，图标纯属资源管理器里的一致性 —— 通知类图标的
+        展示面（AUMID 快捷方式）与本 exe 无关。
+    -->
+    <ApplicationIcon>Assets\LaunchBroker.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup>
     <_WinSdkLibArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_WinSdkLibArch>
     <_WinSdkLibArch Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</_WinSdkLibArch>
   </PropertyGroup>

@@ -2,22 +2,28 @@
 # requires-python = ">=3.12"
 # dependencies = ["pillow>=11.0"]
 # ///
-"""从源 PNG 生成 DelayStart 的全部图标资源（管理端 + 调度端）。
+"""从源 PNG 生成 DelayStart 的全部图标资源（管理端 / 调度端 / 守卫 / 两个中转器）。
 
 用法（单文件脚本，依赖内联声明，必须用 uv run 执行）：
 
-    uv run tools/make-icon.py                # 生成全部（AppIcon + 调度端两枚）
+    uv run tools/make-icon.py                # 生成全部（AppIcon + 调度端两枚 + 守卫 + 两个中转器）
     uv run tools/make-icon.py --roles app    # 只生成管理端 AppIcon.ico
     uv run tools/make-icon.py --roles tray   # 只生成调度端 Scheduler.ico / SchedulerWarning.ico
     uv run tools/make-icon.py --roles guard  # 只生成守卫 DelayStart.Guard/Assets/Guard.ico
+    uv run tools/make-icon.py --roles broker # 只生成两个中转器的 ico（LaunchBroker / NotifyBroker）
     uv run tools/make-icon.py --info         # 只看源图信息，不写文件
 
-产物（三份都源自同一张 assets/icon/icon.png，改图后重跑本脚本即可）：
+产物（五份都源自同一张 assets/icon/icon.png，改图后重跑本脚本即可）：
 
     src/DelayStart.App/Assets/AppIcon.ico             10 档 —— exe 内嵌图标 + 窗口图标 + 安装程序自身
     src/DelayStart.Scheduler/Assets/Scheduler.ico      10 档 —— 调度端 exe 图标 + 托盘（正常态）
     src/DelayStart.Scheduler/Assets/SchedulerWarning.ico
                                                        10 档 —— 托盘「完成但有失败」角标态（D31）
+    src/DelayStart.Guard/Assets/Guard.ico              10 档 —— 守卫 exe 图标（计划任务 / 任务管理器可见）
+    src/DelayStart.LaunchBroker/Assets/LaunchBroker.ico
+                                                       10 档 —— 降权中转器 exe 图标（纯一致性）
+    src/DelayStart.NotifyBroker/Assets/NotifyBroker.ico
+                                                       10 档 —— 通知中转器 exe 图标（纯一致性）
 
 为什么要自己写 ICO 容器而不用 Pillow 的 `save(format="ICO", sizes=[...])`：
   Pillow 的 ICO 插件对**所有**尺寸都用 PNG 压缩条目。PNG-in-ICO 在 Windows
@@ -194,7 +200,8 @@ def main() -> int:
     ap.add_argument("--dst", default=str(repo / "src" / "DelayStart.App" / "Assets" / "AppIcon.ico"),
                     help="管理端图标输出路径")
     ap.add_argument("--sizes", default=",".join(str(s) for s in DEFAULT_SIZES))
-    ap.add_argument("--roles", default="app,tray,guard", help="app / tray / app,tray（默认全部）")
+    ap.add_argument("--roles", default="app,tray,guard,broker",
+                    help="app / tray / guard / broker（默认全部）")
     ap.add_argument("--info", action="store_true", help="只打印源图信息，不生成")
     args = ap.parse_args()
 
@@ -210,7 +217,7 @@ def main() -> int:
         return 0
 
     roles = {role.strip() for role in args.roles.split(",") if role.strip()}
-    unknown = roles - {"app", "tray", "guard"}
+    unknown = roles - {"app", "tray", "guard", "broker"}
     if unknown:
         print(f"✗ 未知的 --roles：{', '.join(sorted(unknown))}", file=sys.stderr)
         return 2
@@ -224,6 +231,15 @@ def main() -> int:
     if "guard" in roles:
         guard_dir = repo / "src" / "DelayStart.Guard" / "Assets"
         write_ico(guard_dir / "Guard.ico", pack_ico([(s, scale(rgba, s)) for s in sizes]), sizes)
+
+    if "broker" in roles:
+        # 两个降权中转器形态相同（跑完即退、无窗口/托盘/计划任务），exe 图标纯属
+        # 资源管理器里的一致性 —— 共用同一张源图，各落一份 ico。
+        broker_note = "与守卫同图（broker 无图标露出面，纯一致性）"
+        write_ico(repo / "src" / "DelayStart.LaunchBroker" / "Assets" / "LaunchBroker.ico",
+                  pack_ico([(s, scale(rgba, s)) for s in sizes]), sizes, note=broker_note)
+        write_ico(repo / "src" / "DelayStart.NotifyBroker" / "Assets" / "NotifyBroker.ico",
+                  pack_ico([(s, scale(rgba, s)) for s in sizes]), sizes, note=broker_note)
 
     if "tray" in roles:
         tray_dir = repo / "src" / "DelayStart.Scheduler" / "Assets"

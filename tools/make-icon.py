@@ -12,7 +12,7 @@
     uv run tools/make-icon.py --roles guard  # 只生成守卫 DelayStart.Guard/Assets/Guard.ico
     uv run tools/make-icon.py --info         # 只看源图信息，不写文件
 
-产物（三份都源自同一张 assets/icon/delay.png，改图后重跑本脚本即可）：
+产物（三份都源自同一张 assets/icon/icon.png，改图后重跑本脚本即可）：
 
     src/DelayStart.App/Assets/AppIcon.ico             10 档 —— exe 内嵌图标 + 窗口图标 + 安装程序自身
     src/DelayStart.Scheduler/Assets/Scheduler.ico      10 档 —— 调度端 exe 图标 + 托盘（正常态）
@@ -189,8 +189,8 @@ def write_ico(path: Path, data: bytes, sizes: tuple[int, ...], note: str = "") -
 def main() -> int:
     repo = Path(__file__).resolve().parent.parent
     ap = argparse.ArgumentParser(description="生成 DelayStart 的图标资源")
-    ap.add_argument("--src", default=str(repo / "assets" / "icon" / "delay.png"),
-                    help="源 PNG（默认 assets/icon/delay.png）")
+    ap.add_argument("--src", default=str(repo / "assets" / "icon" / "icon.png"),
+                    help="源 PNG（默认 assets/icon/icon.png）")
     ap.add_argument("--dst", default=str(repo / "src" / "DelayStart.App" / "Assets" / "AppIcon.ico"),
                     help="管理端图标输出路径")
     ap.add_argument("--sizes", default=",".join(str(s) for s in DEFAULT_SIZES))

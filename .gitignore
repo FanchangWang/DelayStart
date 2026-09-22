@@ -107,3 +107,6 @@ dist/
 # 本地 NuGet 源覆盖（若某台机器需要走代理或镜像，用 NuGet.config 的本地覆盖，
 # 不要把机器相关配置提交上去）
 NuGet.config.local
+
+# README 截图的原图留档（入库的是压缩后的 .webp，见 images/）
+images/.originals/

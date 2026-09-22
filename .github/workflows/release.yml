@@ -99,9 +99,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 🔴 必须有检出：`gh release create` 靠当前目录的 `.git` 判定"往哪个仓库发"，
-      #    没有它就是 `failed to run git: fatal: not a git repository`；`--generate-notes`
-      #    也要读本地提交历史。（2026-09-22 v0.1.0 首次真跑 tag 触发时暴露 —— 这个 job 带
-      #    `if: startsWith(github.ref, 'refs/tags/')`，此前两次 workflow_dispatch 整段跳过了它。）
+      #    没有它就是 `failed to run git: fatal: not a git repository`；生成 Release 说明的
+      #    make-release-notes.ps1 也要读仓库里的 CHANGELOG.md。（2026-09-22 v0.1.0 首次
+      #    真跑 tag 触发时暴露 —— 这个 job 带 `if: startsWith(github.ref, 'refs/tags/')`，
+      #    此前两次 workflow_dispatch 整段跳过了它。）
       - name: 检出
         uses: actions/checkout@v4
 
@@ -114,11 +115,18 @@ jobs:
       - name: 列出产物
         run: ls -lh dist
 
+      # 正文 = CHANGELOG.md 对应 tag 节（功能变更，手写）+ 附件说明表（大小/SHA256/用途）。
+      # CHANGELOG.md 缺对应节时该步骤直接失败 —— 宁可发版失败也不发没有变更说明的 Release。
+      - name: 生成 Release 说明
+        shell: pwsh
+        run: |
+          ./installer/make-release-notes.ps1 -Tag "${GITHUB_REF_NAME}" -DistDir dist -OutFile release-notes.md
+
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${GITHUB_REF_NAME}" dist/*.exe \
             --title "DelayStart ${GITHUB_REF_NAME}" \
-            --generate-notes \
+            --notes-file release-notes.md \
             --verify-tag

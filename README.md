@@ -225,6 +225,7 @@ UWP 应用的自启动由系统调度，第三方**无法延后**它。所以对
 
 | 文档 | 内容 |
 |---|---|
+| [CHANGELOG.md](CHANGELOG.md) | 功能变更日志（GitHub Release 正文由 CI 按标签从本文件提取） |
 | [docs/development.md](docs/development.md) | 环境要求、构建与测试、调试、发布打包、真机验收清单 |
 | [docs/design.md](docs/design.md) | **当前方案单一事实来源**：需求、架构与关键机制、调度端交互、编码规范 |
 | [docs/decisions.md](docs/decisions.md) | 每个决策的结论与取舍 |

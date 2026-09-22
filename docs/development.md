@@ -138,7 +138,7 @@ dotnet run --project tests/DelayStart.Core.Tests -c Release     # 规范测试�
 - 🔴 守卫随管理端形态发布到 `{app}` 根目录。**slim 形态下 publish 目录里不得出现 `hostfxr.dll`**（`build-installer.ps1` 已内置该 guard-rail，出现即中止）—— 否则框架依赖的管理端会误判"运行时根 = 程序目录"并报"必须安装 .NET"（D64-1 / D75）。
 - 安装器的 iss 参数、硬约束与验证配方见 [`../installer/README.md`](../installer/README.md) 与 [`pitfalls.md`](pitfalls.md) 九。
 
-**CI**：`.github/workflows/release.yml`，tag `v*` 与手动双触发，矩阵 `fail-fast: false`；arm64 前置检测工具集。
+**CI**：`.github/workflows/release.yml`，tag `v*` 与手动双触发，矩阵 `fail-fast: false`；arm64 前置检测工具集。Release 正文由 `installer/make-release-notes.ps1` 生成：从根目录 `CHANGELOG.md` 提取对应 `## vX.Y.Z` 节（**缺节则发版失败**，发版前先补日志）+ `dist\*.exe` 附件表（大小 / SHA256 / 用途）。
 
 ---
 

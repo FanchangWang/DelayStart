@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D85）
+# DelayStart — 决策记录（D1–D86）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -608,6 +608,27 @@
 
 ---
 
+### D86 Release 正文自管：CHANGELOG.md 提取 + 附件说明表（2026-09-23 用户批复）
+
+**结论**：
+- 仓库根新增 **`CHANGELOG.md`**（Keep a Changelog 格式、中文，节标题 `## vX.Y.Z - 日期`）：功能变更日志的**唯一手写源**；发版前必须先写好对应节。
+- 新增 `installer/make-release-notes.ps1`：按 tag 提取 CHANGELOG 对应节 + 遍历 `dist\*.exe` 生成**附件说明表**（文件名 · 大小 · SHA256 · 用途说明），拼成 Release 正文。
+- `release.yml` release job：`--generate-notes` 废弃，改 `--notes-file`；缺 CHANGELOG 节直接构建失败（宁可发版失败也不发没有变更说明的 Release）。
+- 附件说明按文件名模式匹配四档：full = 自包含装完即用（默认推荐）、slim = 框架依赖附运行时下载链接、x64 / ARM64 各一行。
+
+**背景**：用户要求 Release 带文案 —— 至少说明附件（slim.exe 是什么），最好带功能变更日志。查证：GitHub Release API **不支持给单个附件配 caption**，说明只能进正文表格（开源惯例）；`--generate-notes` 在本仓库（直提 main、无 PR）只产出 commit 堆叠，不构成变更日志。
+
+**为什么不是别的**：
+- **纯 `--generate-notes`**：零维护，但英文模板 + commit 流水，中文用户读不了，也不算"功能变更"。
+- **CHANGELOG + 末尾拼自动 What's Changed**（gh API generate-notes）：多一次 API 往返与格式拼接，自动段的价值（@作者 / PR 链接）在无 PR 仓库里为零 —— 用户批复 🅐 时已排除。
+
+**代价与约束**：
+- 每次发版**必须手写** CHANGELOG 节（漏写 = CI 失败提醒，属有意设计）。
+- 附件说明是**文件名模式匹配**：改 `build-installer.ps1` 命名约定时必须同步 `Get-AssetNote`。
+- make-release-notes.ps1 在 CI（ubuntu + pwsh）与本地都要能跑；SHA256 用 `Get-FileHash`。
+
+---
+
 ## 附表：R1–R13 技术风险与去向（已全部闭环）
 
 | # | 风险 | 怎么闭环的 |
@@ -626,7 +647,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D85 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D86 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

@@ -91,3 +91,5 @@ uv run tools\make-icon.py    # assets\icon\icon.png → 六份 ico（AppIcon/Gua
 ## CI（`.github/workflows/release.yml`）
 
 推 `v*` 标签自动建 Release，或手动 `workflow_dispatch`。矩阵 `rid × 形态` = 4 包，`fail-fast: false`；arm64 组先跑工具集检测。标签触发的版本号以标签为准；手动触发可填 `version`，都留空读 `Directory.Build.props`。
+
+Release 正文（D86）：`installer/make-release-notes.ps1` 从根目录 `CHANGELOG.md` 提取对应 `## vX.Y.Z` 节作功能变更日志，再拼 `dist\*.exe` 附件说明表（文件名 · 大小 · SHA256 · full/slim × x64/arm64 用途）。**发版前必须先在 CHANGELOG.md 写好对应节**，缺节 CI 直接失败；附件说明按文件名模式匹配，改 `build-installer.ps1` 命名约定时同步脚本里的 `Get-AssetNote`。

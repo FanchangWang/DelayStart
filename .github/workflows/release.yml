@@ -120,7 +120,10 @@ jobs:
       - name: 生成 Release 说明
         shell: pwsh
         run: |
-          ./installer/make-release-notes.ps1 -Tag "${GITHUB_REF_NAME}" -DistDir dist -OutFile release-notes.md
+          # 🔴 pwsh 里取环境变量必须用 $env: 前缀 —— bash 风格的 "${GITHUB_REF_NAME}"
+          #    是 PowerShell 变量、恒为空串（v0.2.0 首跑踩坑：Cannot bind argument
+          #    to parameter 'Tag' because it is an empty string）。
+          ./installer/make-release-notes.ps1 -Tag $env:GITHUB_REF_NAME -DistDir dist -OutFile release-notes.md
 
       - name: 创建 Release
         env:

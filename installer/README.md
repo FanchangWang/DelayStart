@@ -48,11 +48,11 @@
 |---|---|
 | 安装路径 | 固定 `%LOCALAPPDATA%\Programs\DelayStart`，`DisableDirPage` + `PrivilegesRequired=lowest`（安装零 UAC，卸载弹一次） |
 | 应用名 | `AppName` = `AppVerName` = 裸 **`DelayStart`**（「设置→应用」读的是 `AppVerName`；版本号走 `DisplayVersion`，形态后缀只留在产物文件名） |
-| 快捷方式 | `[Icons]` 开始菜单 + 桌面（挂 `Tasks: desktopicon`，默认勾选；静默安装需 `/MERGETASKS="desktopicon"`）；图标来自 exe 内嵌资源（`<ApplicationIcon>`） |
+| 快捷方式 | `[Icons]` 开始菜单 + 桌面（挂 `Tasks: desktopicon`，**默认勾选**——GUI 与静默一致；静默排除用 `/MERGETASKS="!desktopicon"`）；图标来自 exe 内嵌资源（`<ApplicationIcon>`） |
 | 装前清空安装目录 | `[Code] PrepareToInstall` 递归清 `{app}`（只清程序文件，保留 `unins*`；放在占用检查之前；唯一中止 = 精简版 `hostfxr.dll` 删不掉）。防两形态混装（D64） |
 | 调度任务 | **不归安装器管**（lowest 权限）；管理端每次启动 `SchedulerTaskBootstrap` 自检自愈（D68） |
-| 卸载可逆 | `InitializeUninstall` 用 `ShellExec('runas')` 拉起 `--restore-all --result-file <临时文件>` 轮询退出码，非 0 中止卸载（可强跳但二次确认） |
-| 卸载数据 | `usUninstall` 时问一次是否删配置与日志（默认否；静默=否） |
+| 卸载可逆 | `InitializeUninstall` 用 `ShellExec('runas')` 拉起 `--restore-all --result-file <临时文件>` 轮询退出码，非 0 默认**中止**卸载（可显式选「强行卸载」跳过，二次确认；静默时无人拍板 → 中止，D84） |
+| 卸载数据 | 卸载确认后弹**原生任务对话框**（D85，三按钮：保留配置并卸载〔默认焦点，排第一〕/ 删除配置并卸载〔带盾牌图标〕/ 取消；TaskDialogMsgBox 无默认按钮参数，默认焦点恒在第一个按钮，故「保留」必须排第一；文案 = Instruction「卸载 DelayStart」+ 实际展开的配置/日志目录两行；对话框在还原**之前**，点取消 = 终止卸载且不碰系统）；静默卸载传 `/DELETEDATA` 即删、未传一律保留（绝不静默删数据）。还原失败分支的提示框全部 `SuppressibleMsgBox`（静默不被弹窗卡死）。`WizardStyle=modern dynamic` → 向导与对话框跟随系统深浅色 |
 | 缺运行时 | 三判据检测 + 架构匹配；提示 + 下载链接不阻断；缺任一项时完成页「启动 DelayStart」整项消失（`Check: RuntimeReadyForApp`） |
 | 诊断开关 | `DELAYSTART_RUNTIME_CHECK` / `DELAYSTART_FAKE_MISSING` / `DELAYSTART_SKIP_PURGE` |
 
@@ -72,12 +72,18 @@ New-Item -ItemType File -Path "$app\hostfxr.dll" -Force | Out-Null
 Test-Path "$app\hostfxr.dll"        # 期望 False；Test-Path "$app\DelayStart.exe" 期望 True
 # 中止分支：另一进程占住 hostfxr.dll 再装 → 安装停在"准备安装"页且未删任何文件
 # 观察删除明细：/LOG="%TEMP%\ds-install.log"，搜「安装目录已清理」「残留文件删不掉」
+
+# 静默卸载（D84）：先还原接管项 → /DELETEDATA 决定是否删数据
+& "$env:LOCALAPPDATA\Programs\DelayStart\unins000.exe" /VERYSILENT          # 保留配置与日志
+& "$env:LOCALAPPDATA\Programs\DelayStart\unins000.exe" /VERYSILENT /DELETEDATA  # 连配置与日志一起删
+Test-Path "$env:APPDATA\DelayStart"   # 第一条期望 True，第二条期望 False
+# 还原失败分支（静默）：无人拍板 → 卸载中止（不弹窗、不卡死），日志搜「卸载已中止」
 ```
 
 ## 图标
 
 ```powershell
-uv run tools\make-icon.py    # assets\icon\delay.png → AppIcon.ico + Scheduler.ico + SchedulerWarning.ico（--roles app/tray 可单出）
+uv run tools\make-icon.py    # assets\icon\icon.png → 六份 ico（AppIcon/Guard/Scheduler/SchedulerWarning/LaunchBroker/NotifyBroker，--roles app/tray/guard/broker 可单出）
 ```
 
 三份产物分别供管理端 exe / 调度端 exe + 托盘两态使用；换图后**必须重新构建**（exe 图标是编译期嵌入的）。混合 ICO 容器与托盘挑条目的坑见 `docs/pitfalls.md` 七。

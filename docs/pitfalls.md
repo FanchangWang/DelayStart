@@ -98,14 +98,15 @@
 ## 九、安装器（Inno Setup）
 
 - 🔴 **任何一行不能以 `[` 开头**（含 `[Code]` 段内、含缩进后的 `[`）——ISCC 报 `Invalid section tag`，哪怕那行是合法的 Pascal 数组字面量。
-- `TaskDialogMsgBox` 第 5 参 `Shields` 是集合类型，传整数报 `Type mismatch` → 改 `MsgBox` + `MB_YESNOCANCEL`。
+- `TaskDialogMsgBox` 签名共 **6 参**：`(Instruction, Text, Typ, Buttons, ButtonLabels, ShieldButton)`，**没有验证复选框**（Inno 未把 Win32 任务对话框的 verification checkbox 暴露给 Pascal；2026-09-23 以官方文档源 `ISHelp/isxfunc.xml` + ISCC 6.7.3 编译实证）。第 6 参 `ShieldButton` = 哪个按钮显示盾牌图标（0 = 无）—— 旧记录"第 5 参 Shields 是集合类型"系误记。要静默默认值用 `SuppressibleTaskDialogMsgBox`（末尾多一个 `Default` 参）。
+- 🔴 **`TaskDialogMsgBox` 也没有默认按钮参数，默认焦点恒在第一个按钮（IDYES）**（2026-09-23 官方文档源实证 + 用户真机截图确认）。要把非破坏性操作设为默认，只能把它**排到 ButtonLabels 第一位** —— 首版卸载对话框把「删除配置并卸载」排第一，默认焦点落在破坏性操作上，用户实测发现后改为「保留」排第一（D85）。
 - **不要重复声明 `FILE_ATTRIBUTE_DIRECTORY`**——Inno Pascal 自带（`Duplicate identifier`）。
 - 🔴 **提权相关的两条做法（D61 真机踩过两次 740）**：当年 `DelayStart.exe` 的 manifest 是 `requireAdministrator` 而安装器是 `lowest`，于是 ① `[Run]` 首启必须带 `shellexec`（默认的 CreateProcess 路径 740，表现为"勾了启动、点确定弹报错框，程序根本没起来"）；② 卸载还原必须 `ShellExec('runas')` + `--result-file` 轮询回读退出码（`ShellExec` 拿不到子进程退出码），且**不能用 `[UninstallRun]`**（读不到退出码，还原失败也照删文件）。**D82 把 manifest 改成 `asInvoker` 之后 740 的成因已消失；这两条做法仍然保留不动** —— 它们是真机验证过的路径，改它们等于往卸载流程里塞进两条没跑过的分支（UAC 被拒、父子退出码转发），而收益只是少一次文件往返。
 - **iss 的 `/DSlim` 判据是"有没有定义"**，不要传 `/DSlim=0` 表"否"。
 - **中文 .isl 不随官方 Inno 分发**（属用户贡献翻译）→ 随仓库分发 `installer\languages\ChineseSimplified.isl`，iss 写 `compiler:Default.isl,languages\ChineseSimplified.isl`（相对路径按 **.iss 所在目录**解析；垫 Default.isl 消"缺 message"警告；语言文件版本错位只警告不失败）。
 - 语言/版本比较别用 `Copy(s,1,27)` 对 31 字符串——恒为假，用 `Pos(...)>0`。
 - 「设置→应用」显示名取 `AppVerName` 而非 `AppName`；固定 `AppVerName={#AppName}` 只显示裸名。
-- 静默安装不自动勾选任何任务：要桌面图标必须 `/MERGETASKS="desktopicon"`；静默卸载删数据一律按"否"。
+- **静默安装沿用任务的默认勾选态，不会"自动全不勾"**（2026-09-23 实测纠正）：`[Tasks]` 不写 `Flags` 时默认勾选 → GUI 与静默都创建桌面图标；要静默排除用 `/MERGETASKS="!desktopicon"`。静默卸载删数据只认显式 `/DELETEDATA`，未传一律保留（D84）。
 - 缺运行时检测多判据：.NET 在 32 位注册表视图（WOW6432Node\dotnet）+ `{pf64}/{pf32}` 目录；Windows App Runtime 查 HKCU/HKLM/HKLM64 并**匹配架构段**。自检出口 `DELAYSTART_RUNTIME_CHECK` / `DELAYSTART_FAKE_MISSING` 可自动化回归。
 
 ## 十、本机环境（AI / 工具链）

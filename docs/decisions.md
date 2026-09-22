@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D83）
+# DelayStart — 决策记录（D1–D85）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -327,7 +327,7 @@
 
 ### D62 二轮真机改判
 
-**结论**：缺运行库时不自动启动（`Check: RuntimeReadyForApp` + `DELAYSTART_FAKE_MISSING` 自检钩子）；桌面图标改可选任务（静默安装需 `/MERGETASKS`）；卸载询问删数据（静默 = 否）；图标换用户图，`tools/make-icon.py` 手写混合 ICO 容器。
+**结论**：缺运行库时不自动启动（`Check: RuntimeReadyForApp` + `DELAYSTART_FAKE_MISSING` 自检钩子）；桌面图标改可选任务（~~静默安装需 `/MERGETASKS`~~ **D84 修订：默认勾选，静默排除用 `!desktopicon`**）；卸载询问删数据（~~静默 = 否~~ **D84 修订：改为勾选框对话框，静默走 `/DELETEDATA`**）；图标换用户图，`tools/make-icon.py` 手写混合 ICO 容器。
 **背景**：Pillow 的 ICO 全 PNG 条目在缩略图等外壳路径会空白。
 
 ### D63 三轮真机反馈
@@ -562,6 +562,52 @@
 
 ---
 
+### D84 安装器卸载/静默交互修正（2026-09-23 用户批复）
+
+**结论**：
+- **桌面快捷方式默认勾选**（修订 D62 的 `Flags: unchecked`，当时与用户预期相反）：GUI 与静默安装（`/SILENT` `/VERYSILENT`）都创建；静默排除用 `/MERGETASKS="!desktopicon"`。Inno 规则：静默安装不询问任务，直接按默认勾选态执行。
+- **卸载"是否删除配置与日志"改为勾选框对话框**（`AskDeleteUserData`，自绘模态 `TSetupForm`）：在 `InitializeUninstall` 末尾（还原动作之后、进度窗之前）弹出，默认不勾 = 保留；点「取消」与"确定不勾"效果一致。（**D85 修订：废弃自绘窗体，改三按钮原生任务对话框并前置到还原之前**，见 D85）
+- **静默卸载支持 `/DELETEDATA`**：传参即删配置与日志，未传一律保留 —— 删用户数据绝不静默发生。
+- **还原失败分支三处 `MsgBox` → `SuppressibleMsgBox`**：普通 MsgBox 在静默卸载时不会被自动跳过，自动化卸载会卡死在无人值守弹窗上。默认值：UAC 被拒/无结果文件 = 继续卸载（不锁死用户）；还原失败（退出码非 0）= **中止**（无人能拍板"强行卸载"）。
+- **顺手修复还原失败分支的 Result 逻辑 bug**：原 `if MsgBox(...) = IDYES then Result := True` 在 `Result` 已为 `True` 时是空操作 —— 点「否」也继续卸载，与文案相悖。改为默认中止、显式确认才放行。
+
+**为什么不是别的**：
+- **不把勾选框塞进卸载进度窗体（`UninstallProgressForm`）** —— Inno 卸载向导不支持插入自定义页，窗体出现时卸载已在跑，控件时机不可控；自绘模态对话框时机确定、行为可测。
+- **不沿用 MsgBox 问"是/否"** —— 与安装向导的勾选交互不一致（用户明示想要勾选样式），且无法承载"默认不勾"的视觉暗示。
+- **静默还原失败不默认"继续卸载"** —— 接管项没还原就删管理端 = 用户永久失去还原入口（D22 红线）；静默时无人确认，宁可中止。
+- **不用 `{param:...}` 常量读参数** —— 它面向安装向导；卸载侧自扫 `ParamStr`（`CmdLineHasParam`）。
+
+**代价与约束**：
+- `CreateCustomForm` 签名 `(宽, 高, 是否居中向导内, 是否套用向导字体)` 返回 `TSetupForm`（照官方 `Examples\CodeClasses.iss`，签名记错会在 ISCC 编译期报 "Invalid number of parameters"）；静默检测函数名是 **`UninstallSilent`**（没有 `IsUninstallerSilent`）。
+- 程序文件已不在（exe 缺失）时 `InitializeUninstall` 提前退出，不会弹处置对话框 —— 数据保留，可接受。
+- GUI 卸载多一次点击（对话框），换来显式知情权。
+
+---
+
+### D85 卸载处置改用原生任务对话框 + 跟随系统深浅色（2026-09-23 用户批复）
+
+**结论**：
+- D84 的自绘 `CreateCustomForm` 勾选框对话框**整体废弃**，改为 **`TaskDialogMsgBox` 三按钮原生任务对话框**（`AskUninstallOptions`）：「保留配置并卸载」（IDYES，**默认焦点**，排第一）/「删除配置并卸载」（IDNO，带盾牌图标）/「取消」（IDCANCEL，用系统默认标签）。点哪个即定哪个，不存在"勾了忘点"。
+  - 🔴 **「保留」必须排第一**：`TaskDialogMsgBox` **没有默认按钮参数**（官方文档源实证），默认焦点恒在第一个按钮（IDYES）。首版把「删除」排第一导致默认焦点落在破坏性操作上，2026-09-23 用户实测反馈后修正。
+  - 文案（2026-09-23 用户批复）：Instruction「卸载 DelayStart」+ 正文两行**实际展开**的配置目录 / 日志目录路径（`ExpandConstant('{userappdata}\DelayStart')` 等）。
+- 对话框**前置到 `InitializeUninstall` 开头**（还原动作之前）：点「取消」= `Result := False`，接管项一个没动，"取消"名副其实。
+- `[Setup]` 改 `WizardStyle=modern dynamic`（Inno 6.6+ 深色模式）：向导与任务对话框整体跟随 Windows 系统深浅色，任务对话框样式化原生支持。
+
+**背景**：用户实测反馈自绘对话框三问题 —— 不置顶（要点任务栏才到前台）、点「取消」不终止卸载、"还不如原生 Inno 对话框好看"。批复走原生 TaskDialog 后查证发现：Inno Pascal 的 `TaskDialogMsgBox` **没有验证复选框参数**（签名共 6 参：`Instruction, Text, Typ, Buttons, ButtonLabels, ShieldButton`，2026-09-23 以官方文档源 `ISHelp/isxfunc.xml` + ISCC 6.7.3 编译双重实证），"原生 + 勾选框"不可兼得 → 用户批复改三按钮形态。
+
+**为什么不是别的**：
+- **继续自绘窗体 + 勾选框**：可用 6.6 新增 `IsDarkInstallMode` 做深浅色适配、保留勾选形态，但前台置顶仍需 `keybd_event` 注入 ALT 的 hack、按钮上不了强调色、~100 行自绘代码 —— 正是用户抱怨的"自己画的不好看"。
+- **勾选框塞进 `UninstallProgressForm`**：窗体出现时卸载已在跑，时机不可控（D84 已否，维持）。
+- **`mbConfirmation`（无图标）**：处置对话框带信息图标更醒目；`ShieldButton=IDNO`（盾牌落在「删除配置并卸载」上）—— 盾牌语义本该是 UAC 提权，这里借用它标记**破坏性操作**按钮，与「默认焦点在保留」配套构成双保险。
+
+**代价与约束**：
+- 数组字面量 `[` **不能在行首**（ISCC 当成 section 标记报 "Invalid section tag"，2026-09-23 实测踩中）—— 标签数组必须与 `MB_YESNOCANCEL` 同行。
+- `WizardStyle` 是编译期指令：跟随的是**系统**深浅色，不是 DelayStart 设置里的手动主题（手动画深浅色窗体 = 回到被否的自绘路线）。
+- 交互序列变为：内建卸载确认（硬编码不可关）→ 处置对话框 → UAC → 还原 → 进度 —— 与旧版次数持平（旧版：确认 → UAC → 还原 → 数据 MsgBox）。
+- 勘误存档：D84 期脚本注释"TaskDialogMsgBox 第 5 参 Shields 是 TMsgBoxShields 集合"是误记，实为第 6 参 `ShieldButton`（哪个按钮显示盾牌图标，0 = 无）；iss 内注释已同步修正。
+
+---
+
 ## 附表：R1–R13 技术风险与去向（已全部闭环）
 
 | # | 风险 | 怎么闭环的 |
@@ -580,7 +626,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D83 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D85 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

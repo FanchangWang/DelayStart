@@ -65,6 +65,29 @@
 ;   ② 缺运行时的下载入口**按缺哪项决定**（原来两个地址无条件全列、点「是」也只开 .NET
 ;      下载页）—— 只缺 Windows App Runtime 的用户被引去装一个已经装好的 .NET，装完
 ;      回来还是缺，等于把"误导"从报错框搬到了安装器里。
+;
+; D84（2026-09-23 用户批复，共 5 点）：
+;   ① 桌面快捷方式恢复**默认勾选**（D62 当时的 unchecked 与用户预期相反）：GUI 与静默
+;      安装都会创建；静默想排除用 /MERGETASKS="!desktopicon"。
+;   ② 卸载的"是否删除配置与日志"从 MsgBox 改为**自定义勾选框对话框**（AskDeleteUserData），
+;      默认不勾 = 保留。Inno 卸载向导不支持插入自定义页，故用自绘模态窗体。
+;   ③ 静默卸载支持 **/DELETEDATA**：传参即删配置与日志，未传 = 保留（绝不静默删数据）。
+;   ④ 还原失败分支三处 MsgBox 改 **SuppressibleMsgBox** —— 普通 MsgBox 在静默卸载时
+;      不会被自动跳过，自动化卸载会卡死在无人值守的弹窗上。
+;   ⑤ 顺手修复还原失败分支的 Result 逻辑 bug：原写法点「否」也继续卸载；改为默认中止、
+;      显式选「强行卸载」才放行（静默默认 = 中止，宁可不卸不可把用户锁死在接管状态）。
+;
+; D85（2026-09-23 用户批复，卸载交互定形）：
+;   ① D84 的自绘勾选框对话框废弃，改 **TaskDialogMsgBox 原生任务对话框**（AskUninstallOptions）：
+;      三按钮「保留配置并卸载（默认焦点）/ 删除配置并卸载 / 取消」——TaskDialogMsgBox
+;      没有验证复选框参数（签名 6 参，官方文档源 + ISCC 实证），勾选框不可用；
+;      也没有默认按钮参数 —— 默认焦点恒在第一个按钮，故「保留」必须排第一
+;      （首版把「删除」排第一，2026-09-23 用户实测发现默认焦点落错后修正）。
+;      文案（同日批复）：Instruction「卸载 DelayStart」+ 正文两行实际展开的
+;      配置目录 / 日志目录路径。
+;   ② 对话框**前置到 InitializeUninstall 开头**（还原之前）：点「取消」= 终止卸载且
+;      接管项一个没动。
+;   ③ WizardStyle 加 **dynamic**：向导与任务对话框跟随系统深浅色（Inno 6.6+ 深色模式）。
 
 #define AppName "DelayStart"
 #define AppPublisher "DelayStart"
@@ -138,7 +161,9 @@ OutputBaseFilename=DelayStart-Setup-{#AppVersion}-{#Rid}{#FlavorSuffix}
 OutputDir=..\dist
 Compression=lzma2
 SolidCompression=yes
-WizardStyle=modern
+; D85：modern dynamic = 跟随 Windows 系统深浅色（Inno 6.6+ 的安装器/卸载器深色模式，
+; 含任务对话框样式化）。用户没有自定义向导图，深浅色切换无副作用。
+WizardStyle=modern dynamic
 UninstallDisplayIcon={app}\{#AppExe}
 ; 关闭系统重启提示：本软件没有锁文件，重启无关紧要
 RestartIfNeededByRun=no
@@ -172,10 +197,9 @@ RestartApplications=yes
 Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"
 
 [Tasks]
-; D62：桌面快捷方式改成可选。不写 Flags → 默认勾选（Inno 的默认就是勾选，
-; 只有 Flags: unchecked 才是默认不勾）。
-; ⚠️ 静默安装（/VERYSILENT）**不会**自动勾选任何任务 —— 要建桌面图标必须显式
-;    传 /MERGETASKS="desktopicon"（详见 installer\README.md）。
+; 桌面快捷方式是可选项（可被 /MERGETASKS 排除），但**默认勾选**（2026-09-23 用户批复，
+; D84）—— 不写 Flags 时 Inno 的默认就是勾选，GUI 与静默安装（/SILENT /VERYSILENT）
+; 都会创建桌面图标。静默时想不建：/MERGETASKS="!desktopicon"（详见 installer\README.md）。
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
 
 [Files]
@@ -227,7 +251,11 @@ Filename: "{app}\{#AppExe}"; Description: "启动 {#AppName}"; Flags: nowait pos
 //    （重复声明报 "Duplicate identifier"，2026-09-21 实测踩过一次）。
 
 var
-  // 卸载时的用户数据处置说明：'' 表示没清（保留）；非空则是完成页要显示的结果文案。
+  // 卸载是否同时删除配置与日志（D84 立项 / D85 定形，2026-09-23 批复）。取值来源：
+  //   · GUI 卸载 = AskUninstallOptions 任务对话框的三按钮（保留配置并卸载〔默认〕/ 删除配置并卸载 / 取消）；
+  //   · 静默卸载 = 命令行 /DELETEDATA 参数（未传 = 保留，绝不静默删数据）。
+  DeleteUserData: Boolean;
+  // usUninstall 阶段删除数据的结果说明：'' = 没删（保留）；非空 = usPostUninstall 显示。
   UserDataNote: String;
 
 #ifdef Slim
@@ -443,12 +471,15 @@ begin
     Exit; // 运行时齐全，静默继续
 
   // 🔴 这里刻意用 MsgBox 而不是 TaskDialogMsgBox，两个坑都绕开：
-  //    ① TaskDialogMsgBox 的第 5 个参数 Shields 是 `TMsgBoxShields`（**集合类型**），
-  //       传整数 0 会报 "Type mismatch"（6.7.3 实测）；
+  //    ① 本处需要 SuppressibleMsgBox 的静默默认值（TaskDialogMsgBox 没有可指定
+  //       Default 的形式 —— 另有 SuppressibleTaskDialogMsgBox 可替代，见 D85 注）；
   //    ② 用自定义按钮标签就必须写数组字面量，而 `[` 出现在行首会被 ISCC
   //       当成 section 标记（"Invalid section tag"）。
-  //    MsgBox 的 Buttons 是纯整数常量，没有集合类型，也没有数组字面量。
-  //    SuppressibleMsgBox 与它签名兼容，但静默安装时不再弹框、直接返回 Default
+  //    ⚠️ 2026-09-23 勘误：本注释曾写"第 5 个参数 Shields 是 TMsgBoxShields 集合，
+  //       传整数 0 会报 Type mismatch"—— 是误记。TaskDialogMsgBox 实际签名 6 参：
+  //       (Instruction, Text, Typ, Buttons, ButtonLabels, ShieldButton)，
+  //       第 6 参 ShieldButton 是"哪个按钮显示盾牌图标"（Integer，0 = 无）。
+  //    SuppressibleMsgBox 与 MsgBox 签名兼容，静默安装时不再弹框、直接返回 Default
   //    （这里是 IDNO＝继续安装，自动化装包不会被卡住）。
   Answer := SuppressibleMsgBox(
     '本安装包不含运行时，当前系统缺少：' #13#10 + Missing + #13#10 +
@@ -669,6 +700,61 @@ begin
 #endif
 end;
 
+// ── 静默卸载的命令行参数探测（D84）──────────────────────────────────────────
+// Inno 的 IsUninstallerSilent 只回答"是不是静默"，不提供自定义参数读取；
+// {param:...} 常量也只面向安装向导。所以自己扫 ParamStr：约定参数为 /DELETEDATA
+//（大小写不敏感，带不带值都不认 —— 我们只需要一个开关）。
+function CmdLineHasParam(const Param: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount() do
+    if CompareText(ParamStr(I), '/' + Param) = 0 then
+  begin
+    Result := True;
+    Exit;
+  end;
+end;
+
+// ── 卸载前的「配置与日志处置」任务对话框（D85，2026-09-23 用户批复 🅐）──────────
+// 原生任务对话框 + 三按钮取代勾选框：TaskDialogMsgBox **没有**验证复选框参数 ——
+// Inno 未把 Win32 任务对话框的 verification checkbox 暴露给 Pascal（签名共 6 参：
+// Instruction/Text/Typ/Buttons/ButtonLabels/ShieldButton，2026-09-23 以官方文档源
+// ISHelp\isxfunc.xml + ISCC 6.7.3 编译双重实证）。三个按钮语义互斥、点了即定，
+// 不存在"勾了忘点"。
+// 🔴 主题跟随系统：[Setup] WizardStyle=modern dynamic，任务对话框自动深浅色（6.6+）。
+// 🔴 返回 True = 继续卸载（DeleteUserData 已置位）；False = 点了「取消」，终止卸载。
+// 🔴 默认焦点在「保留配置并卸载」—— TaskDialogMsgBox 无默认按钮参数，默认焦点
+//    恒在第一个按钮（IDYES），故「保留」必须排第一（2026-09-23 用户实测纠错）。
+// 🔴 只在非静默卸载调用；静默卸载没有交互面，走 /DELETEDATA 参数。
+function AskUninstallOptions(): Boolean;
+var
+  Answer: Integer;
+begin
+  DeleteUserData := False;
+
+  // MB_YESNOCANCEL 时第三个按钮（取消）的标签可省略 —— 省略即用系统默认"取消"。
+  // ⚠️ 数组字面量必须写在行中间：行首的 `[` 会被 ISCC 当成 section 标记。
+  // 🔴 TaskDialogMsgBox **没有默认按钮参数**（签名 6 参里没有 DefaultButton，
+  //    2026-09-23 官方文档源 isxfunc.xml 实证），默认焦点恒在**第一个按钮**（IDYES）。
+  //    所以「保留配置并卸载」必须排第一 —— 破坏性的「删除」绝不能是默认焦点
+  //    （D85 补丁：首版把「删除」排第一，用户实测发现默认焦点落错了）。
+  Answer := TaskDialogMsgBox(
+      '卸载 {#AppName}',
+      '配置目录：' + ExpandConstant('{userappdata}\DelayStart') + #13#10 +
+      '日志目录：' + ExpandConstant('{localappdata}\DelayStart'),
+      mbInformation,
+      MB_YESNOCANCEL, ['保留配置并卸载', '删除配置并卸载'],
+      IDNO);
+
+  // IDYES = 保留（第一按钮，默认焦点）；IDNO = 删除（带盾牌图标，标记破坏性操作）；
+  // IDCANCEL = 终止卸载。
+  if Answer = IDNO then
+    DeleteUserData := True;
+  Result := Answer <> IDCANCEL;
+end;
+
 // 卸载前的恢复动作（D22 / FR-2.7 / 9.3）。
 // 🔴 必须在 InitializeUninstall 里同步等待并检查退出码：
 //    --restore-all 失败说明还有条目没能还原成系统默认状态，此时删掉管理端
@@ -697,6 +783,20 @@ var
 begin
   Result := True;
 
+  // ── 配置与日志处置（D85：对话框前置到还原之前）────────────────────────────
+  // 放在最前 = 用户点「取消」时接管项一个都没被动过，"取消"名副其实。
+  // 静默卸载不弹窗：/DELETEDATA 传参即删，未传一律保留（绝不静默删用户数据）。
+  if UninstallSilent() then
+    DeleteUserData := CmdLineHasParam('DELETEDATA')
+  else
+  begin
+    if not AskUninstallOptions() then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+
   AppExe := ExpandConstant('{app}\{#AppExe}');
   if not FileExists(AppExe) then
     Exit; // 文件都不在了（手工删除过），无从恢复，照常卸载
@@ -716,11 +816,14 @@ begin
   begin
     // UAC 被拒（用户点了"否"）/ 起不来。还原没发生，但默认放行卸载 ——
     // 程序已损坏时强行中止只会把用户锁死。
-    if MsgBox(
+    // 🔴 D84：必须用 SuppressibleMsgBox —— 普通 MsgBox 在静默卸载时**不会被自动跳过**，
+    //    自动化卸载（CI / 脚本清理）会卡死在这个无人值守的弹窗上。Default=IDYES：
+    //    静默时按"继续卸载"走（与上面"不锁死用户"原则一致）。
+    if SuppressibleMsgBox(
         '无法以管理员身份启动恢复程序（ShellExecute 错误 ' + IntToStr(ShellError) + '）。' #13#10 +
         '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。' #13#10 #13#10 +
         '继续卸载吗？',
-        mbConfirmation, MB_YESNO) = IDNO then
+        mbConfirmation, MB_YESNO, IDYES) = IDNO then
       Result := False;
     Exit;
   end;
@@ -738,12 +841,12 @@ begin
   if not FileExists(ResultFile) then
   begin
     // 没有结果文件 = 用户取消了 UAC，或程序没跑到写文件那一步。
-    // 两者都意味着"还原没完成"，按失败处理（给用户知情权，默认放行）。
-    if MsgBox(
+    // 两者都意味着"还原没完成"，按失败处理（给用户知情权，默认放行；D84 静默默认也放行）。
+    if SuppressibleMsgBox(
         '恢复程序没有返回结果（可能取消了 UAC 提权，或程序已损坏）。' #13#10 +
         '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。' #13#10 #13#10 +
         '继续卸载吗？',
-        mbConfirmation, MB_YESNO) = IDNO then
+        mbConfirmation, MB_YESNO, IDYES) = IDNO then
       Result := False;
     Exit;
   end;
@@ -760,24 +863,34 @@ begin
 
   if ResultCode <> 0 then
   begin
-    if MsgBox(
+    // 🔴 D84 修复两件事：
+    //    ① 逻辑 bug：原写法 `if MsgBox(...) = IDYES then Result := True` 在 Result
+    //       已是 True 时是空操作 —— 用户点「否」也照样继续卸载，与"卸载已中止"的
+    //       文案直接相悖。改为**默认中止**，显式选「强行卸载」才放行。
+    //    ② 静默卸载：换 SuppressibleMsgBox，Default=IDNO —— 还原失败说明还有接管项
+    //       没还原，静默时无人能拍板"强行卸载"，按 D22 原则中止（宁可不卸，不可把
+    //       用户锁死在接管状态）。
+    Result := False;
+    if SuppressibleMsgBox(
         '恢复自启动项时出现问题（退出码 ' + IntToStr(ResultCode) + '）。' #13#10 +
         '为避免数据丢失，卸载已中止。请打开程序把「延时启动」页的条目逐一移出，' #13#10 +
         '或使用命令行 DelayStart.exe --restore-all 查看具体失败原因。' #13#10 #13#10 +
         '仍要强行卸载（跳过恢复，自启动项保持接管状态）吗？',
-        mbConfirmation, MB_YESNO) = IDYES then
+        mbConfirmation, MB_YESNO, IDNO) = IDYES then
       Result := True;
   end;
 end;
 
 // 配置与日志的默认策略：**保留**（%APPDATA%\DelayStart 与 %LOCALAPPDATA%\DelayStart），
-// 这样卸载重装后延时列表还在。D62 起在真正删文件之前问一次，用户可主动要求彻底清除。
+// 这样卸载重装后延时列表还在。D62 曾在此时点 MsgBox 询问；D84 立项、D85（2026-09-23 批复）
+// 定形为 InitializeUninstall 开头的任务对话框（GUI，三按钮）/ /DELETEDATA 参数（静默），
+// 这里只执行结果。
 //
 // 🔴 时机选 usUninstall 而不是 InitializeUninstall：
 //    ① usUninstall 在"确认卸载"之后才触发 —— 用户如果在确认页反悔，不会已经删了数据；
 //    ② 此时 --restore-all 已经跑完（它在 InitializeUninstall 里），顺序天然正确。
-// 🔴 用 SuppressibleMsgBox + Default=IDNO：静默卸载（/VERYSILENT）一律按"保留"处理，
-//    删用户数据这种事绝不能在用户没看见提示的情况下发生。
+// 🔴 删除条件只认 DeleteUserData：GUI 没选「删除配置并卸载」、静默没传 /DELETEDATA，
+//    都一律保留 —— 删用户数据这种事绝不能在用户没看见选项的情况下发生。
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   RoamingDir: String;
@@ -800,16 +913,7 @@ begin
     RoamingDir := ExpandConstant('{userappdata}\DelayStart');
     LocalDir := ExpandConstant('{localappdata}\DelayStart');
 
-    if SuppressibleMsgBox(
-        '是否一并删除配置与日志？' #13#10 #13#10 +
-        '  ' + RoamingDir + #13#10 +
-        '    延时列表与设置（config.json）' #13#10 +
-        '  ' + LocalDir + #13#10 +
-        '    日志与运行记录' #13#10 #13#10 +
-        '选「是」＝ 彻底清除：下次安装是全新状态，延时列表不再存在。' #13#10 +
-        '选「否」＝ 保留（默认）：重装后仍是原来的延时列表。' #13#10 #13#10 +
-        '⚠ 若调度端仍在运行，日志文件可能被占用而删不干净。',
-        mbConfirmation, MB_YESNO, IDNO) <> IDYES then
+    if not DeleteUserData then
       Exit;
 
     DelTree(RoamingDir, True, True, True);

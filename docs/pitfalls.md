@@ -88,6 +88,7 @@
 - ICO 容器：Pillow `save(format="ICO")` 全尺寸写 PNG 条目，小尺寸在缩略图等外壳路径会空白 → 手写混合容器（≥96 PNG、16–48 DIB）；多尺寸 ICO **不能"取第一个条目"**（首条 16×16 + `LR_DEFAULTSIZE` = 两次重采样），按目标尺寸挑条目并显式传 cx/cy；托盘底色取 32 而非 `SM_CXSMICON`（无 DPI 声明时恒 16）。
 - 🔴 **CI 里调 `gh` 的 job 必须 `actions/checkout`**（2026-09-22 v0.1.0 首次真跑暴露）：`release` job 只 `download-artifact`（想省掉检出），而 `gh release create` 靠当前目录的 `.git` 判定目标仓库 → `failed to run git: fatal: not a git repository`，`--generate-notes` 同样无从取提交历史。修法：加一步 `actions/checkout@v4`，或给 job 设 `GH_REPO` / 命令加 `--repo`。（D86 起该 job 不再用 `--generate-notes` 改 `--notes-file`，但检出仍不可省：make-release-notes.ps1 要读仓库里的 CHANGELOG.md。）**这个坑能藏很久**：该 job 带 `if: startsWith(github.ref, 'refs/tags/')`，此前两次都是 `workflow_dispatch` 触发、整段被跳过 —— "从来没跑过"和"一直好着"在日志里长得一模一样，只有真走 tag 那条路才暴露。⇒ **新加的触发路径必须实跑一次才算数。**
 - 🔴 **`gh run rerun` 用的仍是原 run 那次 commit 的 workflow 文件**：改了 `.github/workflows/*.yml` 之后 `--failed` 重跑，跑的还是**旧定义**（GH 固定沿用原 run 的 `GITHUB_SHA` + `GITHUB_REF`）。要验证 workflow 改动只能重新触发：移动 tag 重推、或新提交推 main 后再打 tag。
+- 🔴 **`shell: pwsh` 步骤里不能写 bash 风格 `${SOME_ENV}`**（2026-09-23 v0.2.0 首跑踩坑）：`${GITHUB_REF_NAME}` 在 pwsh 里是 **PowerShell 变量**（不存在 → 恒空串，报 `Cannot bind argument to parameter ... empty string`），不是环境变量；必须写 `$env:GITHUB_REF_NAME`。同文件里 bash 步骤（未写 `shell:` 的 ubuntu 默认）用 `${GITHUB_REF_NAME}` 才是对的 —— 两种风格混排时极易看错。
 
 ## 八、WinUI 3 模板与工程创建
 

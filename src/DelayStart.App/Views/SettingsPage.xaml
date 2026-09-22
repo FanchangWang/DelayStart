@@ -30,8 +30,9 @@
              <x:Double x:Key="PageMaxWidth">1000</x:Double>，PageStyle 把它挂在内容容器上；
            - 预设延时两个边框：第一个左描述右（输入框 + 添加按钮），第二个胶囊一行多个。
         ⑦ 2026-09-22 批复（D80）：新增「守卫」分节，目前只有一项「通知策略」
-           （有变化时通知 / 从不通知）—— 它管的是守卫发现自启动项变化后发不发系统通知，
-           与「调度」分节里的同名卡片（管调度结束弹不弹面板）互不相干。
+           （有变化时通知 / 从不通知）。它管的是守卫发现自启动项变化后发不发系统通知；
+           「调度」分节里的同名卡片管的是调度结束后发不发系统通知（N3 批复前管弹不弹面板）
+           —— 两个同名卡片触发方与载体都不同，互不相干。
     -->
     <Grid RowSpacing="12">
         <Grid.RowDefinitions>
@@ -173,7 +174,9 @@
                 <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="调度" />
 
                 <StackPanel Spacing="2">
-                    <stc:SettingsCard Description="启动计划全部结束后，自动弹出进度面板（不再使用右下角气泡）" Header="通知策略">
+                    <!-- N3（2026-09-22 批复）：通知策略语义从"弹不弹面板"改为"发不发系统通知"，
+                         文案随之精简（完整机制见 docs/notify-broker-plan.md §4.1 → design.md FR-14）。 -->
+                    <stc:SettingsCard Description="启动计划全部结束后，按所选策略发送系统通知" Header="通知策略">
                         <ComboBox
                             MinWidth="160"
                             ItemsSource="{x:Bind ViewModel.NotifyModes}"
@@ -195,7 +198,7 @@
                 <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="守卫" />
 
                 <StackPanel Spacing="2">
-                    <stc:SettingsCard Description="守卫巡检发现自启动项新增或失效时，是否发系统通知（右下角通知中心，点击可回到本程序）；无论选哪项，纠正与记录都照常进行" Header="通知策略">
+                    <stc:SettingsCard Description="发现自启动项变化时发送系统通知；纠正与记录不受影响" Header="通知策略">
                         <ComboBox
                             MinWidth="160"
                             ItemsSource="{x:Bind ViewModel.GuardNotifyModes}"

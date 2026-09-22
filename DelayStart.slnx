@@ -5,6 +5,7 @@
     <Project Path="src/DelayStart.Guard/DelayStart.Guard.csproj" />
     <Project Path="src/DelayStart.LaunchBroker/DelayStart.LaunchBroker.csproj" />
     <Project Path="src/DelayStart.Management/DelayStart.Management.csproj" />
+    <Project Path="src/DelayStart.NotifyBroker/DelayStart.NotifyBroker.csproj" />
     <Project Path="src/DelayStart.Scheduler/DelayStart.Scheduler.csproj" />
   </Folder>
   <Folder Name="/tests/">

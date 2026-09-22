@@ -190,6 +190,9 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 ; 因此由上面那条通配符一并部署 —— 这里刻意不重复写一行（重复只会让两处指令各自漂移）。
 ; 🔴 若改动 build-installer.ps1 里守卫的 -o 目标，这条覆盖关系就断了，记得同步这里。
 ;    守卫**不走 AOT**（它经 Management 调 COM，见 docs/pitfalls.md 五 R12），所以不放在 {#SchedulerDir} 那两条里。
+; 通知中转器 DelayStart.NotifyBroker.exe（N1，2026-09-22 批复）：调度完成通知的代发进程，
+;    由调度端降权拉起。与守卫同款处理 —— 非 AOT、形态跟随管理端、publish 输出 -o 进
+;    管理端 publish 目录，由上面的通配符一并部署，这里同样刻意不重复写一行。
 ; 调度端：AOT 单文件，放在安装根（调度任务按此路径注册）。
 ; ⚠️ 调度端两种形态都用 AOT —— 它不依赖 .NET 运行时，精简版用户因此只需补两个运行时而不是三个。
 Source: "{#SchedulerDir}\{#SchedulerExe}"; DestDir: "{app}"; Flags: ignoreversion

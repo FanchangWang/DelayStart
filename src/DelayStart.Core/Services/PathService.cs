@@ -27,6 +27,7 @@ public sealed class PathService
     private const string ManagerExecutableName = "DelayStart.exe";
     private const string SchedulerExecutableName = "DelayStart.Scheduler.exe";
     private const string GuardExecutableName = "DelayStart.Guard.exe";
+    private const string NotifyBrokerExecutableName = "DelayStart.NotifyBroker.exe";
 
     /// <summary>用系统默认位置构造（正式运行路径）。</summary>
     public PathService()
@@ -82,6 +83,9 @@ public sealed class PathService
     /// <summary>UIAccess 中转器日志完整路径（D70：与调度端同目录，便于联合排查）。</summary>
     public string BrokerLogPath => Path.Combine(LogsRoot, "launchbroker.log");
 
+    /// <summary>通知中转器日志完整路径（N1，2026-09-22 批复：同样与调度端同目录）。</summary>
+    public string NotifyBrokerLogPath => Path.Combine(LogsRoot, "notifybroker.log");
+
     /// <summary>守卫日志完整路径（D74）。</summary>
     public string GuardLogPath => Path.Combine(LogsRoot, "guard.log");
 
@@ -119,6 +123,12 @@ public sealed class PathService
 
     /// <summary>守卫可执行文件完整路径 —— 守卫计划任务 action 的目标（D74）。</summary>
     public string GuardExecutablePath => Path.Combine(InstalledRoot, GuardExecutableName);
+
+    /// <summary>
+    /// 通知中转器可执行文件完整路径（N1）—— 与调度端同落点（<c>{app}</c> 根目录），
+    /// 调度端按 <see cref="InstalledRoot"/>（= 自身所在目录）就近解析。
+    /// </summary>
+    public string NotifyBrokerExecutablePath => Path.Combine(InstalledRoot, NotifyBrokerExecutableName);
 
     /// <summary>全部**允许写入**的根目录。安装目录不在此列，这是 NFR-6.7 的可执行表述。</summary>
     public IReadOnlyList<string> WritableRoots => [LocalRoot, ConfigRoot];

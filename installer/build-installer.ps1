@@ -201,6 +201,26 @@ if ($LASTEXITCODE -ne 0) { throw "守卫 publish 失败（exit $LASTEXITCODE）"
 $guardExe = Join-Path $appPublishDir 'DelayStart.Guard.exe'
 if (-not (Test-Path -LiteralPath $guardExe)) { throw "守卫产物缺失：$guardExe" }
 
+# ---- 2c-2) 通知中转器 publish（N1：调度完成通知的代发进程，形态跟随管理端）----
+# 与守卫完全同款：非 AOT + WinRT 投影（TFM 带平台版本），full → --self-contained /
+# slim → --no-self-contained，输出 -o 进管理端 publish 目录（iss 的 PublishDir 通配符覆盖）。
+# 🔴 不能走 AOT：发通知走 WinRT 投影，AOT 下没有投影运行时（同守卫 D79 的理由）。
+Write-Step "publish 通知中转器 ($flavor)"
+$notifyBrokerArgs = @(
+    'publish', 'src\DelayStart.NotifyBroker\DelayStart.NotifyBroker.csproj',
+    '-c', $Configuration,
+    '-r', $Rid,
+    '-o', $appPublishDir,
+    '-v', 'minimal'
+)
+if ($Slim) { $notifyBrokerArgs += '--no-self-contained' } else { $notifyBrokerArgs += '--self-contained' }
+
+& dotnet @notifyBrokerArgs
+if ($LASTEXITCODE -ne 0) { throw "通知中转器 publish 失败（exit $LASTEXITCODE）" }
+
+$notifyBrokerExe = Join-Path $appPublishDir 'DelayStart.NotifyBroker.exe'
+if (-not (Test-Path -LiteralPath $notifyBrokerExe)) { throw "通知中转器产物缺失：$notifyBrokerExe" }
+
 # ---- 2d) 守门：slim 形态下 {app} 里绝不能出现主运行时（D64-1 / D75）---------
 # 🔴 2026-09-20 已 1:1 复现过：.NET apphost 只要在自己目录里看到 hostfxr.dll，就把
 #    "运行时根"当成程序目录，于是**框架依赖**的管理端会弹 "You must install or update .NET"

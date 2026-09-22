@@ -218,30 +218,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
         _ = NativeMethods.Shell_NotifyIconW(NativeMethods.NimModify, ref data);
     }
 
-    /// <summary>发一条气泡通知（信息分级 3 级）。</summary>
-    /// <param name="title">标题（≤ 64 字符）。</param>
-    /// <param name="text">正文（≤ 256 字符）。</param>
-    public void ShowBalloon(string title, string text)
-    {
-        if (!_iconAdded)
-        {
-            return;
-        }
-
-        var data = new NativeMethods.NotifyIconDataW
-        {
-            CbSize = (uint)sizeof(NativeMethods.NotifyIconDataW),
-            HWnd = _window,
-            UId = IconId,
-            UFlags = NativeMethods.NifInfo,
-            DwInfoFlags = 0, // NIIF_NONE
-        };
-        CopyInfo(ref data, title);
-        CopyText(ref data, text);
-
-        _ = NativeMethods.Shell_NotifyIconW(NativeMethods.NimModify, ref data);
-    }
-
     /// <summary>挂定时器（调度引擎的节拍）。</summary>
     /// <param name="intervalMilliseconds">节拍间隔毫秒数。</param>
     public void StartTimer(uint intervalMilliseconds) => NativeMethods.SetTimer(_window, 1, intervalMilliseconds, 0);
@@ -256,8 +232,8 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     public void RefreshPanel() => _panel.Refresh();
 
     /// <summary>
-    /// 完成后弹出进度面板（UI v2，2026-09-21 批复：用面板取代完成气泡）。
-    /// 面板已开着则只激活，不重复弹 —— 防止被别的窗口挡住后用户以为没通知。
+    /// 显示或激活完成面板（N4 后只在「面板已显示 / 收尾由面板发起」时由引擎调用 —— 收尾不再自动弹面板）。
+    /// 面板已开着则只激活，不重复弹。
     /// </summary>
     public void ShowCompletionPanel() => _panel.ShowOrActivate();
 
@@ -265,8 +241,7 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     public void HidePanel() => _panel.Hide();
 
     /// <summary>面板当前是否显示在屏幕上。
-    /// 收尾决策用：已显示的面板必须给完成态 + 倒计时，不能被通知策略直接关掉
-    /// （用户手动打开过了，2026-09-21 批复）。</summary>
+    /// 收尾决策用：已显示的面板必须给完成态 + 倒计时（用户手动打开过了，D73 / N4 承袭）。</summary>
     public bool IsPanelVisible => _panel.IsVisible;
 
     /// <inheritdoc />
@@ -430,22 +405,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
         fixed (char* buffer = data.SzTip)
         {
             CopyInto(buffer, 128, tip, MaxTipLength);
-        }
-    }
-
-    private static void CopyInfo(ref NativeMethods.NotifyIconDataW data, string info)
-    {
-        fixed (char* buffer = data.SzInfo)
-        {
-            CopyInto(buffer, 256, info, 256);
-        }
-    }
-
-    private static void CopyText(ref NativeMethods.NotifyIconDataW data, string text)
-    {
-        fixed (char* buffer = data.SzInfoTitle)
-        {
-            CopyInto(buffer, 64, text, 64);
         }
     }
 

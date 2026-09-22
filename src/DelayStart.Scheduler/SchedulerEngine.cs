@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Launch;
 using DelayStart.Core.Models;
+using DelayStart.Core.Serialization;
 using DelayStart.Core.Services;
 
 namespace DelayStart.Scheduler;
@@ -60,9 +62,13 @@ internal sealed class SchedulerEngine
     /// <summary>
     /// 收尾动作是**面板上**发起的（「立即启动剩余 N 项」/「跳过剩余任务」）。
     /// 用户已经手动弹出面板在看，完成时就必须给结果：面板切完成态并起倒计时，
-    /// 不能点了之后面板反而消失（2026-09-21 批复）。因此它**覆盖** <see cref="NotifyMode"/> 的静默策略。
+    /// 不能点了之后面板反而消失（2026-09-21 批复）。N4 后它仍参与收尾判定
+    /// （见 <see cref="CompletionPolicy"/>），但与通知策略再无关系。
     /// </summary>
     private bool _panelRequestedCompletion;
+
+    /// <summary>通知中转器的降权拉起器（懒建：只有真要发通知时才需要）。</summary>
+    private DeElevatedProcessLauncher? _notifyLauncher;
 
     /// <summary>构造调度引擎。</summary>
     public SchedulerEngine(
@@ -137,7 +143,11 @@ internal sealed class SchedulerEngine
 
         if (plan.Count == 0)
         {
-            _log.Info("没有启用的延时条目，静默退出（FR-5.10）。");
+            // D4 批复 A（2026-09-22）：空计划无特判 —— 配置能读出来就按通知策略发
+            // 完成通知（内容即"0 项成功"），与有计划的收尾走同一条 <see cref="SendCompletionNotification"/>。
+            // 配置读不出来的那条失败路径不通知（读不到策略，无从判定）。
+            _log.Info("没有启用的延时条目，按通知策略通报后退出（FR-5.10 / N2-D4）。");
+            SendCompletionNotification(failedCount: 0);
             return false;
         }
 
@@ -232,7 +242,7 @@ internal sealed class SchedulerEngine
             Finish();
         }
 
-        // 完成态且已弹面板时不能自行退出 —— 退出时机交给面板（倒计时归零或用户点 ✕）。
+        // 完成态且已弹面板时不能自行退出 —— 退出时机交给面板（倒计时归零或失焦关闭，N9-D3）。
         if (_finishing && !_awaitingPanelClose && _stopwatch.Elapsed >= _quitAt)
         {
             Quit();
@@ -457,11 +467,17 @@ internal sealed class SchedulerEngine
 
     // ---- 收尾 ----
 
-    /// <summary>收尾：落盘 + 归档 + 决定面板与退出时机。</summary>
+    /// <summary>收尾：落盘 + 归档 + 发通知 + 决定面板与退出时机。</summary>
     /// <param name="quitImmediately">
     /// 归档后**立刻**退出（菜单「跳过剩余任务并退出」专用，2026-09-21 批复）：
     /// 不等下一拍，也不等 Launching 条目的 1.5 秒复查窗口。
     /// </param>
+    /// <remarks>
+    /// N4–N7（2026-09-22 批复，<c>design.md</c> FR-14.1）：
+    /// 通知与面板在此分道 —— **无论面板是否显示**都先按策略发通知（N5，D2：菜单跳过路径同样发），
+    /// 然后面板在看的走 <see cref="CompletionExitMode.WaitForPanelClose"/>，否则同拍退出（N6）。
+    /// 收尾**不再**自动弹面板（N4：面板仅手动弹出）。
+    /// </remarks>
     private void Finish(bool quitImmediately = false)
     {
         _finishing = true;
@@ -483,13 +499,15 @@ internal sealed class SchedulerEngine
         var failedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
         _tray?.SetIcon(IconFor(failedCount > 0));
 
+        // N5：通知是通知，面板是面板 —— 无论面板是否显示都按策略发（失败只记日志，N12）。
+        SendCompletionNotification(failedCount);
+
         // 收尾判据下沉到 Core 的 CompletionPolicy（判定表可单测；D71–D73 三个缺陷都出在这一处）。
+        // N2 后判定表不再读通知策略：只看 QuitImmediately / 面板发起 / 面板可见。
         var decision = CompletionPolicy.Decide(new CompletionPolicyInput(
             QuitImmediately: quitImmediately,
             PanelRequestedCompletion: _panelRequestedCompletion,
-            PanelVisible: _tray?.IsPanelVisible ?? false,
-            FailedCount: failedCount,
-            NotifyMode: _settings.NotifyMode));
+            PanelVisible: _tray?.IsPanelVisible ?? false));
 
         if (decision.ExitMode == CompletionExitMode.WaitForPanelClose)
         {
@@ -507,6 +525,115 @@ internal sealed class SchedulerEngine
         }
 
         _quitAt = _stopwatch.Elapsed;
+    }
+
+    /// <summary>
+    /// 按 <see cref="NotifyDecision"/> 经通知中转器发"调度完成"系统通知（N1/N2，2026-09-22 批复）。
+    /// </summary>
+    /// <param name="failedCount">本批次失败条目数（供策略判定与文案）。</param>
+    /// <remarks>
+    /// <para>
+    /// 🔴 best-effort（N12）：策略判"不发"只记一行日志；中转器缺失 / 拉起失败 / 任何异常
+    /// 都只记日志 —— 通知绝不阻塞、绝不拖垮调度退出。fire-and-forget：不等中转器退出、不读回执。
+    /// </para>
+    /// <para>
+    /// 🔴 必须**降权**拉起中转器：调度端提权运行，Win10/11 抑制提权进程的系统通知，
+    /// 通知必须以中完整性发出（见 <c>design.md</c> FR-14）。
+    /// </para>
+    /// </remarks>
+    private void SendCompletionNotification(int failedCount)
+    {
+        if (!NotifyDecision.Decide(_settings.NotifyMode, failedCount))
+        {
+            _log.Info($"通知策略为 {_settings.NotifyMode}，跳过完成通知。");
+            return;
+        }
+
+        try
+        {
+            var broker = _paths.NotifyBrokerExecutablePath;
+            if (!File.Exists(broker))
+            {
+                _log.Warn($"通知中转器缺失，本次不发完成通知：{broker}。");
+                return;
+            }
+
+            var doneCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Done);
+            var skippedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Skipped);
+            var failedNames = _items
+                .Where(static runtime => runtime.Result.State == RunItemState.Failed)
+                .Select(static runtime => runtime.Result.Name)
+                .ToList();
+
+            var job = new NotifyToastJob
+            {
+                // Aumid / Tag / Group 靠契约默认值（AUMID=DelayStart、Tag=schedule-done）；
+                // 🔴 Launch **必须显式给**：它决定点击能否拉起管理端 —— 曾因只靠默认值、
+                // 而契约默认值是空串导致发出去的 toast launch=""，点击无反应（2026-09-22 实锤）。
+                // 值 = delaystart://runs-log（D82：点击直达运行日志页）。
+                Launch = NotifyToastJob.ScheduleDoneLaunch,
+                Title = ScheduleToastComposer.Title,
+                Message = ScheduleToastComposer.ComposeMessage(doneCount, failedCount, skippedCount, failedNames),
+            };
+
+            // 作业走 %TEMP% 下的一次性目录（与 LaunchBroker 同款；无标签对象按 Medium 处理，
+            // High 调度端创建的目录不挡 Medium 中转器读写）。fire-and-forget：本进程退出前
+            // 中转器大概率还没读走文件，所以目录留给中转器，由下一轮的陈旧清理兜底回收。
+            var jobDirectory = Path.Combine(
+                Path.GetTempPath(), "DelayStart", "notify", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(jobDirectory);
+            var jobFile = Path.Combine(jobDirectory, "job.json");
+            File.WriteAllText(jobFile, JsonSerializer.Serialize(job, BrokerJsonContext.Default.NotifyToastJob));
+
+            CleanStaleNotifyJobs();
+
+            var launcher = _notifyLauncher ??= new DeElevatedProcessLauncher(_log);
+            var outcome = launcher.LaunchAuxiliary("完成通知", broker, $"\"{jobFile}\"");
+            if (outcome.Created)
+            {
+                _log.Info($"完成通知已委托中转器发送（作业 {jobFile}）。");
+            }
+            else
+            {
+                _log.Warn("完成通知发送失败（中转器拉起失败），不影响调度退出。");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(ex, "发送完成通知时发生异常，不影响调度退出。");
+        }
+    }
+
+    /// <summary>清理超过 1 小时的旧通知作业目录（fire-and-forget 语义下没人删它们，这里兜底回收）。</summary>
+    private void CleanStaleNotifyJobs()
+    {
+        try
+        {
+            var root = Path.Combine(Path.GetTempPath(), "DelayStart", "notify");
+            if (!Directory.Exists(root))
+            {
+                return;
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(root))
+            {
+                try
+                {
+                    if (File.GetCreationTime(directory) < DateTimeOffset.Now.AddHours(-1))
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+                }
+                catch (Exception)
+                {
+                    // 单个目录清理失败不影响其余，也不影响本次通知。
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(ex, "清理旧通知作业目录失败（不影响通知发送）。");
+        }
     }
 
     /// <summary>
@@ -703,10 +830,11 @@ internal sealed class SchedulerEngine
         }
     }
 
-    /// <summary>打开管理端主窗口（托盘右键菜单，2026-09-21 批复 D1=A / D5=气泡报错）。</summary>
+    /// <summary>打开管理端主窗口（托盘右键菜单，2026-09-21 批复 D1=A）。</summary>
     /// <remarks>
-    /// 与 <see cref="OpenRunLog"/> 的区别：不带 <c>--goto-log</c> 参数（进总览页）；
-    /// 管理端缺失时按 D5 批复发气泡报错（运行日志入口保持静默降级 —— 那里还有日志文件兜底）。
+    /// 与 <see cref="OpenRunLog"/> 的区别：不带 <c>--goto-log</c> 参数（进总览页）。
+    /// 管理端缺失 / 启动失败只记日志（D5 批复 A：旧气泡已随本次退役，通知统一走中转器；
+    /// 这类交互失败的兜底信息在日志里，不打扰用户）。
     /// </remarks>
     private void OpenManager()
     {
@@ -716,7 +844,6 @@ internal sealed class SchedulerEngine
             if (!File.Exists(manager))
             {
                 _log.Warn($"管理端不存在，无法打开：{manager}");
-                _tray?.ShowBalloon("管理端缺失", $"未找到管理端程序：{Path.GetFileName(manager)}");
                 return;
             }
 
@@ -730,7 +857,6 @@ internal sealed class SchedulerEngine
         catch (Exception ex)
         {
             _log.Warn(ex, "启动管理端失败。");
-            _tray?.ShowBalloon("管理端启动失败", ex.Message);
         }
     }
 
@@ -739,7 +865,7 @@ internal sealed class SchedulerEngine
         !_finishing && _items.Exists(static runtime => runtime.Result.State == RunItemState.Waiting);
 
     /// <summary>立即启动全部剩余条目 —— **右键菜单**入口（2026-09-21 批复）。
-    /// 完成时机遵循设置-调度-通知：该弹面板就弹，不该弹就直接退。</summary>
+    /// N4 后：完成后不自动弹面板，只有面板已开着（或收尾由面板发起）才留在面板上；通知照按策略发。</summary>
     private void LaunchRemainingNow()
     {
         LaunchRemainingNowCore(fromPanel: false);

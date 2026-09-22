@@ -114,15 +114,18 @@ public partial class SettingsViewModel : ObservableObject
     public bool HasError => StatusText.Length > 0;
 
     /// <summary>通知策略下拉框的选项。</summary>
-    // UI v2（2026-09-21 批复）：完成通知的载体从右下角气泡改为进度面板，
-    // 文案点明「面板」，避免用户以为还是气泡。枚举取值与下标对应关系不变。
-    public ObservableCollection<string> NotifyModes { get; } = ["仅失败时弹出面板", "总是弹出面板", "从不弹出面板"];
+    /// <remarks>
+    /// N3（2026-09-22 批复）：通知策略语义从"收尾弹不弹面板"改为"调度结束后发不发
+    /// Windows 系统通知"（经通知中转器发出，见 <c>design.md</c> FR-14）。
+    /// 枚举取值与下标对应关系不变，旧配置零迁移。
+    /// </remarks>
+    public ObservableCollection<string> NotifyModes { get; } = ["有失败时通知", "总是通知", "从不通知"];
 
     /// <summary>守卫通知策略下拉框的选项（D80）。</summary>
     /// <remarks>
     /// 🔴 与 <see cref="NotifyModes"/> 是**两回事**，不能合并：那边管的是"调度结束后
-    /// 弹不弹进度面板"，这边管的是"守卫巡检发现自启动项变化时发不发系统通知"。
-    /// 载体也不同（应用内面板 vs 系统通知中心），枚举类型因此各有一个
+    /// 发不发系统通知"，这边管的是"守卫巡检发现自启动项变化时发不发系统通知"。
+    /// 触发方也不同（调度端 vs 守卫进程），枚举类型因此各有一个
     /// （见 <see cref="GuardNotifyMode"/> 的备注）。
     /// </remarks>
     public ObservableCollection<string> GuardNotifyModes { get; } = ["有变化时通知", "从不通知"];

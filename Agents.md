@@ -14,14 +14,14 @@
 | 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
 | 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· **.NET 10 + 非 AOT**（守卫端）· xUnit v3（测试） |
 | 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
-| 测试 | `.\scripts\test.ps1` → **472 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
-| 状态 | 功能完整（含自启动项守卫），进安装包阶段；守卫待真机验收；管理端提权模型已改为**入口自提权**（D82，待真机验收：点通知不应再弹 UAC）；文档与代码同步 |
+| 测试 | `.\scripts\test.ps1` → **481 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 状态 | 功能完整（含守卫、通知中转器），进安装包阶段；守卫 / D82 / **N1–N12 通知与面板拆分**均待真机验收；文档与代码同步 |
 
 ---
 
 ## 一、🔴 硬约束（违反即构建失败或发布失败）
 
-1. **依赖方向单向**：`App → Management → Core`、`Scheduler → Core`、`LaunchBroker → Core`、`Tests → Core + Management`。
+1. **依赖方向单向**：`App → Management → Core`、`Scheduler → Core`、`LaunchBroker → Core`、`NotifyBroker → Core`、`Tests → Core + Management`。
    - `Scheduler` / `LaunchBroker` 绝不引用 `Management` —— NativeAOT 发布直接失败。
    - `Tests` 绝不引用 `App` —— 会背上 WindowsAppSDK 自包含的包袱。
 2. **`DelayStart.Core` 必须 AOT 兼容**（`IsAotCompatible=true` 构建期守门）：零 COM、零反射。往 Core 放 `TaskScheduler` 包、`IShellLinkW` 之类的东西 = 打断调度端发布。
@@ -92,8 +92,8 @@
 | 调度循环 / 时序 / 收尾 / 落盘 | `SchedulerEngine.cs` |
 | 进行中状态（条目运行时状态） | `SchedulerRuntimeItem.cs` |
 | 托盘图标与右键菜单 | `TrayIconHost.cs` |
-| 面板绘制（GDI 自绘） | `PanelWindow.cs` |
-| 降权启动（外壳令牌 → CPWT） | `DeElevatedProcessLauncher.cs` |
+| 面板绘制（GDI 自绘，「钉」+ 失焦关闭） | `PanelWindow.cs` |
+| 降权启动（外壳令牌 → CPWT；含 `LaunchAuxiliary` 通用降权拉起入口） | `DeElevatedProcessLauncher.cs` |
 | Win32 声明（🔴 注意模块归属） | `NativeMethods.cs` |
 | 图标资源按尺寸取用 | `IconResources.cs` |
 
@@ -110,6 +110,8 @@
 🔴 **守卫 TFM 带平台版本**（`net10.0-windows10.0.26100.0`，发 WinRT 通知要投影），产物在 `bin\<Cfg>\net10.0-windows10.0.26100.0\<rid>\` —— 比调度端（`net10.0-windows\<rid>\`）多一段，搬产物别照抄调度端路径。
 
 **`src/DelayStart.LaunchBroker`** —— `Program.cs`：uiAccess 目标的降权中转器（D70）。
+
+**`src/DelayStart.NotifyBroker`** —— `Program.cs`：通知中转器（N1/D83，**非 AOT**、只引用 Core、无 `app.manifest`）。读调度端写的一次性作业 JSON（`NotifyToastJob`，schema 在 `Core` 的 `BrokerJsonContext`）→ 发系统通知（Tag=`schedule-done`，点击落 `delaystart://runs-log`）→ 驻留 ~500ms 退出。TFM 带平台版本（同守卫），产物在 `bin\<Cfg>\net10.0-windows10.0.26100.0\<rid>\`。
 
 **`src/DelayStart.App`** —— 管理端：页面 `Views/*.xaml`、视图模型 `ViewModels/*.cs`、组合根 `Services/ServiceRegistration.cs`（**CLI 与 GUI 共用一个容器，容器在 CLI 分流之前构建**）、跨进程定位 `Services/UiTargetNavigation.cs`、对话框 `Dialogs/DelayEditorDialog.xaml`、提权相关互操作 `Interop/`（含 `InstanceProbe.cs`：跨完整性级别的"实例还活着吗"探测，D82）。
 
@@ -132,7 +134,7 @@
 - 手动等价：`dotnet build DelayStart.slnx -c Release` / `dotnet run --project tests/DelayStart.Core.Tests -c Release`
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + 472 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + 481 个用例全绿。
 
 ---
 
@@ -148,6 +150,7 @@
 | 新增 NuGet 包 | 硬约束 2 · `pitfalls.md` 五（先发一次 AOT 看 IL2026/IL3050） |
 | 动启动链路 / 降权 / 唤起 | `design.md` 7.3 机制 6 / 6a · 六（权限模型）· `decisions.md` D40、D70、**D82** · `pitfalls.md` 十二（跨完整性级别：文件当信号 / 只读探测） |
 | 动守卫（Guard） | `design.md` 十一 · `decisions.md` D74–D82 · `pitfalls.md` 十一（写回行为模式 / **AUMID 与系统通知** / bin 四件套同步 / `--goto-*` 必须排除在 CLI 分流之外） |
+| 动调度收尾 / 通知 / 面板 | `design.md` 八 + FR-14（**FR-14.1 = N1–N12 锚点表**）· `decisions.md` D71–D73（历史）、**D83**（通知与面板分离 + NotifyBroker） |
 | 改任何 `app.manifest` | `pitfalls.md` 四（🔴 注释里出现**连续两个减号** = `mt.exe` 报 c1010070 且不指位置）· 十一（emoji / 非 BMP 字符 = 加载期激活上下文失败）· `decisions.md` D82；🔴 改完**必须真启动一次 exe**，构建绿与单测绿都照不到。⚠️ 守卫已无清单（D79），只剩管理端与调度端 |
 | 改文档 | 见下方「文档地图」的更新义务 |
 
@@ -162,7 +165,7 @@
 | `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-5.3`、`NFR-1.2` |
 | `E-x` | 异常场景矩阵 | `docs/design.md` 五 | `E13` |
 | `R-x` | 技术风险（已全部闭环） | `docs/decisions.md` 附表 | `R11` |
-| `D-x` | 决策点（D1–D82） | `docs/decisions.md` | `D17` |
+| `D-x` | 决策点（D1–D83） | `docs/decisions.md` | `D17` |
 | `坑 x` | 技术陷阱（编号 1–10 沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
 
 规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；**新踩的坑必须追加进 `pitfalls.md`**。
@@ -212,4 +215,6 @@
 - ❌ 把管理端的提权门放到 CLI / GUI 分流**之后**，或忘了先摘掉 `--elevation-attempted` 再交给 `CliHost` —— 前者让业务以非提权身份运行（违反 D20），后者以连续两个减号开头会被判成未知子命令（exit 2、界面起不来）。顺序：认领定位参数 → 提权门 → CLI → GUI（D82）。
 - ❌ 让 `--goto-startup` / `--goto-log` / `--stale` 走到 `CliHost`（它们以 `--` 开头会被当成未知子命令 → exit 2、GUI 从不启动）。
 - ❌ 只把 `DelayStart.Guard.exe` 拷进 App bin 就算部署（非 AOT，必须 exe+dll+runtimeconfig+deps 四件套）。
-- ❌ 让 `publish.ps1` 里 `build Guard` 排在 `build App` 之后（同步钩子是"拉"式，顺序反了 App bin 里就没有守卫）。
+- ❌ 让 `publish.ps1` 里 `build Guard` / `build NotifyBroker` 排在 `build App` 之后（同步钩子是"拉"式，顺序反了 App bin 里就没有对应 exe）。
+- ❌ 在收尾判定（`CompletionPolicy`）里读 `NotifyMode`，或让收尾自动弹面板 —— D83 起"面板是面板，通知是通知"：通知归 `NotifyDecision`，面板只跟随用户的手（N4）。
+- ❌ 给 `NotifyBroker` 开 AOT / 让它引用 `Management` / 让它自行注册 AUMID —— 它是"读作业 JSON → 发通知 → 退出"的哑进程（N1/D83）。

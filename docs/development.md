@@ -29,6 +29,7 @@ DelayStart.slnx
 ├─ src/DelayStart.Scheduler      # 纯 Win32 + NativeAOT 调度端（产出 DelayStart.Scheduler.exe）
 ├─ src/DelayStart.LaunchBroker   # NativeAOT 降权中转器（产出 DelayStart.LaunchBroker.exe，见 D70）
 ├─ src/DelayStart.Guard          # 自启动项守卫（产出 DelayStart.Guard.exe，非 AOT，见 D74/D75）
+├─ src/DelayStart.NotifyBroker   # 通知中转器（产出 DelayStart.NotifyBroker.exe，非 AOT，见 N1/D83）
 ├─ tests/DelayStart.Core.Tests   # xUnit v3 单元测试（走 Microsoft.Testing.Platform）
 ├─ scripts/                      # 开发期脚本：build / test / publish / all
 ├─ installer/                    # Inno Setup 安装器与构建矩阵（见 D22 / D60）
@@ -37,10 +38,11 @@ DelayStart.slnx
 └─ docs/                         # design.md（方案）· decisions.md（决策）· pitfalls.md（踩坑）· development.md（本文）
 ```
 
-**依赖方向是单向的**：`App → Management → Core`、`Scheduler → Core`、`LaunchBroker → Core`、`Guard → Core + Management`、`Tests → Core + Management`。
+**依赖方向是单向的**：`App → Management → Core`、`Scheduler → Core`、`LaunchBroker → Core`、`Guard → Core + Management`、`NotifyBroker → Core`、`Tests → Core + Management`。
 
 - 🔴 `Scheduler` / `LaunchBroker` **绝不引用 `Management`** —— NativeAOT 发布直接失败。
 - 🔴 `Guard` **可以**引用 `Management`（它要 COM 与 `TaskScheduler`），代价是**它不能 AOT**（D75）—— 所以它的发布形态跟随管理端，而不是跟随调度端。
+- 🔴 `NotifyBroker` **只引用 `Core`**（N1）：AUMID 由作业 JSON 携带（`NotifyToastJob.DefaultAumid`），它不读配置、不注册任何系统资源；发通知要 WinRT 投影，故不能 AOT，发布形态跟随管理端。
 - 🔴 `Tests` **绝不引用 `App`** —— 一旦引用就要背上 WindowsAppSDK 自包含 + 运行时预装的包袱。
 
 **为什么按"AOT 兼容性"而不是按领域拆两个共享库**：调度端用 NativeAOT，它引用的一切代码都必须 AOT 兼容；而扫描所需的计划任务库（`TaskScheduler` 包）、COM 互操作（`.lnk` 解析、图标提取）恰恰都不兼容。按兼容性切分后，调度端只引用 `Core`，拿到一个**零 COM、零反射**的最小集合。往 Core 里放一个 COM 依赖，`IsAotCompatible=true` 会在构建期拦住你。
@@ -53,6 +55,7 @@ DelayStart.slnx
 | App | `net10.0-windows10.0.26100.0` | `TargetPlatformMinVersion=10.0.19041.0`、`WindowsPackageType=None`、`WindowsAppSDKSelfContained=true` |
 | Scheduler / LaunchBroker | `net10.0-windows` | `PublishAot=true` |
 | Guard | `net10.0-windows10.0.26100.0` | **`PublishAot=false`**（要 COM，D75）；发 WinRT 系统通知需要平台版本（D79），故与 App 同 TFM —— ⚠️ 产物路径比 Scheduler **多一段平台号**；发布形态跟随管理端（full 自包含 / slim 框架依赖） |
+| NotifyBroker | `net10.0-windows10.0.26100.0` | **`PublishAot=false`**（发通知走 WinRT 投影，N1/D83）；与 Guard 同 TFM、同"产物路径多一段平台号"、同"发布形态跟随管理端"；只引用 Core，四件套同步（`App.csproj` CopyNotifyBrokerBuildOutput） |
 
 ---
 
@@ -73,7 +76,7 @@ dotnet build DelayStart.slnx -c Release
 dotnet run --project tests/DelayStart.Core.Tests -c Release     # 规范测试命令
 ```
 
-**验收口径**：Release **0 警告 0 错误** + 全部单元测试绿（当前 450 个）。
+**验收口径**：Release **0 警告 0 错误** + 全部单元测试绿（当前 481 个）。
 
 > 🔴 **构建要求零警告**（`TreatWarningsAsErrors=true`）—— 出现警告即编译失败，这是故意的。
 >
@@ -117,7 +120,7 @@ dotnet run --project tests/DelayStart.Core.Tests -c Release     # 规范测试�
 
 ## 五、发布与打包
 
-**`scripts/publish.ps1`** —— 开发期链路：发布调度端 / 中转器（NativeAOT）+ 构建管理端与守卫（build，非 AOT），并把**三个同级 exe 全部同步进管理端 `bin`**。🔴 产物缺件时**返回非零退出码**（D61 教训：曾经缺件只打黄字然后照样报成功，让人以为可以直接拿 `bin` 跑）。核对清单为 **8 条**（各自 bin 里的 3 个 + 同步进 App bin 的 5 个文件）。
+**`scripts/publish.ps1`** —— 开发期链路：发布调度端 / 中转器（NativeAOT）+ 构建管理端、守卫与通知中转器（build，非 AOT），并把**全部同级 exe 四件套同步进管理端 `bin`**。🔴 产物缺件时**返回非零退出码**（D61 教训：曾经缺件只打黄字然后照样报成功，让人以为可以直接拿 `bin` 跑）。核对清单为 **14 条**（各自 bin 里的 4 个 + 同步进 App bin 的 10 个文件）。
 
 > 🔴 **三个同级 exe 的同步机制不同，顺序不能调**：调度端 / 中转器由 App 的 `CopySchedulerPublishOutput` 从 **AOT publish 目录**拉单文件；守卫由 `CopyGuardBuildOutput` 从**守卫自己的 build 目录**拉**四个文件**（`exe` + `dll` + `runtimeconfig.json` + `deps.json`）—— 守卫非 AOT，只搬 exe 会得到一个"找不到运行时"的空壳。两个钩子都是 `AfterTargets="Build"` 的**拉**式钩子，所以 `publish.ps1` 里 `dotnet build Guard` 必须排在 `build App` 之前（2026-09-22 修：原先排在后面，导致 App bin 里始终没有 `DelayStart.Guard.exe`，守卫计划任务是死链）。
 
@@ -145,7 +148,7 @@ dotnet run --project tests/DelayStart.Core.Tests -c Release     # 规范测试�
 
 - [ ] 软禁用前后**注册表导出对比零变化**（`StartupApproved` 标记写入属设计内正常写入）
 - [ ] 接管 → 重启 → 各条目按预期时间启动
-- [ ] 四条收尾路径：常规完成不弹面板 / 面板已显示必留 / 菜单跳过立即退 / 面板跳过不退出
+- [ ] 四条收尾路径（N2–N5，2026-09-22 批复后）：完成·面板已显示 → 切完成态+倒计时+**发通知**；完成·面板未显示 → **发通知后同拍退出**（不再自动弹面板）；菜单跳过 → 发通知后立即退；面板跳过 → 完成态+倒计时+发通知、不退出
 - [ ] 卸载可逆：还原失败必须**中止卸载**，不能照删文件
 - [ ] DPI 三档（100 / 150 / 200%）与明暗主题
 - [ ] 安装 / 升级 / 卸载全链路，含 slim 覆盖 full 的混装回归（往安装目录丢 `hostfxr.dll` → 装 → 断言被清）
@@ -157,6 +160,8 @@ dotnet run --project tests/DelayStart.Core.Tests -c Release     # 规范测试�
 - [ ] **防双启动**：先手动启动目标应用 → 触发调度 → 该条目 `Skipped`、原因 = 进程已存在；关闭目标应用后再触发 → 正常启动。另验 `.ps1` 条目照常启动（跳过检查）
 - [ ] **提权模型（D82，本轮改动重点）**：① 双击快捷方式 / exe → **仍弹一次 UAC**（次数与改动前一致，只是时机从"启动瞬间"挪到"入口判定之后"），且 exe / 快捷方式**不再显示 UAC 盾牌**；② 管理端**已开着**时点系统通知 → **不弹 UAC**、窗口前置、切到对应页且**数据已刷新**（不需要手动刷新）；③ `manager.log` 里能看到完整唤起链（写入请求 → "已有管理端实例：…本进程不申请提权（零 UAC）"）。⚠️ 若日志里出现"实例存活探测未得出结论（AccessDenied）"，说明"中完整性进程按只读权限打开高完整性事件"这个前提不成立（见 `pitfalls.md` 十二）—— 表现**不是**坏掉，而是"仍多弹一次 UAC、落点正常"。
 - [ ] **CLI 提权（D82）**：从**非提权** PowerShell 跑 `DelayStart.exe --restore-all --result-file <临时文件>` → 弹一次 UAC、退出码写进结果文件、**命令输出落在新开的控制台窗口**（已知代价，见 `pitfalls.md` 十二）；`--scan` 同理。另验带上 `--elevation-attempted` 时不会无限弹窗（UAC 被拒只退出一次）。
+- [ ] **面板「钉」交互（N8–N10，2026-09-22 批复）**：默认失焦自动关闭（启动中仅收起可再开、完成态收起后进程退出/托盘消失）；点「钉」高亮 + 置顶于其他窗口之上 + 失焦不关；再点取消恢复；钉住时倒计时照走、归零退出；右上角无 ✕。
+- [ ] **调度完成系统通知（N1–N12，2026-09-22 批复）**：① 三档策略 —— `Never` 全程无通知（`scheduler.log` 有"跳过完成通知"）；默认 `FailuresOnly` 全成功无通知、制造失败后有通知；`Always` 每次完成都有通知；② 通知内容「启动完成：N 项成功 · M 项失败…」、失败名前 3 条；③ 点通知 → 管理端**运行日志**页（已开零 UAC / 未开一次 UAC，D82）；④ 通知中心连续多轮只保留最新一条 `schedule-done`，且不与守卫 `guard-change` 互相替换；⑤ `notifybroker.log` 有"已交给系统"，中转器缺失 / 拉起失败时 `scheduler.log` 有 Warn 且调度照常退出（N12）。
 
 ---
 

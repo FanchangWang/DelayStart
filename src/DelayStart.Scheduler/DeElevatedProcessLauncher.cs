@@ -163,6 +163,56 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     }
 
     /// <summary>
+    /// 降权拉起一个<b>跑完即退</b>的辅助进程（N1：通知中转器），fire-and-forget ——
+    /// 只回报"进程创建成功与否"，不等待退出、不读任何回执（N12：通知绝不阻塞调度收尾）。
+    /// </summary>
+    /// <param name="label">日志里用的动作名（如「完成通知」）。</param>
+    /// <param name="executablePath">辅助进程 exe 路径。</param>
+    /// <param name="arguments">命令行参数（通常是作业文件路径）。</param>
+    /// <returns>创建结果；失败时调用方只记日志。</returns>
+    public LaunchOutcome LaunchAuxiliary(string label, string executablePath, string arguments)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            throw new ArgumentException("标签不能为空。", nameof(label));
+        }
+
+        if (!File.Exists(executablePath))
+        {
+            return LaunchOutcome.Failure($"辅助进程不存在：{executablePath}");
+        }
+
+        EnsurePrivilege();
+
+        var primaryToken = AcquireShellPrimaryToken(label);
+        if (primaryToken == 0)
+        {
+            return LaunchOutcome.Failure("取不到外壳主令牌，无法降权拉起（原因见上方日志）。");
+        }
+
+        try
+        {
+            var outcome = CreateWithToken(
+                label,
+                primaryToken,
+                executablePath,
+                CommandLineService.Build(executablePath, arguments),
+                string.Empty);
+
+            if (outcome.Created)
+            {
+                _log.Info($"『{label}』已降权拉起（PID {outcome.ProcessId}）。");
+            }
+
+            return outcome;
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(primaryToken);
+        }
+    }
+
+    /// <summary>
     /// UWP 判定（D41，2026-09-20 修复）。
     /// 🔴 <b>不能只看路径前缀</b>：UWP 条目的 <see cref="DelayedItem.Path"/> 存的是<b>裸 AUMID</b>
     /// （<c>&lt;PackageFamilyName&gt;!&lt;TaskId&gt;</c>），只有交给外壳前才补
@@ -257,7 +307,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             $"『{item.Name}』目标清单声明 uiAccess=\"true\"，改走中转器降权链"
             + "（A→B→ShellExecute；目标将由系统按 uiAccess 策略以高完整性启动，与手动双击一致）。");
 
-        var primaryToken = AcquireShellPrimaryToken(item);
+        var primaryToken = AcquireShellPrimaryToken(item.Name);
         if (primaryToken == 0)
         {
             TryDeleteDirectory(brokerTempDir);
@@ -267,7 +317,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         try
         {
             var brokerOutcome = CreateWithToken(
-                item,
+                item.Name,
                 primaryToken,
                 broker,
                 CommandLineService.Build(broker, $"\"{jobFile}\""),
@@ -453,7 +503,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             return LaunchOutcome.Failure($"目标文件不存在：{item.Path}");
         }
 
-        var primaryToken = AcquireShellPrimaryToken(item);
+        var primaryToken = AcquireShellPrimaryToken(item.Name);
         if (primaryToken == 0)
         {
             return LaunchOutcome.Failure("取不到外壳主令牌，无法降权启动（原因见上方日志）。");
@@ -482,7 +532,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             }
 
             var outcome = CreateWithToken(
-                item,
+                item.Name,
                 primaryToken,
                 application,
                 commandLine,
@@ -535,7 +585,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
 
         EnsurePrivilege();
 
-        var primaryToken = AcquireShellPrimaryToken(item);
+        var primaryToken = AcquireShellPrimaryToken(item.Name);
         if (primaryToken == 0)
         {
             return LaunchOutcome.Failure("取不到外壳主令牌，无法委托启动（原因见上方日志）。");
@@ -544,7 +594,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         try
         {
             var outcome = CreateWithToken(
-                item,
+                item.Name,
                 primaryToken,
                 explorer,
                 CommandLineService.Build(explorer, $"\"{target}\""),
@@ -593,20 +643,21 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// <summary>
     /// 取外壳（explorer）进程的<b>主令牌</b>。任一环失败返回 0，且已记日志。
     /// </summary>
-    private nint AcquireShellPrimaryToken(DelayedItem item)
+    /// <param name="label">日志里用的主体名（条目名或动作名）。</param>
+    private nint AcquireShellPrimaryToken(string label)
     {
         var shellWindow = WaitForShellWindow();
         if (shellWindow == 0)
         {
             var message = $"等待交互式桌面就绪超时（{(int)ShellWaitTimeout.TotalSeconds} 秒内 GetShellWindow 一直返回 0）"
                 + " —— 按 D20 不提权回退。";
-            _log.Warn($"『{item.Name}』{message}");
+            _log.Warn($"『{label}』{message}");
             return 0;
         }
 
         if (NativeMethods.GetWindowThreadProcessId(shellWindow, out var shellProcessId) == 0)
         {
-            Fail("GetWindowThreadProcessId", item);
+            Fail("GetWindowThreadProcessId", label);
             return 0;
         }
 
@@ -615,7 +666,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
 
         if (shellProcess == 0)
         {
-            Fail("OpenProcess", item);
+            Fail("OpenProcess", label);
             return 0;
         }
 
@@ -625,7 +676,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             if (!NativeMethods.OpenProcessToken(
                     shellProcess, NativeMethods.TokenDuplicate, out var shellToken))
             {
-                Fail("OpenProcessToken", item);
+                Fail("OpenProcessToken", label);
                 return 0;
             }
 
@@ -646,7 +697,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
                         NativeMethods.TokenPrimaryType,
                         out var primaryToken))
                 {
-                    Fail("DuplicateTokenEx", item);
+                    Fail("DuplicateTokenEx", label);
                     return 0;
                 }
 
@@ -664,8 +715,13 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     }
 
     /// <summary>真正创建进程的一步。成功与否的日志由调用方写（委托与直启措辞不同）。</summary>
+    /// <param name="label">日志里用的主体名（条目名或动作名）。</param>
+    /// <param name="primaryToken">外壳进程的主令牌。</param>
+    /// <param name="applicationName">要启动的应用路径。</param>
+    /// <param name="commandLine">完整命令行（含应用路径与参数）。</param>
+    /// <param name="workingDirectory">工作目录；空串表示不指定。</param>
     private LaunchOutcome CreateWithToken(
-        DelayedItem item,
+        string label,
         nint primaryToken,
         string applicationName,
         string commandLine,
@@ -675,7 +731,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         {
             var message = $"命令行 {commandLine.Length} 字符，超过 CreateProcessWithTokenW 的 "
                 + $"{MaxCommandLineLength + 1} 字符上限 —— 按 D5 判失败，不截断、不提权回退。";
-            _log.Warn($"『{item.Name}』{message}");
+            _log.Warn($"『{label}』{message}");
             return LaunchOutcome.Failure(message);
         }
 
@@ -712,7 +768,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
                             + "或清单声明 uiAccess=true 且预检未能识别）";
                     }
 
-                    _log.Warn($"『{item.Name}』降权启动失败：{message}（按 D20 不提权回退）。");
+                    _log.Warn($"『{label}』降权启动失败：{message}（按 D20 不提权回退）。");
                     return LaunchOutcome.Failure(message);
                 }
 
@@ -822,12 +878,13 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
     }
 
-    private LaunchOutcome Fail(string api, DelayedItem item)
+    /// <summary>取外壳令牌链上某个 API 失败的统一日志与返回。</summary>
+    private LaunchOutcome Fail(string api, string label)
     {
         var error = Marshal.GetLastWin32Error();
         var message = $"{api} 失败，Win32Error={error}";
 
-        _log.Warn($"『{item.Name}』降权启动失败：{message}（按 D20 不提权回退）。");
+        _log.Warn($"『{label}』降权启动失败：{message}（按 D20 不提权回退）。");
         return LaunchOutcome.Failure(message);
     }
 

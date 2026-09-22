@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+
+    <!--
+      ★ TFM 必须带平台版本（N1，2026-09-22 用户批复）：
+        通知中转器要发 WinRT 系统通知（Windows.UI.Notifications），WinRT 投影
+        （Microsoft.Windows.SDK.NET.dll / WinRT.Runtime.dll）只在带平台版本的 TFM 下才可用。
+        与守卫（D79）同一形态，输出目录也同为 net10.0-windows10.0.26100.0 ——
+        scripts/publish.ps1 / installer/build-installer.ps1 / App.csproj 的产物路径已按此对齐。
+
+      ★ 目标架构可由命令行覆盖；默认 win-x64 便于本地开发。
+    -->
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+
+    <RootNamespace>DelayStart.NotifyBroker</RootNamespace>
+    <AssemblyName>DelayStart.NotifyBroker</AssemblyName>
+
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+
+    <!--
+      ★ WinExe：由调度端降权拉起，登录/启动瞬间不能闪控制台黑框。
+
+      🔴 **本工程绝不能开 PublishAot**（N1 批复 🅐：复用守卫的出货形态）。
+        发通知走 WinRT 投影，AOT 下没有投影运行时；形态跟随管理端
+        （full → 自包含 / slim → 框架依赖），由 scripts/publish.ps1 与
+        installer/build-installer.ps1 传参控制，csproj 不写死。
+    -->
+    <PublishAot>false</PublishAot>
+
+    <!--
+      ★ 刻意**不提供 app.manifest**（与守卫 D79 同理）：
+        中转器的唯一合法入口是调度端的降权链（CreateProcessWithTokenW，中完整性）。
+        没有清单 = 没有"双击提权"面，也没有 SxS 解析 emoji 的坑（docs/pitfalls.md 十一）。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 依赖方向 NotifyBroker → Core，单向；作业契约（NotifyToastJob）与
+         JSON 源生成上下文（BrokerJsonContext）都在 Core，两端共享 schema。
+         🔴 不引用 Management：AUMID 由作业 JSON 携带（NotifyToastJob.DefaultAumid）。 -->
+    <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+  </ItemGroup>
+
+</Project>

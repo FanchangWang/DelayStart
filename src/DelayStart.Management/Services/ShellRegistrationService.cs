@@ -36,7 +36,11 @@ namespace DelayStart.Management.Services;
 public sealed class ShellRegistrationService
 {
     /// <summary>本产品的应用用户模型 ID（AUMID）。跨进程契约，不要改。</summary>
-    public const string AppUserModelId = "DelayStart";
+    /// <remarks>
+    /// 值收拢在 <c>DelayStart.Core.Launch.NotifyToastJob.DefaultAumid</c>（Core）：
+    /// 调度端与通知中转器不能引用 Management，但又必须写同一个 AUMID。
+    /// </remarks>
+    public const string AppUserModelId = DelayStart.Core.Launch.NotifyToastJob.DefaultAumid;
 
     /// <summary>开始菜单快捷方式文件名（与安装器 <c>[Icons]</c> 同名同路径）。</summary>
     public const string ShortcutFileName = "DelayStart.lnk";

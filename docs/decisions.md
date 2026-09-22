@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D82）
+# DelayStart — 决策记录（D1–D83）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -536,6 +536,30 @@
 - 🔴 **`app.manifest` 是原样交给 `mt.exe` 的 XML**，注释里同样禁止出现**连续两个减号**（XML 规范）与 emoji / 非 BMP 字符。改了注释却报 `c1010070 Failed to load and parse the manifest`、且**不指出位置**，就是这两个原因之一（本次真踩过，见 `pitfalls.md` 十）。
 - 新增跨进程令牌 `runs-log`（`UiNavigationTarget.RunsLog`）：`--goto-log` 的意图现在也要经文件通道表达（旧实现是"清空请求 + 发一个不带载荷的事件"）。新增令牌对旧读取方是安全的 —— 不认识的令牌只前置窗口、不切页。
 
+### D83 调度完成通知与进度面板分离 + 通知中转器 `NotifyBroker`（N1–N12，2026-09-22 用户批复 D1–D5 全选 A）
+
+需求稿 `docs/notify-broker-plan.md` 已退役（2026-09-22）：N1–N12 锚点定义移交 `design.md` FR-14.1，行为规格并入 FR-14 / 本条 / `development.md`。
+
+**结论**：
+- **通知与面板是两个不相干的功能**：调度全部结束后**无论面板是否显示**都按「通知策略」（`NotifyMode` 三档，语义纠正为"发不发系统通知"）发通知（N2/N5）；进度面板**仅手动弹出**（托盘左键 / 菜单），收尾不再自动弹（N4）；面板未显示时发完通知同拍退出（N6）。
+- **通知走中转器 `DelayStart.NotifyBroker.exe`**（非 AOT + WinRT 投影，TFM 带平台版本，形态跟随管理端、与守卫同款四件套同步）：调度端写作业 JSON 后经**现有降权链**（外壳令牌 + CPWT）以中完整性拉起，fire-and-forget；broker `Show()` 后驻留 ~500ms 即退（N1）。`Tag=schedule-done` 与守卫 `guard-change` 互不替换；点击落 `delaystart://runs-log`（N11，D82）。
+- **通知决策独立成纯函数 `NotifyDecision`**，`CompletionPolicy` 输入移除 `NotifyMode` / `FailedCount`，判定表退化为 `QuitImmediately` → 面板发起 → 面板可见 → 其余（D71–D73 基线表被本需求取代，编号保留）。
+- **面板交互收敛**（N8–N10）：右上角去 ✕、去旧"置顶"，改单枚**钉** —— 默认失焦自动关闭（启动中仅收起；完成态收起即退出，D3=A），选中则高亮 + `HWND_TOPMOST` + 失焦不关；倒计时逻辑不变（钉住不暂停）。
+- **D2=A**：菜单「跳过剩余任务并退出」也按策略发通知；**D4=A**：空计划无特判照策略发；**D5=A**：D18 旧气泡退役（`TrayIconHost.ShowBalloon` 删除）。
+
+**为什么不是别的**：
+- **不让调度端自己发通知** —— 双重死结：调度端提权运行，Win10/11 抑制提权进程的系统通知；且调度端 AOT 无 WinRT 投影（D24/D28）。二者决定了"谁来发"必须是中完整性的非 AOT 进程。
+- **中转器不走 AOT + 手写 WinRT COM 激活** —— 体积省一点，维护风险极高；与守卫（D79/D75）同走"非 AOT + 投影 + 形态跟随管理端"。
+- **不复用 `LaunchBroker` 加 `--notify` 模式** —— LaunchBroker 是稳定 AOT 组件且 TFM 无平台版本（发不了 WinRT 通知），为发通知改造它等于把降权链拖下水。
+- **不保留"按策略自动弹面板"** —— 那正是"通知与面板混为一谈"的根源（语义错位：设置里叫通知策略、实际管面板）。
+
+**代价与约束**：
+- `NotifyMode` 枚举与 `config.json` **零迁移**（只换语义）；下拉文案换为「有失败时通知 / 总是通知 / 从不通知」（N3）。
+- 通知是 best-effort（N12）：broker 缺失 / 拉起失败 / AUMID 未登记一律只记日志（`scheduler.log` / `notifybroker.log`），绝不阻塞、绝不拖垮调度退出。
+- 作业文件走 `%TEMP%\DelayStart\notify\<Guid>\`（无标签对象按 Medium 处理，High 创建不挡 Medium 读写）；fire-and-forget 意味着调度端不删作业目录，由下一轮发通知时的陈旧清理（>1h）兜底回收。
+- 中转器**绝不自行注册 AUMID / 快捷方式**（零 COM、零 shell 写入）；管理端从未启动过 → 通知发不出（仅日志），可接受。
+- `CompletionPolicyTests` 判定表是**需求变更**而非回归破坏；D71–D73 编号保留作历史锚点。
+
 ---
 
 ## 附表：R1–R13 技术风险与去向（已全部闭环）
@@ -556,7 +580,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D82 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D83 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

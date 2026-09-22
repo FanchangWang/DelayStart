@@ -47,7 +47,7 @@ internal sealed record PanelCurrentRow(RunItemState State, string Name, string D
 /// <param name="OpenManager">「打开 DelayStart」按钮 / 菜单项。</param>
 /// <param name="LaunchRemainingNow">启动中主按钮「立即启动剩余 N 项」。</param>
 /// <param name="SkipRemaining">启动中「跳过剩余任务」（面板入口：跳过后留在面板看结果，不退出）。</param>
-/// <param name="Quit">完成态关闭面板 / 菜单「退出」：结束调度端进程（托盘一并消失）。</param>
+/// <param name="Quit">完成态收尾出口（倒计时归零 / 失焦关闭，N9-D3）与菜单「退出」：结束调度端进程（托盘一并消失）。</param>
 internal sealed record PanelActions(
     Action OpenRunLog,
     Action OpenManager,
@@ -60,13 +60,15 @@ internal sealed record PanelActions(
 /// </summary>
 /// <remarks>
 /// <para>
-/// UI v2（2026-09-21 批复，原型见 <c>demo/ui-v2.html</c>）：
+/// N8–N10（2026-09-22 批复，<c>design.md</c> FR-14.1，取代 UI v2 的"置顶 + ✕"）：
 /// </para>
 /// <list type="bullet">
-/// <item>右上角只留两枚图标 —— <b>置顶</b>（默认不置顶，点击后 <c>HWND_TOPMOST</c>）与 <b>关闭</b>；</item>
-/// <item>启动过程中 <b>不自动关闭</b>（已去掉原先失焦即关），只认右上角 ✕；</item>
-/// <item>完成后倒计时自动关闭（全成功 10 秒 / 有失败 60 秒），<b>鼠标移入暂停</b>、移出继续且不重置；</item>
-/// <item>完成态关闭面板（倒计时归零或手动 ✕）= 退出调度器整个应用，托盘图标随之移除。</item>
+/// <item>右上角只留一枚 <b>钉</b>（语义重定义）：<b>未选中（默认）</b> = 失焦自动关闭 ——
+/// 启动中仅收起（可随时从托盘再打开），完成态收起后进程退出（D3 批复 A）；<b>选中</b> =
+/// 按钮高亮 + <c>HWND_TOPMOST</c>，失焦不再自动关闭，再次点击取消并立即退出置顶；</item>
+/// <item>完成倒计时逻辑全部保持不变：全成功 10 秒 / 有失败 60 秒，鼠标移入暂停、
+/// 移出继续且不重置，归零退出 —— 钉住<b>不</b>暂停倒计时；</item>
+/// <item>面板<b>仅手动弹出</b>（托盘左键 / 菜单），收尾不再自动弹（N4）；通知归通知中转器（N1）。</item>
 /// </list>
 /// <para>
 /// 自绘走 GDI：只有 FillRect / RoundRect / Ellipse / LineTo / DrawText，没有模糊与亚克力
@@ -182,7 +184,6 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
     private int _autoCloseRemaining;
 
     private NativeMethods.Rect _pinRect;
-    private NativeMethods.Rect _closeRect;
     private NativeMethods.Rect _primaryRect;
     private NativeMethods.Rect _secondaryRect;
     private NativeMethods.Rect _skipRect;
@@ -387,7 +388,20 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
 
                 return 0;
 
-            // 🔴 UI v2：WM_ACTIVATE 不再触发隐藏 —— 启动过程中面板不自动关闭，只认右上角 ✕。
+            // N9（2026-09-22 批复）：未钉住时失焦自动关闭 —— 启动中仅收起（可从托盘再开），
+            // 完成态收起后进程退出（D3 批复 A：通知已发，进程无存在意义）。钉住则忽略本消息。
+            case NativeMethods.WmActivate:
+                if ((wParam & 0xFFFF) == 0 /* WA_INACTIVE */ && !_pinned && IsWindowVisible(hwnd))
+                {
+                    Hide();
+                    if (_snapshotProvider().IsFinished)
+                    {
+                        _actions.Quit();
+                    }
+                }
+
+                return 0;
+
             default:
                 return 0;
         }
@@ -465,18 +479,6 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         var y = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
         var snapshot = _snapshotProvider();
 
-        if (HitTest(_closeRect, x, y))
-        {
-            // 完成态关闭面板 = 退出调度器（托盘一并消失）；启动中只收起。
-            Hide();
-            if (snapshot.IsFinished)
-            {
-                _actions.Quit();
-            }
-
-            return;
-        }
-
         if (HitTest(_pinRect, x, y))
         {
             _pinned = !_pinned;
@@ -520,8 +522,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         var x = (short)(lParam.ToInt64() & 0xFFFF);
         var y = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
 
-        var target = HitTest(_closeRect, x, y) ? HitClose
-            : HitTest(_pinRect, x, y) ? HitPin
+        var target = HitTest(_pinRect, x, y) ? HitPin
             : HitTest(_primaryRect, x, y) ? HitPrimary
             : HitTest(_secondaryRect, x, y) ? HitSecondary
             : HitTest(_skipRect, x, y) ? HitSkip
@@ -673,18 +674,10 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         FillRounded(hdc, chipRect, 9, palette.Card, palette.Card);
         DrawText(hdc, _fontSmall, chipColor, chipText, chipRect.Left, chipRect.Top, chipRect.Right, chipRect.Bottom, DtCenter | DtVcenter | DtSingleline);
 
-        // 右上角两枚图标：置顶 + 关闭
-        var closeLeft = right - IconButtonSize;
-        var pinLeft = closeLeft - IconButtonSize - 4;
+        // 右上角唯一图标：钉（N8 —— 旧"置顶 + 关闭 ✕"已由钉 + 失焦关闭接替）
+        var pinLeft = right - IconButtonSize;
         var iconTop = centerY - (IconButtonSize / 2);
 
-        _closeRect = new NativeMethods.Rect
-        {
-            Left = closeLeft,
-            Top = iconTop,
-            Right = closeLeft + IconButtonSize,
-            Bottom = iconTop + IconButtonSize,
-        };
         _pinRect = new NativeMethods.Rect
         {
             Left = pinLeft,
@@ -693,16 +686,15 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
             Bottom = iconTop + IconButtonSize,
         };
 
-        DrawIconButton(hdc, _pinRect, palette, _hoverTarget == HitPin, pinned: true);
-        DrawIconButton(hdc, _closeRect, palette, _hoverTarget == HitClose, pinned: false);
+        DrawIconButton(hdc, _pinRect, palette, _hoverTarget == HitPin);
 
         y = top + HeaderHeight;
     }
 
-    /// <summary>图标按钮底 + 图形（图钉 / ✕ 都是 GDI 线条，不依赖 MDL2 字体）。</summary>
-    private void DrawIconButton(nint hdc, NativeMethods.Rect rect, PanelPalette palette, bool hover, bool pinned)
+    /// <summary>图标按钮底 + 图钉图形（GDI 线条，不依赖 MDL2 字体）。</summary>
+    private void DrawIconButton(nint hdc, NativeMethods.Rect rect, PanelPalette palette, bool hover)
     {
-        var active = pinned && _pinned;
+        var active = _pinned;
         var background = hover || active ? palette.AccentSoft : palette.Background;
         FillRounded(hdc, rect, 6, background, background);
 
@@ -710,18 +702,8 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         var centerX = rect.Left + (IconButtonSize / 2);
         var centerY = rect.Top + (IconButtonSize / 2);
 
-        if (pinned)
-        {
-            // 图钉：针杆 + 头部圆环
-            DrawPin(hdc, centerX, centerY, stroke);
-        }
-        else
-        {
-            // ✕：两条斜线（hover 时转红）
-            var cross = hover ? palette.Red : stroke;
-            DrawLine(hdc, centerX - 5, centerY - 5, centerX + 5, centerY + 5, cross);
-            DrawLine(hdc, centerX + 5, centerY - 5, centerX - 5, centerY + 5, cross);
-        }
+        // 图钉：针杆 + 头部圆环
+        DrawPin(hdc, centerX, centerY, stroke);
     }
 
     private static void DrawPin(nint hdc, int centerX, int centerY, uint color)

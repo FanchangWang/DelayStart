@@ -56,6 +56,7 @@ internal sealed partial class JsonContext : JsonSerializerContext
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(BrokerLaunchJob))]
 [JsonSerializable(typeof(BrokerLaunchResult))]
+[JsonSerializable(typeof(NotifyToastJob))]
 public sealed partial class BrokerJsonContext : JsonSerializerContext
 {
 }

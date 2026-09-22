@@ -5,10 +5,12 @@
 #         DelayStart.Scheduler.exe    NativeAOT 单文件发布
 #         DelayStart.LaunchBroker.exe NativeAOT 单文件发布（uiAccess 目标的降权中转器，D70）
 #         DelayStart.Guard.exe        守卫，build（非 NativeAOT，形态随管理端，D75）
-#       同步进 App bin 的三个同级 exe 各有来源（都在 App.csproj 里，是"拉"式钩子）：
-#         调度端 / 中转器 → CopySchedulerPublishOutput（读 AOT publish 的单文件）
+#         DelayStart.NotifyBroker.exe 通知中转器，build（非 NativeAOT，形态随管理端，N1）
+#       同步进 App bin 的同级 exe 各有来源（都在 App.csproj 里，是"拉"式钩子）：
+#         调度端 / 中转器(LaunchBroker) → CopySchedulerPublishOutput（读 AOT publish 的单文件）
 #         守卫           → CopyGuardBuildOutput（读 build 输出的四个文件：exe+dll+runtimeconfig+deps）
-#       🔴 因此**守卫必须先于 App 构建**，否则钩子只能打一条 high 提示 —— 顺序不要随意调整。
+#         通知中转器     → CopyNotifyBrokerBuildOutput（同守卫的四件套）
+#       🔴 因此**守卫与通知中转器必须先于 App 构建**，否则钩子只能打一条 high 提示 —— 顺序不要随意调整。
 #       正式安装包走 installer\build-installer.ps1 —— 它分别 publish 各工程，
 #       与本次开发期发布的职责不同，不要混用。
 #Requires -Version 7
@@ -36,13 +38,19 @@ if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] publish LaunchBroker 失败" -Foreg
 dotnet build src/DelayStart.Guard/DelayStart.Guard.csproj -c Release -r $Rid
 if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] build Guard 失败" -ForegroundColor Red; exit $LASTEXITCODE }
 
+# 通知中转器（N1）：与守卫同样 build（非 AOT，要 WinRT 投影）。⚠️ 同样必须排在 build App 之前 ——
+# App.csproj 的 CopyNotifyBrokerBuildOutput 钩子要从它 bin 里拉走 exe+dll+runtimeconfig+deps 四件套。
+dotnet build src/DelayStart.NotifyBroker/DelayStart.NotifyBroker.csproj -c Release -r $Rid
+if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] build NotifyBroker 失败" -ForegroundColor Red; exit $LASTEXITCODE }
+
 dotnet build src/DelayStart.App/DelayStart.App.csproj -c Release -r $Rid
 if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] build App（同步钩子）失败" -ForegroundColor Red; exit $LASTEXITCODE }
 
 # TFM 输出目录名。注意：这是各项目的 **TargetFramework 目录名**，
 # 不是 Windows SDK 安装路径 —— 不要把它当环境问题去治。
-# 🔴 守卫是**第三个** TFM：它要发 WinRT 系统通知，必须带平台版本（D79），
-#    与调度端 / 中转器的纯 net10.0-windows 不同。照调度端的路径找守卫必然 MISSING。
+# 🔴 守卫与通知中转器是**第三/四个** TFM：它们要发 WinRT 系统通知，必须带平台版本
+#    （D79 / N1），与调度端 / LaunchBroker 的纯 net10.0-windows 不同。
+#    照调度端的路径找它们必然 MISSING。
 $SchedulerTfm = 'net10.0-windows'
 $GuardTfm = 'net10.0-windows10.0.26100.0'
 $AppTfm = 'net10.0-windows10.0.26100.0'
@@ -57,12 +65,17 @@ foreach ($f in @(
     "src\DelayStart.Scheduler\bin\Release\$SchedulerTfm\$Rid\publish\DelayStart.Scheduler.exe",
     "src\DelayStart.LaunchBroker\bin\Release\$SchedulerTfm\$Rid\publish\DelayStart.LaunchBroker.exe",
     "src\DelayStart.Guard\bin\Release\$GuardTfm\$Rid\DelayStart.Guard.exe",
+    "src\DelayStart.NotifyBroker\bin\Release\$GuardTfm\$Rid\DelayStart.NotifyBroker.exe",
     "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Scheduler.exe",
     "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.LaunchBroker.exe",
     "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.exe",
     "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.dll",
     "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.runtimeconfig.json",
-    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.deps.json"
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.deps.json",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.NotifyBroker.exe",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.NotifyBroker.dll",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.NotifyBroker.runtimeconfig.json",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.NotifyBroker.deps.json"
 )) {
     $i = Get-Item $f -ErrorAction SilentlyContinue
     if ($i) { Write-Host ("{0}  {1:N2} MB  {2}" -f $i.Name, ($i.Length/1MB), $i.LastWriteTime) }

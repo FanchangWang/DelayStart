@@ -185,6 +185,11 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 ;    里 0xc000027b 秒崩。这些文件原本不进 publish，由 App.csproj 的
 ;    CopyWinUIResourcesToPublishDir 补上；若这里装出来的程序崩溃，先查那 11 个文件在不在。
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 守卫 DelayStart.Guard.exe（D75）：与管理端同落点（{app} 根目录）、同形态，且
+; build-installer.ps1 把它的 publish 输出 **-o 进了管理端 publish 目录**，
+; 因此由上面那条通配符一并部署 —— 这里刻意不重复写一行（重复只会让两处指令各自漂移）。
+; 🔴 若改动 build-installer.ps1 里守卫的 -o 目标，这条覆盖关系就断了，记得同步这里。
+;    守卫**不走 AOT**（它经 Management 调 COM，见 docs/pitfalls.md 五 R12），所以不放在 {#SchedulerDir} 那两条里。
 ; 调度端：AOT 单文件，放在安装根（调度任务按此路径注册）。
 ; ⚠️ 调度端两种形态都用 AOT —— 它不依赖 .NET 运行时，精简版用户因此只需补两个运行时而不是三个。
 Source: "{#SchedulerDir}\{#SchedulerExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -203,10 +208,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 ; 首启勾选项：装完直接打开管理端（调度任务由程序首启幂等注册，不归安装器管）。
-; 🔴 必须带 shellexec：DelayStart.exe 声明了 requireAdministrator，而安装器是 lowest 权限，
-;    默认的 CreateProcess 路径会以 **740（ERROR_ELEVATION_REQUIRED）** 失败
-;    —— 表现为"勾选启动、点确定后弹报错框，程序根本没起来"。
-;    shellexec 让 Windows 外壳按 manifest 弹 UAC，用户同意后再以管理员身份启动。
+; 🔴 必须带 shellexec：安装器是 lowest 权限，而管理端需要一个**用户可见的**启动路径
+;    （UAC 弹窗要挂在用户点的那一下上）。D82 起管理端清单是 asInvoker，提权由它自己在
+;    入口申请（`Program.Main` 的提权门），所以"740（ERROR_ELEVATION_REQUIRED）"
+;    这个老问题已经不存在了 —— 但 shellexec 保留：它让启动经过外壳，
+;    与双击快捷方式走的是同一条路，行为一致、好排查。（旧注释说"按 manifest 弹 UAC"，
+;    D82 后 UAC 是程序自己发的，不由外壳代劳。）
 ; 🔴 D62 的 Check：精简版在缺运行时的机器上**直接隐藏这一项**。否则用户点了"启动"，
 ;    得到的是 apphost 那句 "You must install or update .NET to run this application"
 ;    —— 一个没有任何上下文、也指不到安装器的报错框。改由 CurStepChanged 给可读说明。
@@ -664,12 +671,18 @@ end;
 //    --restore-all 失败说明还有条目没能还原成系统默认状态，此时删掉管理端
 //    用户就永远失去"移出延时"的入口了 —— 所以中止卸载，让用户先手动处理。
 //
-// 🔴 D61：**不能再用 Exec**。DelayStart.exe 的 manifest 是 requireAdministrator，
+// 🔴 D61：**不能再用 Exec**。DelayStart.exe 的 manifest 曾经是 requireAdministrator，
 //    而卸载器是 PrivilegesRequired=lowest，Exec（CreateProcess）会以 740
 //    （ERROR_ELEVATION_REQUIRED）失败 —— 还原动作根本不会发生，卸载却照常进行，
 //    这是 D22 明令禁止的"用户毫不知情地永久失去自启动"。
 //    改用 ShellExec('runas') 弹一次 UAC，代价是**拿不到退出码**；
 //    因此约定程序用 --result-file 把退出码写到文件里，这里回读。
+//
+// ⚠️ D82 之后 manifest 改成了 asInvoker（提权由程序入口自己申请），"740"这个成因
+//    已经消失，理论上这里也能退回 Exec + waituntilterminated 直接拿退出码。
+//    **但不改**：这段是 D61 真机验证过的路径，改了等于把风险塞进卸载流程
+//    （UAC 被拒、父子进程退出码转发两条分支都没在真机上跑过），而收益只是少一次
+//    文件往返。卸载路径的正确性远比它的优雅重要。
 function InitializeUninstall(): Boolean;
 var
   AppExe: String;
@@ -769,6 +782,18 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    // ── 协议处理器（D79）：只清理，不注册 ─────────────────────────────────
+    // 注册发生在运行时 —— 管理端每次启动、守卫发通知前都会幂等写一遍
+    // （ShellRegistrationService，写 HKCU）。安装器不参与注册（程序可能从不启动，
+    // 而注册需要知道 exe 的最终路径；这里只负责**卸载时清干净**）：
+    // 该键指向 {app}\{#AppExe}，卸载后留着就是一个指向已删除文件的 handler ——
+    // 用户点通知中心里的旧通知只会拿到一个系统报错框。
+    // ⚠️ 必须连子键一起删（shell\open\command 就在它下面），RegDeleteKey 只删空键。
+    // ⚠️ 时机放 usUninstall 而不是 usPostUninstall：用户若在确认页取消卸载，
+    //    本过程根本不会触发，键原封不动。
+    if RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\delaystart') then
+      Log('已删除协议处理器：HKCU\Software\Classes\delaystart');
+
     RoamingDir := ExpandConstant('{userappdata}\DelayStart');
     LocalDir := ExpandConstant('{localappdata}\DelayStart');
 

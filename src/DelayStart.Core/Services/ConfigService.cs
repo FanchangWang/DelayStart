@@ -315,6 +315,16 @@ public sealed class ConfigService : IAppConfigStore
         {
             settings.Theme = ThemePreference.FollowSystem;
         }
+
+        // 守卫档位（D74）：两道都要 —— 枚举未知值回默认模式；间隔不在白名单内回默认档位。
+        // 越界的间隔会直接变成计划任务的重复周期，而 0 或负数的周期让任务行为不可预测
+        //（可能瞬间反复触发），所以这里不能只做"看起来合理"的检查。
+        if (settings.GuardMode is not (GuardMode.Disabled or GuardMode.OnceAfterLogin or GuardMode.Periodic))
+        {
+            settings.GuardMode = GuardMode.OnceAfterLogin;
+        }
+
+        settings.GuardMinutes = GuardSchedulePlan.NormalizeMinutes(settings.GuardMinutes);
     }
 
     private static int[] NormalizePresets(int[]? presets)

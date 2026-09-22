@@ -7,6 +7,7 @@ using DelayStart.App.Services;
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
 using DelayStart.Management.Abstractions;
+using DelayStart.Management.Services;
 
 namespace DelayStart.App.ViewModels;
 
@@ -38,27 +39,40 @@ public partial class OverviewViewModel : ObservableObject
     private readonly IRunStateStore _runState;
     private readonly ISchedulerTaskRegistrar _registrar;
     private readonly ScanCacheService _scanCache;
+    private readonly GuardTaskBootstrap _guardBootstrap;
+
+    /// <summary>
+    /// 回灌守卫：<see cref="LoadAsync"/> 里把配置值写进 <see cref="GuardSelectedIndex"/> 时，
+    /// x:Bind 会把它推给 ComboBox 并触发一次 <c>SelectionChanged</c> —— 那次不是用户操作，
+    /// 不能落盘（否则每次进总览页都会把档位"重存"一遍，并在失败时弹一条假错误）。
+    /// 与设置页 <c>SettingsViewModel._loading</c> 同款守卫。
+    /// </summary>
+    private bool _loadingGuard;
 
     /// <summary>构造总览页 ViewModel。</summary>
     /// <param name="configStore">配置读取端。</param>
     /// <param name="runState">运行状态读取端。</param>
     /// <param name="registrar">调度计划任务注册端（检测 / 补建）。</param>
     /// <param name="scanCache">扫描缓存（来源计数，启动后已有）。</param>
+    /// <param name="guardBootstrap">守卫计划任务同步端（档位变更 / 启动检测，D74）。</param>
     public OverviewViewModel(
         IAppConfigStore configStore,
         IRunStateStore runState,
         ISchedulerTaskRegistrar registrar,
-        ScanCacheService scanCache)
+        ScanCacheService scanCache,
+        GuardTaskBootstrap guardBootstrap)
     {
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(runState);
         ArgumentNullException.ThrowIfNull(registrar);
         ArgumentNullException.ThrowIfNull(scanCache);
+        ArgumentNullException.ThrowIfNull(guardBootstrap);
 
         _configStore = configStore;
         _runState = runState;
         _registrar = registrar;
         _scanCache = scanCache;
+        _guardBootstrap = guardBootstrap;
     }
 
     // ── 延时启动（来源计数 chips）──────────────────────────────────────────
@@ -97,6 +111,42 @@ public partial class OverviewViewModel : ObservableObject
     /// <summary>检测 / 补建是否正在进行（防止连点）。</summary>
     [ObservableProperty]
     public partial bool IsWorkingOnTask { get; set; }
+
+    // ── 守卫设置（D74，2026-09-22 用户批复）───────────────────────────────
+
+    /// <summary>守卫档位下拉的选项文案，顺序与 <see cref="GuardPresets.Options"/> 一一对应。</summary>
+    /// <remarks>
+    /// 🔴 由 <see cref="GuardPresets.Options"/> 生成而不是手写常量数组：
+    /// 手写等于把"界面顺序"与"索引 ↔ 档位映射"分成两处维护，一旦漂移，
+    /// 用户选"每隔 30 分钟"实际存的却是别的档位 —— 这种错不会报任何错。
+    /// </remarks>
+    public IReadOnlyList<string> GuardOptions { get; } = [.. GuardPresets.Options.Select(LabelOf)];
+
+    /// <summary>当前选中的守卫档位索引（即 <see cref="GuardPresets.Options"/> 的下标）。</summary>
+    [ObservableProperty]
+    public partial int GuardSelectedIndex { get; set; }
+
+    /// <summary>守卫设置区的说明文字（随档位变化）。</summary>
+    [ObservableProperty]
+    public partial string GuardStatusDetail { get; set; } =
+        DescribeGuard(GuardMode.OnceAfterLogin, GuardPresets.DefaultMinutes);
+
+    /// <summary>守卫设置保存 / 任务同步失败时的红字提示；空字符串表示正常。</summary>
+    /// <remarks>
+    /// 🔴 必须挂 <see cref="NotifyPropertyChangedForAttribute"/> 指向 <see cref="GuardHasError"/>：
+    /// x:Bind 的 OneWay 要求路径上有通知源，get-only 派生属性不挂通知会让 XamlCompiler
+    /// 拒绝编译（与设置页 <c>HasError</c> 同款，见 DelayViewModel.HasError）。
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GuardHasError))]
+    public partial string GuardError { get; set; } = string.Empty;
+
+    /// <summary>是否显示失败提示（由 <see cref="GuardError"/> 通知驱动）。</summary>
+    public bool GuardHasError => GuardError.Length > 0;
+
+    /// <summary>守卫设置保存 / 任务同步是否正在进行（防重入）。</summary>
+    [ObservableProperty]
+    public partial bool IsWorkingOnGuard { get; set; }
 
     // ── 系统自启动项（扫描来源计数 chips）────────────────────────────────
 
@@ -151,6 +201,24 @@ public partial class OverviewViewModel : ObservableObject
         ScannedTask = snapshot.Entries.Count(static entry => entry.Source == StartupSource.ScheduledTask);
         ScannedUwp = snapshot.Entries.Count(static entry => entry.Source == StartupSource.Uwp);
 
+        // ── 守卫档位（D74）────────────────────────────────────────────────
+        // 回灌要置守卫：x:Bind 会把索引推给 ComboBox 并触发一次 SelectionChanged，
+        // 那次事件不是用户操作（另一半守卫在 OverviewPage._initialized）。
+        _loadingGuard = true;
+        try
+        {
+            GuardSelectedIndex = GuardPresets.ToIndex(config.Settings.GuardMode, config.Settings.GuardMinutes);
+            GuardStatusDetail = DescribeGuard(config.Settings.GuardMode, config.Settings.GuardMinutes);
+        }
+        finally
+        {
+            _loadingGuard = false;
+        }
+
+        // 每次进总览页同步一次守卫任务：与"调度任务缺失即补建"同款防丢失（D74 用户批复），
+        // 另有"关闭即删除"与"档位变更即时生效"两条（见 GuardTaskBootstrap 的类注释）。
+        SyncGuardTask();
+
         await EnsureTaskAsync().ConfigureAwait(true);
         await FillRecentRun().ConfigureAwait(true);
     }
@@ -198,6 +266,100 @@ public partial class OverviewViewModel : ObservableObject
             IsWorkingOnTask = false;
         }
     }
+
+    /// <summary>守卫档位被用户改变：立即落盘 + 按新档位同步计划任务（D74）。</summary>
+    /// <param name="index">下拉索引（由页面在 <c>SelectionChanged</c> 里传入）。</param>
+    public void SetGuardIndex(int index)
+    {
+        // 回灌期（LoadAsync）不接受"用户操作" —— 那只是 x:Bind 的推送回声。
+        if (_loadingGuard)
+        {
+            return;
+        }
+
+        SaveGuardAndSync(index);
+    }
+
+    /// <summary>失败提示旁的「重试」：用当前档位重新落盘并同步。</summary>
+    [RelayCommand]
+    private void RetryGuard() => SaveGuardAndSync(GuardSelectedIndex);
+
+    /// <summary>把档位写进配置并同步计划任务；任一步失败只把原因摆到界面上，不抛。</summary>
+    /// <param name="index">下拉索引。</param>
+    /// <remarks>
+    /// 顺序刻意是"先落盘、后同步任务"：<see cref="GuardTaskBootstrap.SyncWithSettings"/>
+    /// 自己会重新读配置，所以只有配置先写好，任务的档位才会跟界面一致。
+    /// </remarks>
+    private void SaveGuardAndSync(int index)
+    {
+        if (IsWorkingOnGuard)
+        {
+            return;
+        }
+
+        IsWorkingOnGuard = true;
+        try
+        {
+            var preset = GuardPresets.FromIndex(index);
+
+            try
+            {
+                var config = _configStore.Load();
+                config.Settings.GuardMode = preset.Mode;
+                config.Settings.GuardMinutes = preset.Minutes;
+                _configStore.Save(config);
+            }
+            catch (StartupOperationException ex)
+            {
+                GuardError = $"守卫设置保存失败：{ex.Message}";
+                return;
+            }
+
+            // 让 VM 与控件状态一致。同值时 ComboBox 不会再次触发 SelectionChanged，
+            // 因此不会回环（且上面已有 IsWorkingOnGuard 兜底）。
+            GuardSelectedIndex = index;
+            GuardStatusDetail = DescribeGuard(preset.Mode, preset.Minutes);
+
+            SyncGuardTask();
+        }
+        finally
+        {
+            IsWorkingOnGuard = false;
+        }
+    }
+
+    /// <summary>按当前配置同步守卫计划任务，并把失败原因摆到界面上。</summary>
+    /// <remarks>
+    /// <see cref="GuardTaskBootstrap.SyncWithSettings"/> 不抛异常，失败也以结果对象返回，
+    /// 所以这里不需要 try —— 那是它对外承诺的语义（跑在启动路径上）。
+    /// </remarks>
+    private void SyncGuardTask()
+    {
+        var outcome = _guardBootstrap.SyncWithSettings();
+        GuardError = outcome.Result is GuardTaskSyncResult.Failed ? outcome.Message : string.Empty;
+    }
+
+    /// <summary>下拉文案：与 <see cref="GuardPresets.Options"/> 的顺序严格对应。</summary>
+    private static string LabelOf(GuardPreset preset) => preset.Mode switch
+    {
+        GuardMode.Disabled => "不启动守卫",
+        GuardMode.OnceAfterLogin => $"登录后 {preset.Minutes} 分钟启动一次",
+        GuardMode.Periodic => $"每隔 {preset.Minutes} 分钟启动一次",
+        _ => string.Empty,
+    };
+
+    /// <summary>档位说明文字（下拉下方那一行）。</summary>
+    /// <remarks>
+    /// 只讲"这个档位什么时候跑"，不讲机制 —— 界面上的说明文字越短越好读，
+    /// "关闭意味着什么"用一句后果带过即可。
+    /// </remarks>
+    private static string DescribeGuard(GuardMode mode, int minutes) => mode switch
+    {
+        GuardMode.Disabled => "已关闭：不巡检，被写回的项不会自动禁用，也没有变动提示。",
+        GuardMode.OnceAfterLogin => $"登录后 {minutes} 分钟巡检一次，之后不再重复。",
+        GuardMode.Periodic => $"登录后 {minutes} 分钟开始巡检，之后每 {minutes} 分钟一次。",
+        _ => string.Empty,
+    };
 
     /// <summary>把「最近一次运行」灌进日志区（读文件放后台，行灌入留在 UI 线程）。</summary>
     /// <returns>异步任务。</returns>

@@ -147,6 +147,24 @@ public sealed partial class SettingsPage : Page
         }
     }
 
+    /// <summary>守卫通知策略被改变（D80）。⚠️ 初始化 / 回灌事件在这里被守卫挡掉（不落盘）。</summary>
+    /// <remarks>
+    /// 与「调度 · 通知策略」是两个独立的卡片、两个独立的枚举，各自落盘各自的字段 ——
+    /// 唯一相同的是这套"初始化期不落盘"的处理（<see cref="_initialized"/>）。
+    /// </remarks>
+    private void OnGuardNotifyModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        if (sender is ComboBox { SelectedIndex: var index })
+        {
+            ViewModel.SetGuardNotifyMode(index);
+        }
+    }
+
     /// <summary>重试次数被改变。⚠️ 初始化 / 回灌事件在这里被守卫挡掉（不落盘）。</summary>
     private void OnRetryChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {

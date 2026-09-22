@@ -15,7 +15,13 @@ namespace DelayStart.App.Views;
 /// <summary>
 /// 「自启动项」来源页（UI v2：四个来源共用本页，<c>NavigationTag</c> 决定来源）。
 /// </summary>
-public sealed partial class ItemsPage : Page, INavigationTarget
+/// <remarks>
+/// 实现 <see cref="IReloadablePage"/>：守卫的"新增自启动项"通报会定位到某个来源页，
+/// 而"点通知时用户正好就在那一页"是最常见的情形 —— 那时导航不会发生（同一个菜单项
+/// 重新赋值不触发 <c>SelectionChanged</c>），必须由外壳调用 <see cref="Reload"/>。
+/// 重载走**强制重扫**而不是读缓存：缓存快照里本来就还没有那条新增项。
+/// </remarks>
+public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
 {
     private readonly WindowHandleProvider _handles;
     private readonly IconProvider _icons;
@@ -72,10 +78,24 @@ public sealed partial class ItemsPage : Page, INavigationTarget
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // 读缓存秒回，但仍挂 Loaded：让窗口先画出来，再灌列表。
+        // 只加载一次；后续重载由外壳经 IReloadablePage.Reload 触发。
         Loaded -= OnLoaded;
+
         if (ViewModel.LoadCommand.CanExecute(null))
         {
             ViewModel.LoadCommand.Execute(null);
+        }
+    }
+
+    /// <inheritdoc />
+    public void Reload()
+    {
+        // 用「刷新本页」那条命令（强制重扫当前来源），不用 LoadCommand：
+        // 后者命中缓存就直接返回，而"系统里多了/少了一条"恰恰是缓存里没有的信息。
+        if (ViewModel.RefreshCommand.CanExecute(null))
+        {
+            ViewModel.RefreshCommand.Execute(null);
         }
     }
 

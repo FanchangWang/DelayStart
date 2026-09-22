@@ -1,11 +1,15 @@
-# DelayStart —— 发布三个可执行文件 + 同步调度端产物进管理端 bin
+# DelayStart —— 发布四个可执行文件 + 把同级 exe 同步进管理端 bin
 # 用法: .\scripts\publish.ps1 [-Rid win-x64]
-# 说明: 开发期发布入口。三个可执行文件的发布方式**并不相同**：
+# 说明: 开发期发布入口。可执行文件的发布方式**并不相同**：
 #         DelayStart.exe              WinUI 3 管理端，build（非 NativeAOT）
 #         DelayStart.Scheduler.exe    NativeAOT 单文件发布
 #         DelayStart.LaunchBroker.exe NativeAOT 单文件发布（uiAccess 目标的降权中转器，D70）
-#       最后 build App 触发 csproj 同步钩子（CopySchedulerPublishOutput）把调度端两个 exe 拷入 App bin。
-#       正式安装包走 installer\build-all.ps1 —— 它由 build-installer.ps1 分别 publish 三个工程，
+#         DelayStart.Guard.exe        守卫，build（非 NativeAOT，形态随管理端，D75）
+#       同步进 App bin 的三个同级 exe 各有来源（都在 App.csproj 里，是"拉"式钩子）：
+#         调度端 / 中转器 → CopySchedulerPublishOutput（读 AOT publish 的单文件）
+#         守卫           → CopyGuardBuildOutput（读 build 输出的四个文件：exe+dll+runtimeconfig+deps）
+#       🔴 因此**守卫必须先于 App 构建**，否则钩子只能打一条 high 提示 —— 顺序不要随意调整。
+#       正式安装包走 installer\build-installer.ps1 —— 它分别 publish 各工程，
 #       与本次开发期发布的职责不同，不要混用。
 #Requires -Version 7
 [CmdletBinding()]
@@ -24,23 +28,41 @@ if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] publish Scheduler 失败" -Foregrou
 dotnet publish src/DelayStart.LaunchBroker -c Release -r $Rid
 if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] publish LaunchBroker 失败" -ForegroundColor Red; exit $LASTEXITCODE }
 
+# 守卫：与管理端同样是 build（非 AOT）。🔴 绝不能改成 publish -p:PublishAot=true ——
+# 它经 Management 调 COM（IShellLinkW / TaskScheduler），AOT 下激活会运行时抛
+# PlatformNotSupportedException（see docs/pitfalls.md 五 R12）。
+# ⚠️ 必须排在下面 build App 之前：App.csproj 的 CopyGuardBuildOutput 钩子在 App 构建时
+# 从守卫 bin 里"拉"走 exe+dll+runtimeconfig+deps，产物不在位就搬不过去。
+dotnet build src/DelayStart.Guard/DelayStart.Guard.csproj -c Release -r $Rid
+if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] build Guard 失败" -ForegroundColor Red; exit $LASTEXITCODE }
+
 dotnet build src/DelayStart.App/DelayStart.App.csproj -c Release -r $Rid
 if ($LASTEXITCODE -ne 0) { Write-Host "`n[X] build App（同步钩子）失败" -ForegroundColor Red; exit $LASTEXITCODE }
 
-# TFM 输出目录名。注意：这是 App / 调度端的 **TargetFramework 目录名**，
+# TFM 输出目录名。注意：这是各项目的 **TargetFramework 目录名**，
 # 不是 Windows SDK 安装路径 —— 不要把它当环境问题去治。
+# 🔴 守卫是**第三个** TFM：它要发 WinRT 系统通知，必须带平台版本（D79），
+#    与调度端 / 中转器的纯 net10.0-windows 不同。照调度端的路径找守卫必然 MISSING。
 $SchedulerTfm = 'net10.0-windows'
+$GuardTfm = 'net10.0-windows10.0.26100.0'
 $AppTfm = 'net10.0-windows10.0.26100.0'
 
 # 核对产物：缺件必须失败。否则 App bin 没同步上也会打印 [OK]，
 # 让人误以为可以拿 App bin 直接跑（D61 教训：bin 能跑 ≠ publish 能跑）。
+# 🔴 清单里**必须**包含 App bin 里的三个同级 exe —— 它们是 dev 布局真正要用的东西，
+# 只核对自己 bin 里的产物等于没验证（2026-09-22 守卫就是这么漏掉的）。
 Write-Host "`n--- 产物核对 ---" -ForegroundColor Cyan
 $missing = @()
 foreach ($f in @(
     "src\DelayStart.Scheduler\bin\Release\$SchedulerTfm\$Rid\publish\DelayStart.Scheduler.exe",
     "src\DelayStart.LaunchBroker\bin\Release\$SchedulerTfm\$Rid\publish\DelayStart.LaunchBroker.exe",
+    "src\DelayStart.Guard\bin\Release\$GuardTfm\$Rid\DelayStart.Guard.exe",
     "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Scheduler.exe",
-    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.LaunchBroker.exe"
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.LaunchBroker.exe",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.exe",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.dll",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.runtimeconfig.json",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.Guard.deps.json"
 )) {
     $i = Get-Item $f -ErrorAction SilentlyContinue
     if ($i) { Write-Host ("{0}  {1:N2} MB  {2}" -f $i.Name, ($i.Length/1MB), $i.LastWriteTime) }

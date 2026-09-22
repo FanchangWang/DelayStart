@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+
+    <!--
+      ★ TFM 必须带平台版本（D79，2026-09-22 用户批复）：
+        守卫的"新增 / 失效"通报改用**系统通知**（Windows 10/11 右下角 → 通知中心），
+        走的是 WinRT 的 Windows.UI.Notifications。而 WinRT 投影
+        （Microsoft.Windows.SDK.NET.dll / WinRT.Runtime.dll）只在带平台版本的 TFM 下才可用，
+        纯 net10.0-windows 拿到的是"没有投影"的世界，连类型都找不到。
+
+      ⚠️ 这会让输出路径从 net10.0-windows 变成 net10.0-windows10.0.26100.0 ——
+        scripts/publish.ps1 与 installer/build-installer.ps1 里的守卫产物路径要同步。
+
+      🔴 投影程序集约 26 MB。它在**管理端 bin 里本来就有**（WinAppSDK 自带同一份），
+        所以安装包体积不变；守卫自己的 bin 会多出这两个 dll，只在开发期可见。
+        两边同 TFM 同版本解析，不存在"两个版本抢同一个文件名"的问题。
+
+      TargetPlatformMinVersion 与 NFR-5.1（Windows 10 21H2+）对齐，
+      同时让 CA1416 在编译期拦住"用了更高版本才有的 API"。
+    -->
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+
+    <RootNamespace>DelayStart.Guard</RootNamespace>
+    <AssemblyName>DelayStart.Guard</AssemblyName>
+
+    <!--
+      ★ 目标架构可由命令行覆盖（scripts/publish.ps1 / build-installer.ps1 传 -r）；
+        默认 win-x64 便于本地开发。
+    -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+
+    <!--
+      ★ OutputType=WinExe：与调度端同理，登录/启动瞬间不能闪控制台黑框。
+
+      🔴 **本工程绝不能开 PublishAot**（D75，2026-09-22 用户批复）。
+      守卫要扫 / 纠正计划任务的**触发器**与 .lnk，必须经 DelayStart.Management
+      （Microsoft.Win32.TaskScheduler + COM IShellLinkW），而 Management.csproj 自己写着
+      "不要求 AOT 安全"，docs/pitfalls.md 五（R12）记着"AOT 无 built-in COM，
+      [ComImport] 激活在 AOT 产物里运行时抛 PlatformNotSupportedException"。
+      这不是"待验证的风险"，是已知结论 —— 不要试图用"先试一下"来推翻它。
+
+      因此发布形态**跟随管理端**而不是跟随 AOT 的调度端：
+        full → 自包含；slim → 框架依赖（slim 下守卫自包含会让 {app} 里出现 hostfxr.dll，
+        框架依赖的管理端会因此弹 "You must install or update .NET"，见 D64-1）。
+      这条由 scripts/publish.ps1 与 installer/build-installer.ps1 传参控制，csproj 不写死。
+    -->
+    <PublishAot>false</PublishAot>
+
+    <!--
+      ★ 刻意**不提供 app.manifest**（D79）。
+
+      原来那份清单只为了一件事：声明 Common-Controls 6.0 依赖，让 TaskDialogIndirect 能跑。
+      通报改走系统通知之后 comctl32 就再没被用到了，留着一份"声明了但不用的依赖"
+      只会让下一个读代码的人误以为还有什么东西依赖 v6 激活上下文。
+
+      顺带消失的还有它附带的坑：那份清单是**原样嵌入** exe 的，里面放一个 emoji
+      就会让 SxS 判"无效的 Xml 语法"、进程连 main 都进不去（docs/pitfalls.md 十一）。
+      没有清单 = 没有这个面。
+
+      🔴 **但"双击不自动提权"这条契约必须在别处守住**：守卫的唯一合法入口是计划任务
+      （RunLevel=Highest）。一旦有人给本工程塞一份带 requestedExecutionLevel
+      requireAdministrator 的清单，双击就会弹 UAC 并拿到提权令牌，
+      入口自检（Program.Main 第 0 步）形同虚设 —— 用户会得到第二条不受管理的巡检路径。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 依赖方向 Guard → Management → Core，单向；守卫**不引用** App / Scheduler -->
+    <ProjectReference Include="..\DelayStart.Core\DelayStart.Core.csproj" />
+    <ProjectReference Include="..\DelayStart.Management\DelayStart.Management.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!--
+      ★ exe 自身的图标（与调度端 / 管理端同款要求）：让资源管理器、任务管理器、
+        "任务计划程序"里那条任务的动作都能直接读到图标。
+      由 tools/make-icon.py 的 guard 角色生成（10 档多尺寸容器）。
+    -->
+    <ApplicationIcon>Assets\Guard.ico</ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

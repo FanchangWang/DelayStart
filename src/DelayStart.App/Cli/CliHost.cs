@@ -216,6 +216,20 @@ internal static class CliHost
             ? "调度计划任务已删除。"
             : "⚠ 调度计划任务未能删除，请手动检查。");
 
+        // 守卫计划任务（D74）：卸载时一并删除。
+        // 🔴 删除失败**不参与退出码**（与调度任务刻意不同的判据）：残留的守卫任务最多
+        // 在下次触发时报一条"找不到程序"的系统日志，不会让用户的自启动项无法还原 ——
+        // 为它中止卸载得不偿失。
+        try
+        {
+            services.GuardRegistrar.Delete();
+            Console.WriteLine("守卫计划任务已删除。");
+        }
+        catch (StartupOperationException ex)
+        {
+            Console.Error.WriteLine($"⚠ 守卫计划任务未能删除（不影响卸载）：{ex.Message}");
+        }
+
         foreach (var failure in outcome.Failures)
         {
             Console.Error.WriteLine($"  - {failure}");
@@ -288,7 +302,7 @@ internal static class CliHost
         Console.WriteLine("  --scan                      扫描全部自启动项并列出（含稳定主键）");
         Console.WriteLine("  --takeover <主键> [秒数]     接管指定条目，默认 30 秒");
         Console.WriteLine("  --release <主键>             移出延时启动，恢复系统原状");
-        Console.WriteLine("  --restore-all               还原全部接管项并删除计划任务（卸载时调用）");
+        Console.WriteLine("  --restore-all               还原全部接管项并删除调度 / 守卫计划任务（卸载时调用）");
         Console.WriteLine("  --result-file <路径>         把退出码写到该文件（供提权拉起方回读，见 D61）");
         Console.WriteLine("  --reinstall-task            幂等注册 / 更新调度计划任务");
         Console.WriteLine("  --help                      显示本帮助");

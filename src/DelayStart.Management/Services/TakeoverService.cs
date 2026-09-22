@@ -39,7 +39,7 @@ public sealed class TakeoverService
     public TakeoverService(
         IAppConfigStore configStore,
         ISchedulerTaskRegistrar taskRegistrar,
-        IEnumerable<IStartupSource> sources,
+        IReadOnlyList<IStartupSource> sources,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(configStore);

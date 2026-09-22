@@ -45,7 +45,8 @@ internal static class Program
 
         // 提权门槛（2026-09-21 批复）：正常入口是计划任务（RunLevel=Highest）；
         // 手动双击 exe 会以未提权令牌运行 —— 静默退出，防止产生第二条调度路径。
-        if (!NativeMethods.IsElevated())
+        // 判定实现在 Core（D78 与守卫端共用同一份，避免两份实现漂移）。
+        if (!ElevationCheck.IsElevated())
         {
             log.Error("调度端未以管理员身份运行（疑似手动双击启动），自动退出。");
             return 0;

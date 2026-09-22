@@ -3,20 +3,44 @@
   <assemblyIdentity version="1.0.0.0" name="DelayStart.App.app"/>
 
   <!--
-    ★ 提权声明（D20 全程提权）。
-    unpackaged 应用靠 app.manifest（而不是 Package.appxmanifest）声明执行级别。
-    requireAdministrator 会让 exe 带 UAC 盾牌、双击即弹 UAC，与 NFR-3 一致。
-    实现侧还必须配套：启动时检测 IsInRole(Administrator)，为 false 就提示并退出，
-    **不得降级运行**（降级会造成"用户以为禁用成功、实际静默失败"）。
-    见 docs/architecture.md 1.4、docs/requirements.md E17。
+    ★ 提权模型（D20 全程提权 + D82「入口自提权」，2026-09-22 用户批复）。
 
-    ⚠️ 本声明在 WindowsAppSDKSelfContained=true 下是否生效尚未验证（R9，Phase 0 出口条件）。
-    R9 失败时按 architecture.md 第九节的降级路径处理，不要在没验证前假定它生效。
+    历史：这里原先声明 requireAdministrator。代价是**提权发生在进程创建之前**，
+    而协议唤起（点系统通知 → Shell 启动 DelayStart.exe）由 explorer 以普通权限发起，
+    于是"管理端已经开着、只是想让它前置并定位"这种最常见的情形也必然先弹一次 UAC。
+
+    现在改为 asInvoker：进程以调用方的权限起来，由**入口代码**（DelayStart.App/Program.cs
+    的提权门）按需处理 ——
+      · 未提权且本次是"唤起已有实例"（命令行参数 goto-log / goto-startup）⇒ 只写一次性
+        定位请求并退出，不提权、不弹 UAC（运行中的实例经 FileSystemWatcher 收到请求）；
+      · 其余情况（普通启动 / CLI 子命令 / 没有实例在跑）⇒ runas 重拉自己（弹一次 UAC，
+        与用户双击该 exe 完全等价），CLI 还会等子进程并把退出码透传回去。
+
+    ★ 不变量没变，只是保证点从"载入器"搬到了"入口代码"：
+    **图形界面与 CLI 业务绝不以非提权身份运行**（D20：降级会造成"用户以为禁用成功、
+    实际静默失败"）。所以入口那道门必须挡在所有业务分支之前 —— 见 Program.Main 的步骤 ②。
+
+    ⚠ 由此产生的两个可见变化：
+      · 快捷方式 / exe 不再显示 UAC 盾牌（盾牌是 requireAdministrator 才有的显示）；
+      · 从**非提权** shell 里跑 CLI 子命令也会弹一次 UAC（与原先在进程创建时弹是同一次，
+        只是时机从"启动瞬间"变成"入口判定之后"）。
+    见 docs/decisions.md D82、docs/pitfalls.md 四 · 十二。
+
+    ⛔ 本文件是**原样交给 mt.exe 解析的 XML**，注释里因此有两条硬约束：
+      · 禁止出现**连续两个减号**（XML 规范不允许）：mt.exe 只报
+        c1010070 / Failed to load and parse the manifest，**不指出位置**，
+        症状是"改了注释却编译不过"。所以上面把两个定位参数写成 goto-log / goto-startup
+        而不带它们真正的前缀。（2026-09-22 D82 实测：这是 c1010070 的唯一成因。）
+      · 不用 emoji / 非 BMP 字符：**构建期 mt.exe 是接受的**（同一次实测：加一个 emoji
+        后构建照过），但"加载期激活上下文"会不会因此失败没有单独验证过 ——
+        守卫当初那份清单就是在这一步炸的（双击无窗口无日志、退出码 1、
+        Application 日志 SideBySide Id=59），代价太大，不值得冒险试一次。
+        上面用到的 ★ 与 ⚠ 都是 BMP 字符，是刻意挑的。
   -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

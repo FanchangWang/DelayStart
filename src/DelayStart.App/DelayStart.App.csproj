@@ -131,6 +131,62 @@
   </Target>
 
   <!--
+    ★ 守卫产物同步进 App bin（D75）—— dev 布局的**必需件**。
+
+    背景：2026-09-22 用户回报"scripts 脚本编译后，guard exe 没有处理"。核实结果 —— PathService
+    的 GuardExecutablePath = AppContext.BaseDirectory + "DelayStart.Guard.exe"，管理端启动时的
+    GuardTaskBootstrap.SyncWithSettings() 会把计划任务 action 指到这个路径。**App bin 里没有
+    Guard.exe，守卫计划任务就是一条指向空文件的死任务**。跟调度端同理，不能只让它在自己的 bin 里躺着。
+
+    为什么守卫单独一个 target，而不并进上面的 CopySchedulerPublishOutput：
+      那个钩子拷的是 **NativeAOT publish 的单文件 exe**（一个文件即全部）；
+      守卫是非 AOT 的普通 build 输出，**必须整组四个文件一起搬**：
+        DelayStart.Guard.exe                 apphost（启动器）
+        DelayStart.Guard.dll                 托管程序集
+        DelayStart.Guard.runtimeconfig.json  声明框架依赖 —— 缺了 apphost 直接起不来
+        DelayStart.Guard.deps.json           依赖图
+      🔴 只拷 exe 是最容易犯的错：双击会报"找不到运行时/依赖"，而且**编译期毫无提示**。
+      守卫其余的依赖（DelayStart.Core / DelayStart.Management / Microsoft.Win32.TaskScheduler /
+      System.Diagnostics.EventLog）本来就在 App bin 里（App 自己经 Management 用到），无需重复搬 ——
+      如果日后给守卫加了 Management 之外的新包依赖，**这条不变式就破了**，需要回来补文件。
+
+    🔴 另加一条**新增的**运行时依赖（D79）：守卫现在要发系统通知，用 WinRT 的
+      Windows.UI.Notifications。投影（Microsoft.Windows.SDK.NET.dll / WinRT.Runtime.dll）
+      本来就随管理端的 WinAppSDK 一起在 App bin 里，所以**不需要**额外搬 ——
+      但这也意味着守卫的 TFM 必须带平台版本（net10.0-windows10.0.26100.0），否则它
+      连 WinRT 类型都找不到。⚠️ 下面 _GuardBuildDir 里的 TFM 段必须与
+      DelayStart.Guard.csproj 的 <TargetFramework> 保持一致，改一处就要改两处
+      （scripts/publish.ps1 的产物核对清单里也有同一个 TFM）。
+
+    ⚠️ 构建顺序：本 target 是"拉"（AfterTargets=Build 去读守卫的 bin），所以**守卫必须先构建**。
+      scripts/publish.ps1 已把 dotnet build Guard 排在 build App 之前；直接跑
+      dotnet build DelayStart.slnx 时项目顺序不保证，这时只打一条 high 提示、不让构建失败
+      （与调度端同策略 —— 开发期的 App bin 布局由 publish.ps1 负责，且它会把缺件判为失败）。
+  -->
+  <Target Name="CopyGuardBuildOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_GuardBuildDir>$(MSBuildThisFileDirectory)..\DelayStart.Guard\bin\$(Configuration)\net10.0-windows10.0.26100.0\$(RuntimeIdentifier)\</_GuardBuildDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GuardBuildOutput Include="$(_GuardBuildDir)DelayStart.Guard.exe" />
+      <_GuardBuildOutput Include="$(_GuardBuildDir)DelayStart.Guard.dll" />
+      <_GuardBuildOutput Include="$(_GuardBuildDir)DelayStart.Guard.runtimeconfig.json" />
+      <_GuardBuildOutput Include="$(_GuardBuildDir)DelayStart.Guard.deps.json" />
+    </ItemGroup>
+    <!-- 四个文件**无条件**列进清单：exe 在而某个伴生文件缺失时，Copy 会直接报 MSB3030 让构建失败 ——
+         这正是想要的（半截产物搬进 bin 只会在运行期炸，不如构建期炸）。 -->
+    <Copy
+      SourceFiles="@(_GuardBuildOutput)"
+      DestinationFolder="$(OutDir)"
+      SkipUnchangedFiles="true"
+      Condition="Exists('$(_GuardBuildDir)DelayStart.Guard.exe')" />
+    <Message
+      Text="DelayStart.Guard 尚未 build（缺少 $(_GuardBuildDir)DelayStart.Guard.exe），App bin 里不会有守卫 exe —— 先跑 dotnet build src/DelayStart.Guard -c Release"
+      Condition="!Exists('$(_GuardBuildDir)DelayStart.Guard.exe')"
+      Importance="high" />
+  </Target>
+
+  <!--
     🔴 D61（2026-09-21 真机实测）：**publish 输出缺 XAML 产物与资源包**。
 
     背景：unpackaged 转换时按官方改造清单删掉了 <EnableMsixTooling>true</EnableMsixTooling>

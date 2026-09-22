@@ -46,6 +46,8 @@
 - 🔴 **WMC1506**：对非 INPC 属性写 `Mode=OneWay` 是编译错误（`TreatWarningsAsErrors` 下）。不可变行模型用 OneTime；get-only 计算属性要联动用 `[NotifyPropertyChangedFor]`（只删通知联动不删 OneWay = 必崩）。
 - `dotnet test` 不可用（D26）：xunit.v3.mtp-v2 + SDK 10 报"零个测试"退出码 5；规范命令 `dotnet run --project tests/DelayStart.Core.Tests -c Release`。
 - 先建 CPM 再跑模板 → `dotnet add package` 报 NU1008；props 的 XML 注释里出现 `--` 是非法 XML → 整个 CPM 静默失效（NU1015）。
+- 🔴 **`app.manifest` 的注释是 XML，同样不能出现连续两个减号**（2026-09-22 D82 踩到）：把 `--goto-log` / `--goto-startup` 这类命令行字面量写进清单注释，`mt.exe` 直接以 `c1010070 Failed to load and parse the manifest`（exit 31）失败，而**报错只指向文件、不指出行** —— 看起来像"清单整体损坏了"，实际只是注释里的两个减号。去掉前缀（写成 `goto-log`）即过。
+  - 📌 **取证经过（做法值得照抄）**：报错时同时怀疑注释里的 emoji（非 BMP 字符，见十一），于是做**单变量**实验 —— 只把 emoji 放回去、保持"无连续减号"，再构建一次：**通过**。⇒ 连续减号是 `c1010070` 的唯一成因；emoji 在**构建期**是安全的。这条实验同时修正一个旧判断：管理端的清单**并非**"走 WinAppSDK 规范化、不受影响"，它和守卫当初那份一样被 `mt.exe` 原样解析（`Microsoft.WindowsAppSDK.SelfContained.targets` 里那条 `mt.exe` 命令的输入之一就是 `app.manifest`），只是 emoji 这一项恰好没触发失败。全程戒 emoji 的成本是零，仍照旧戒。
 - AOT 链接 `LNK1181 找不到 advapi32.lib`：csproj 显式注入 Windows SDK `um/ucrt` 库目录（按 `$(_WinSdkLibArch)` 切架构）。
 - 构建报 `MSB3021/3027`：正在运行的管理端锁住了 bin 里的 DLL → 构建前先关。
 - XamlCompiler 与 targets 由 NuGet 包提供，命令行构建不依赖 VS 组件（组件属体验项）。
@@ -98,7 +100,7 @@
 - 🔴 **任何一行不能以 `[` 开头**（含 `[Code]` 段内、含缩进后的 `[`）——ISCC 报 `Invalid section tag`，哪怕那行是合法的 Pascal 数组字面量。
 - `TaskDialogMsgBox` 第 5 参 `Shields` 是集合类型，传整数报 `Type mismatch` → 改 `MsgBox` + `MB_YESNOCANCEL`。
 - **不要重复声明 `FILE_ATTRIBUTE_DIRECTORY`**——Inno Pascal 自带（`Duplicate identifier`）。
-- 🔴 **提权两条（同一根因踩两次，740）**：`DelayStart.exe` manifest = requireAdministrator 而安装器 = lowest → `[Run]` 首启必须 `shellexec`；卸载还原必须 `ShellExec('runas')` + `--result-file` 轮询回读退出码（`ShellExec` 拿不到子进程退出码；`ewWaitUntilTerminated` 不可靠）。`[UninstallRun]` 读不到退出码，还原失败也照删文件 → 不能用。
+- 🔴 **提权相关的两条做法（D61 真机踩过两次 740）**：当年 `DelayStart.exe` 的 manifest 是 `requireAdministrator` 而安装器是 `lowest`，于是 ① `[Run]` 首启必须带 `shellexec`（默认的 CreateProcess 路径 740，表现为"勾了启动、点确定弹报错框，程序根本没起来"）；② 卸载还原必须 `ShellExec('runas')` + `--result-file` 轮询回读退出码（`ShellExec` 拿不到子进程退出码），且**不能用 `[UninstallRun]`**（读不到退出码，还原失败也照删文件）。**D82 把 manifest 改成 `asInvoker` 之后 740 的成因已消失；这两条做法仍然保留不动** —— 它们是真机验证过的路径，改它们等于往卸载流程里塞进两条没跑过的分支（UAC 被拒、父子退出码转发），而收益只是少一次文件往返。
 - **iss 的 `/DSlim` 判据是"有没有定义"**，不要传 `/DSlim=0` 表"否"。
 - **中文 .isl 不随官方 Inno 分发**（属用户贡献翻译）→ 随仓库分发 `installer\languages\ChineseSimplified.isl`，iss 写 `compiler:Default.isl,languages\ChineseSimplified.isl`（相对路径按 **.iss 所在目录**解析；垫 Default.isl 消"缺 message"警告；语言文件版本错位只警告不失败）。
 - 语言/版本比较别用 `Copy(s,1,27)` 对 31 字符串——恒为假，用 `Pos(...)>0`。
@@ -118,6 +120,36 @@
 - 🔴 **用 PowerShell 替换源码字符串前先探测行尾与 BOM**：本仓 C# 源文件是 **LF** 行尾，模式串里写 `` `r`n `` 会**静默零匹配**（`String.Replace` 不命中也不报错，改动像没做）。替换后必须回读命中计数（`[regex]::Matches(...).Count`）；写回用 `UTF8Encoding($false)` 并保留原 BOM 状态。
 - 安全钩子会误判 cmd 风格语法：`git show --format="%H%n%s"` 被当成 `%VAR%` 环境变量语法拦下；`cmd /c "..."` 在 PowerShell 工具里被直接禁。命令里避免 `%...%` 片段，重定向用纯 PowerShell 写法。
 
+## 十一、自启动项守卫（Guard）
+
+- 🔴 **"应用把自启动项写回启用"是常态而非异常**：软禁用（`StartupApproved` 标记 / 任务触发器）只让系统不去启动它，**原 `Run` 值 / 任务定义一个字节都没动**。于是应用自身升级、重装、或它的"开机自启"开关被重新点开时，会顺手把标记删掉 / 重写（`StartupApproved` 的"启用"就是 `DeleteValue`）—— 用户看到的现象是"接管失效了"，且没有任何提示。⇒ 守卫必须**每一轮都按扫描结果重新纠正**，不能只在接管那一刻做一次。
+  - **判据只有一条**：本次扫描结果里该条目的 `IsEnabled`（`GuardCorrectionPolicy`）。🔴 **禁止另写一份"是否被写回"的判据表** —— 四个来源各自的实现已经把这件事算准了（注册表三级回退、计划任务"任务开关 **且** 至少一个自启动触发器启用"（D67）、UWP 看 `State`），第二份判据必然与之漂移。最典型的漂移后果：被接管的多触发器任务**每一轮**都被误判成"被写回"，日志被假纠正记录淹没，"纠正过什么"从此不可信。
+  - **写成功 ≠ 写对了**：纠正后必须**复读该来源确认**（`GuardService.ReReadDisabled`），确认失败要报 `Warn` 而不是当作成功。静默吞掉会让用户以为"守卫在保护我"，而实际上没有。
+  - 不计数、不设阈值、不做对抗升级：接管是用户明确的期望，被写回就纠回来，与次数无关。
+- ⛔ **已作废的两条（D79，2026-09-22）：原生模态提示框及其清单**。守卫原来的通报载体是 comctl32 的 `TaskDialogIndirect`，由此派生过两条教训 ——「它只存在于 comctl32 v6，缺激活上下文直接 `EntryPointNotFoundException`（不是降级成旧样式，是崩）」与「`TASKDIALOGCONFIG` / `TASKDIALOG_BUTTON` 是 1 字节对齐（`Pack = 1`），对齐写错只返回 `E_INVALIDARG(0x80070057)`、不弹不崩」。**这两条随 `NoticeDialog.cs` / `NativeMethods.cs` / `app.manifest` 一起删除而失效**（守卫现在不调任何原生 UI API，也不再有清单文件，因此"清单里不得加 `requestedExecutionLevel`"那条伴随约束同样作废）。
+  - 保留它们的历史理由是那条**通用**判据 ——"所有字段取值组合都得到同一个 HRESULT ⇒ 问题在布局不在取值"（见本文末《教训方法论》第 6 条）。真要与 Win32 结构体打交道时仍按它做。
+  - 同理作废：**`app.manifest` 里禁止 emoji / 非 BMP 字符**（SxS 激活上下文生成失败 ⇒ 双击无窗口无日志、退出码 1、Application 日志 `SideBySide` Id=59）。守卫的清单已不存在；这条仍适用于**任何**原样嵌入清单的工程（管理端那份走 WinAppSDK 规范化，不受影响）。
+- 🔴 **未打包应用发系统通知，AUMID 必须先"存在"**（D79，2026-09-22）：`ToastNotificationManager.CreateToastNotifier(aumid)` 认的不是进程而是一个字符串。不传参的重载对未打包进程直接抛"元素未找到"；传了 AUMID 但系统里没有该标识时通知**静默不显示**。唯一的存在方式 = 开始菜单里有一个把它写进 `System.AppUserModel.ID` 的快捷方式（用 `IShellLinkW` + `IPropertyStore`，属性键 `{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3} / 5`）。
+  - ⚠️ **AUMID 本身不显示给用户**：用户看到的标题/图标来自那个**快捷方式**。所以"通知标题显示 DelayStart"与"通知能弹出来"是同一件事的两个面，不是一个字符串参数就能解决。
+  - 🔴 注册路径**必须幂等且绝不抛异常**：管理端每次启动 + 守卫发通知前各调一次；失败只降级成"这次通知弹不出来"，不能让管理端起不来或让守卫巡检失败。
+  - 🔴 **同一 `Tag` + `Group` 的通知互相替换**（本实现 `guard-change` / `delaystart`）：不设它们，周期档位下每轮"有变化"都会在通知中心堆一条，用户会直接关掉通知权限。
+  - ⚠️ 通知是**尽力而为**的：被用户关掉 / 专注助手 / 组策略禁用都会不显示 —— **不算巡检失败**，巡检结果必须始终落在 `guard.log`。
+  - 🔴 卸载必须清键：`HKCU\Software\Classes\delaystart` 要 `RegDeleteKeyIncludingSubkeys`（`RegDeleteKey` 只删空键，而它下面有 `shell\open\command`），否则留下一个指向已删除 exe 的 handler。
+- 🔴 **`--goto-startup` / `--goto-log` 必须以 `--` 前缀排除在 CLI 分流之外**（2026-09-22 发现）：`Program.Main` 无条件先调 `CliHost.TryExecute(args)`，而那两个参数以 `--` 开头会被当成**未知子命令** → CLI 返回 2 并直接退出，**GUI 从不启动**。通知点击、`--stale` 定位全走这两个参数，所以症状是"点了通知什么都没发生"。判据是 `if (!gotoLog && !gotoStartup && CliHost.TryExecute(...))`。这条在协议链路打通之前一直潜伏（没有调用方传过它们）。
+- ⚠️ **守卫 TFM 带平台版本（`net10.0-windows10.0.26100.0`），产物路径比调度端多一段**：发 WinRT 通知需要平台版本才能拿到投影（`Microsoft.Windows.SDK.NET.dll` / `WinRT.Runtime.dll`，管理端 bin 里本来就有）。所以它的 bin 是 `bin\<Cfg>\net10.0-windows10.0.26100.0\<rid>\`，而调度端是 `net10.0-windows\<rid>\`（纯 Win32，不带平台版本）。**照调度端的路径去搬守卫产物会找不到文件。**
+- 🔴 **守卫 exe 进驻 App bin 要整组四个文件，不是只拷 exe**：`PathService.GuardExecutablePath` = `AppContext.BaseDirectory + "DelayStart.Guard.exe"`，管理端启动时的 `GuardTaskBootstrap` 会把守卫计划任务的 action 指到这里。守卫**非 AOT**，它的 exe 只是 apphost —— 少了 `DelayStart.Guard.runtimeconfig.json`（声明框架依赖）或 `deps.json`，双击会报"找不到运行时/依赖"，**而编译期毫无提示**。四个文件是 `exe` + `dll` + `runtimeconfig.json` + `deps.json`（其余依赖 `Core`/`Management`/`TaskScheduler`/`EventLog` 本来就在 App bin 里）。
+  - ⚠️ **构建顺序是硬约束**：同步靠 `DelayStart.App.csproj` 的 `CopyGuardBuildOutput`（`AfterTargets="Build"`，**拉**式钩子），所以 `dotnet build Guard` 必须排在 `build App` 之前。2026-09-22 的原始缺陷正是顺序反了 + 钩子没覆盖守卫：`publish.ps1` 一路 `[OK]`，**App bin 里却始终没有 `DelayStart.Guard.exe`** —— 计划任务是一条指向空文件的死任务。现在 `publish.ps1` 把 App bin 里的守卫四件纳入产物核对，缺件即 `exit 1`。
+- **守卫基线必须原子写、坏基线必须降级**：`baseline.json` 走 `AtomicFileWriter`（先写 `.tmp` 再替换）—— 守卫被强杀留下半截 JSON 时，下一次巡检会把**全部条目报成"新增"**（满屏假情报）。读不到 / 解析失败一律返回 `null`（等价"首次运行 ⇒ 不通报新增"）：差集测不出来只是少一次提示，拿坏基线去测会制造噪声。同理，**本轮整体失败的来源，其条目在下一次基线里要沿用旧值** —— 否则来源恢复时会把一整批老条目报成"新增"。
+
+## 十二、提权与跨进程唤起（D82）
+
+- 🔴 **跨完整性级别不能拿内核对象当信号**：管理端运行在**高完整性**，而 Shell 按协议（点系统通知 → `delaystart:`）拉起的那个进程是**中完整性**。这类对象默认带 `NO_WRITE_UP`（只挡写、不挡读），所以中完整性进程**打不开**高完整性事件、更 `Set()` 不了它。更阴的是**失败是静默的**：`EventWaitHandle.TryOpenExisting(name, out _)` 申请的正是写权限（`Synchronize | Modify`），拿不到时返回 **false** —— 与"对象不存在"是同一个返回值。症状因此是"实例明明在跑，点通知照样弹 UAC"（D82 要修的那个）。⇒ 唤起信号改用**文件**：写它不需要跨级别权限（`ui-request.json` 落在用户目录、标签是中完整性，两边都写得进去），实例侧 `FileSystemWatcher` 收。顺带解掉"事件过期即失"这个老问题（文件留在盘上，投递失败也不会丢单）。
+- 🔴 **只读打开要显式申请 `SYNCHRONIZE`，托管 API 表达不了**：判断"还有没有实例在跑"必须只申请读权限，而 `EventWaitHandle` 的托管重载写死了 `Synchronize | Modify`；`EventWaitHandleRights` 枚举也不在 `System.Threading`（那是 .NET Framework 时代的放置位置，本解决方案引用的框架里没有，会直接 CS0103）。⇒ 下沉到 `OpenEventW(EVENT_SYNCHRONIZE)`（`App/Interop/InstanceProbe`）。🔴 **必须紧接着取 `Marshal.GetLastWin32Error()`** 区分"不存在(2)"与"访问被拒(5)"：`AccessDenied` 是"只读探测"这个前提**唯一**能在现场看到的判据，折成一个 `bool` 就永远看不见。误判方向是安全的 —— 按"没有实例"走只会白弹一次 UAC，落点不丢（被拉起的子进程在同级别里必然探测成功）。
+- 🔴 **`FileSystemWatcher` 不要设 `Filter`，按完整路径比对**：请求文件是**原子写**的（`ui-request.json.tmp` → 改名 / 替换），而"改名事件里过滤器比对的是旧名还是新名"没有可靠约定 —— 设了过滤器就有概率让**整条点击静默丢失**。目录里直接只有这一个文件（其余都是子目录，`IncludeSubdirectories=false` 时不受影响），全收下来再比 `FullPath` 既便宜又不漏，还顺手免疫 `.tmp` 的噪声事件。
+- 🔴 **装文件监听必须早于建"存活标记"**：外面（提权门）的顺序是"先探到实例存活（看标记）→ 再把请求写成文件"，所以**标记晚于监听存在**才成立。反了会出现"探到了实例、但实例还没开始看文件"的丢单窗口；反之（监听已装、标记未建）最坏只是对方白弹一次 UAC，由子进程自己纠正。`App.OnLaunched` 里的顺序就是这条约束的落地。
+- 🔴 **提权门必须挡在所有业务分支之前，且自己的标记要先摘掉**：`--elevation-attempted`（防"重拉自己"死循环用）同样以连续两个减号开头，留在参数里会被 `CliHost` 当成未知子命令（退出码 2、界面根本起不来）—— 与十一那条同源。顺序：认领定位参数 → 提权门 → CLI。
+- ⚠️ **提权重拉自己会开一个新的控制台窗口**：`runas` 拉起的子进程由 AppInfo / consent 创建，拿不到父进程的控制台，于是 CLI 输出落在一个新窗口里。`requireAdministrator` 时代也是这样，**不是 D82 引入的**。GUI 路径因此**不等待**子进程（否则父进程要陪用户开到关窗，任务管理器里多一个看不见的进程），CLI 路径才等待并透传退出码。
+
 ---
 
 ## 教训方法论
@@ -127,3 +159,4 @@
 3. **单测与构建都绿 ≠ 真机可用**：InvariantGlobalization、publish 缺 XBF、多触发器粒度全是单测照不到的角落——出口条件必须含真机项。
 4. **能直接调一次 API 就别推理**；红/绿对照证明用例真的钉住了缺陷。
 5. **用户报告的现象先 1:1 复现再修**；修完用"反向放回病根文件"验证因果。
+6. **"顺序对" ≠ "布局对"**：与 Win32 结构体打交道时，先核对 SDK 头文件的 packing（`pshpack1.h` / `poppack.h`）与本机实测 `sizeof`，再谈字段取值。顺序、偏移、大小是三件独立的事；用同一 HRESULT 复现所有字段取值组合，就是布局错的信号。

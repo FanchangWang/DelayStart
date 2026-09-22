@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 
 using DelayStart.App.Services;
+using DelayStart.Core.Launch;
 
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -178,17 +179,132 @@ public sealed partial class MainWindow : Window
         Program.LogGotoLog("ShowRunsLog：开始执行唤起。");
         BringToFront();
 
-        // 选中即触发 SelectionChanged → 导航；先激活再切页，视觉上是"弹出并落在日志页"。
-        foreach (var item in NavView.MenuItems)
+        _ = SelectMenu(NavigationService.RunsTag);
+
+        // 无论"新切过去"还是"本来就在这一页"都要重载：前者页面会拿缓存/上次读到的归档
+        // 直接显示，后者连导航都不会发生 —— 两种情况用户看到的都是旧数据。
+        ReloadCurrentPage();
+        Program.LogGotoLog("ShowRunsLog：已激活窗口并切换到运行日志页。");
+    }
+
+    /// <summary>
+    /// 唤起窗口并落到指定位置（系统通知点击 / <c>--goto-startup</c>，D74）。
+    /// </summary>
+    /// <param name="target">跨进程定位令牌，取值见 <see cref="UiNavigationTarget"/>。</param>
+    /// <remarks>
+    /// <para>
+    /// 令牌 → 菜单项走 <see cref="UiTargetNavigation"/>；未知令牌只前置窗口、不切页
+    /// （宁可停在原处，也不要把用户带到不相干的位置）。
+    /// </para>
+    /// <para>
+    /// 方法名保留 <c>ShowStartup</c>（历史命名，当初只服务「自启动项」来源页）——
+    /// 现在令牌也可能是 <c>delay</c>（失效条目自 D81 起并入「延时启动」页），
+    /// 但它做的事没变：前置窗口 + 选中一个菜单项。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>定位之后必须重载数据，两种情况都是</b>（2026-09-22 用户回报"点通知不刷新
+    /// 延时启动的数据，需要手动刷新"）：
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>目标页就是当前页</b> —— 定位靠"给 <c>NavigationView.SelectedItem</c> 赋新值 →
+    /// <c>SelectionChanged</c> → 换页"，而给同一个项重新赋值**不会触发事件**，
+    /// 页面既不重建、<c>Loaded</c> 也不再触发，数据停在原样；
+    /// </description></item>
+    /// <item><description>
+    /// <b>确实是切过去</b> —— 目标页读的是**启动时那份扫描缓存**（bug#7 的秒回优化），
+    /// 而通知说的"有变化"恰恰是缓存里还没有的信息：不强制重载就看不见那条新增项，
+    /// 用户会以为通知是假的。
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// 只负责导航，**不读请求文件** —— 那属于跨进程协议，由 <see cref="App"/> 处理。
+    /// 本类保持"只做视图相关的事"（<c>design.md</c> 9.5）。
+    /// </para>
+    /// </remarks>
+    public void ShowStartup(string target)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+
+        Program.LogGotoLog($"ShowStartup：开始执行唤起，目标令牌『{target}』。");
+        BringToFront();
+
+        var tag = UiTargetNavigation.TagFor(target);
+        if (tag is null)
         {
-            if (item is NavigationViewItem { Tag: "runs" } runsItem)
+            Program.LogGotoLog($"ShowStartup：未知定位令牌『{target}』，仅前置窗口。");
+            return;
+        }
+
+        var switched = SelectMenu(tag);
+        ReloadCurrentPage();
+        Program.LogGotoLog($"ShowStartup：{(switched ? "已切换到" : "已是")}『{tag}』页，并已要求该页重载数据。");
+    }
+
+    /// <summary>
+    /// 选中带指定 Tag 的菜单项（选中即触发 <c>SelectionChanged</c> → 导航）。
+    /// </summary>
+    /// <param name="tag">菜单项 Tag。</param>
+    /// <returns>是否**发生了一次切换**（<see langword="false"/> = 菜单里没有它，或当前已停在那一项上）。</returns>
+    /// <remarks>
+    /// <para>
+    /// 🔴 **必须递归**：「自启动项」下的四个来源页是**子菜单项**
+    /// （<c>NavigationViewItem.MenuItems</c>），只扫顶层会永远找不到，
+    /// 表现成"点了查看没反应"。
+    /// </para>
+    /// <para>
+    /// 返回值现在只用于日志（重载是无条件做的），但保留它是因为"有没有真的换页"
+    /// 是排查唤起问题时第一个要看的分支 —— 让调用方不必再去猜。
+    /// </para>
+    /// </remarks>
+    private bool SelectMenu(string tag)
+    {
+        var item = FindMenuItem(NavView.MenuItems, tag);
+        if (item is null)
+        {
+            return false;
+        }
+
+        // 按 Tag 而不是按引用比较：菜单项可能被重建（分隔线是运行时插进去的），
+        // 而"当前停在哪个页面"这件事由 Tag 唯一确定。
+        if (NavView.SelectedItem is NavigationViewItem { Tag: string current } && current == tag)
+        {
+            return false;
+        }
+
+        NavView.SelectedItem = item;
+        return true;
+    }
+
+    /// <summary>要求当前显示的页面重读自己的数据（页面没实现 <see cref="IReloadablePage"/> 时什么也不做）。</summary>
+    private void ReloadCurrentPage()
+    {
+        if (NavFrame.Content is IReloadablePage page)
+        {
+            page.Reload();
+        }
+    }
+
+    /// <summary>在菜单树里按 Tag 深度优先找一个菜单项。</summary>
+    private static NavigationViewItem? FindMenuItem(IList<object> items, string tag)
+    {
+        foreach (var entry in items)
+        {
+            if (entry is NavigationViewItem item)
             {
-                NavView.SelectedItem = runsItem;
-                break;
+                if (item.Tag is string candidate && candidate == tag)
+                {
+                    return item;
+                }
+
+                if (FindMenuItem(item.MenuItems, tag) is { } nested)
+                {
+                    return nested;
+                }
             }
         }
 
-        Program.LogGotoLog("ShowRunsLog：已激活窗口并切换到运行日志页。");
+        return null;
     }
 
     /// <summary>仅把已有窗口带到前台（普通启动撞单实例互斥时的唤起语义，不切页）。</summary>

@@ -93,6 +93,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     public partial int NotifyModeIndex { get; set; }
 
+    /// <summary>守卫通知策略下拉框下标，与 <see cref="GuardNotifyMode"/> 枚举值一致。</summary>
+    [ObservableProperty]
+    public partial int GuardNotifyModeIndex { get; set; }
+
     /// <summary>主题下拉框下标，与 <see cref="ThemePreference"/> 枚举值一致。</summary>
     [ObservableProperty]
     public partial int ThemeIndex { get; set; }
@@ -114,6 +118,15 @@ public partial class SettingsViewModel : ObservableObject
     // 文案点明「面板」，避免用户以为还是气泡。枚举取值与下标对应关系不变。
     public ObservableCollection<string> NotifyModes { get; } = ["仅失败时弹出面板", "总是弹出面板", "从不弹出面板"];
 
+    /// <summary>守卫通知策略下拉框的选项（D80）。</summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="NotifyModes"/> 是**两回事**，不能合并：那边管的是"调度结束后
+    /// 弹不弹进度面板"，这边管的是"守卫巡检发现自启动项变化时发不发系统通知"。
+    /// 载体也不同（应用内面板 vs 系统通知中心），枚举类型因此各有一个
+    /// （见 <see cref="GuardNotifyMode"/> 的备注）。
+    /// </remarks>
+    public ObservableCollection<string> GuardNotifyModes { get; } = ["有变化时通知", "从不通知"];
+
     /// <summary>主题下拉框的选项。</summary>
     public ObservableCollection<string> ThemeOptions { get; } = ["跟随系统", "浅色", "深色"];
 
@@ -128,6 +141,7 @@ public partial class SettingsViewModel : ObservableObject
             RebuildPresets(settings);
             RetryCount = Math.Clamp(settings.RetryCount, 0, 5);
             NotifyModeIndex = (int)settings.NotifyMode;
+            GuardNotifyModeIndex = (int)settings.GuardNotifyMode;
             ThemeIndex = (int)settings.Theme;
             NewPresetValue = double.NaN;
             StatusText = string.Empty;
@@ -148,6 +162,23 @@ public partial class SettingsViewModel : ObservableObject
         }
 
         Persist(settings => settings.NotifyMode = (NotifyMode)index);
+    }
+
+    /// <summary>守卫通知策略被用户改变：立即落盘（D80）。</summary>
+    /// <param name="index">下拉框下标。</param>
+    /// <remarks>
+    /// 只影响"发现变化后**要不要发通知**"，不影响守卫本身是否巡检：
+    /// 选「从不通知」时守卫照样扫描、纠正写回、更新基线，只是不打扰用户
+    /// （见 <c>Program.Notify</c> 的 Never 分支）。
+    /// </remarks>
+    public void SetGuardNotifyMode(int index)
+    {
+        if (_loading || index < 0)
+        {
+            return;
+        }
+
+        Persist(settings => settings.GuardNotifyMode = (GuardNotifyMode)index);
     }
 
     /// <summary>重试次数被用户改变：立即落盘（收敛到 0–5）。</summary>

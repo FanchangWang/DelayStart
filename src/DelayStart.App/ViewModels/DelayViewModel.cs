@@ -24,6 +24,11 @@ namespace DelayStart.App.ViewModels;
 /// 本页只有列表一种视图。时间轴视图已按 <c>D37 = B</c> 整体删除
 /// （原设计的双视图 + 搜索态同步过滤是本页最容易长 bug 的分支）。
 /// </para>
+/// <para>
+/// 2026-09-22（D81）：**失效条目并入本页** —— 不再有独立的「失效条目」页面。
+/// 失效行由 <see cref="DelayRow"/> 的 <c>IsStale</c> 系列标志表达，
+/// 清理动作（删除 / 转为手动）就在行内。
+/// </para>
 /// </remarks>
 public sealed partial class DelayViewModel : ObservableObject
 {
@@ -61,7 +66,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <param name="configStore">配置读写端。</param>
     /// <param name="scanner">扫描服务，仅用于判断条目是否已失效（E3）。</param>
     /// <param name="takeover">接管 / 释放服务。</param>
-    /// <param name="editor">条目级编辑服务（改延时 / 切开关 / 调顺序 / 手动添加）。</param>
+    /// <param name="editor">条目级编辑服务（改延时 / 切开关 / 调顺序 / 手动添加 / 删除 / 转手动）。</param>
     /// <param name="icons">图标提取服务（D30）。</param>
     /// <param name="scanCache">扫描缓存（移出后标记对应来源过期，供来源页重扫，D41）。</param>
     /// <param name="log">日志接收端。</param>
@@ -135,15 +140,27 @@ public sealed partial class DelayViewModel : ObservableObject
                     () =>
                     {
                         var scan = _scanner.Scan();
-                        _canJudgeStaleness = !scan.HasFailures;
-                        _knownKeys = new HashSet<string>(
-                            scan.Entries.Select(static entry => entry.Id),
-                            StringComparer.Ordinal);
+                        _scanHadFailures = scan.HasFailures;
+
+                        var config = _configStore.Load();
+
+                        var failures = scan.Failures
+                            .Select(static failure => new ScanScope(failure.Source, failure.Scope))
+                            .ToArray();
+
+                        // 失效判定交给 Core 的策略而不是"扫描结果里找不到就算失效"：
+                        // 后者只能发现孤儿，发现不了"启动项还在、程序文件没了"（FR-1.10）。
+                        _staleKinds = GuardStalePolicy
+                            .SelectStaleItems(config.Items, scan.Entries, failures)
+                            .ToDictionary(
+                                static stale => stale.Item.Id,
+                                static stale => stale.Kind,
+                                StringComparer.Ordinal);
 
                         // 图标提取在同一个后台任务里顺带完成：单张 5~15ms，
                         // 放 UI 线程会把刷新冻住；单独开任务又多一次线程切换。
                         var pixels = new Dictionary<DelayedItem, IconPixels?>();
-                        foreach (var item in _configStore.Load().Items)
+                        foreach (var item in config.Items)
                         {
                             var source = IconSourceOf(item);
                             pixels[item] = source is null ? null : _icons.TryGetIcon(source);
@@ -170,11 +187,11 @@ public sealed partial class DelayViewModel : ObservableObject
         }
     }
 
-    /// <summary>最近一次后台扫描中仍然存在的条目标识（E3 失效判定的依据）。</summary>
-    private HashSet<string> _knownKeys = new(StringComparer.Ordinal);
+    /// <summary>最近一次后台扫描得出的失效条目（主键 → 失效类型）。</summary>
+    private Dictionary<string, StaleKind> _staleKinds = new(StringComparer.Ordinal);
 
-    /// <summary>当前 <see cref="_knownKeys"/> 是否完整到可以下"失效"结论。</summary>
-    private bool _canJudgeStaleness;
+    /// <summary>最近一次后台扫描是否有来源整体失败（只影响那行提示文案）。</summary>
+    private bool _scanHadFailures;
 
     /// <summary>同步读取配置并刷新列表。页面首次进入时调用。</summary>
     public void Load()
@@ -200,24 +217,29 @@ public sealed partial class DelayViewModel : ObservableObject
         ApplySettings(config.Settings);
 
         // 失效判定需要"系统里还有没有这一项"（来自 RefreshAsync 的后台扫描快照）。
-        // 扫描整体失败时无法判断，此时**一律不标失效** —— 误标会让用户把好条目删掉，
-        // 代价远大于漏标。页面尚未刷新过时同样不判（快照为空且不可判定）。
-        var canJudgeStaleness = _canJudgeStaleness;
+        // 扫描整体失败时快照为空，此时**一律不标失效** —— 误标会让用户把好条目删掉，
+        // 代价远大于漏标。页面尚未刷新过时同样不判（快照为空）。
+        var staleKinds = _staleKinds;
 
         Rows.Clear();
         var order = 0;
         foreach (var item in config.Items.OrderBy(static item => item, StartupSortComparer.Instance))
         {
-            var stale = canJudgeStaleness && !item.IsManual && !_knownKeys.Contains(item.Id);
+            var staleKind = staleKinds.TryGetValue(item.Id, out var kind) ? kind : (StaleKind?)null;
+
+            // 「转为手动」的前提是目标程序还在（D81）。只在失效行上做这个判断 ——
+            // 正常行不显示这个按钮，为它们各做一次文件探测纯属浪费。
+            var canConvert = staleKind is not null && File.Exists(item.Path);
+
             var pixels = _pendingPixels.GetValueOrDefault(item) ?? _icons.TryGetIcon(IconSourceOf(item) ?? string.Empty);
-            Rows.Add(new DelayRow(item, stale, pixels) { Order = ++order });
+            Rows.Add(new DelayRow(item, staleKind, canConvert, pixels) { Order = ++order });
         }
 
         RebuildGroups();
 
-        ErrorText = canJudgeStaleness
-            ? null
-            : "系统扫描未完全成功，暂时无法判断哪些条目已失效。";
+        ErrorText = _scanHadFailures
+            ? "系统扫描未完全成功，部分条目的失效状态暂时无法判断。"
+            : null;
         OnPropertyChanged(nameof(IsEmpty));
     }
 
@@ -277,6 +299,61 @@ public sealed partial class DelayViewModel : ObservableObject
         }
 
         return outcome;
+    }
+
+    /// <summary>
+    /// 删除一个**失效**条目：只从配置里移除，绝不动系统（D81）。
+    /// </summary>
+    /// <param name="row">要删除的行。</param>
+    /// <exception cref="StartupOperationException">配置写盘失败，或该条目已不在配置里。</exception>
+    /// <remarks>
+    /// <para>
+    /// 与「移出延时」不是一回事，两者不能互相替代：
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><b>移出延时</b>（<see cref="Release"/>）会**恢复系统的原始自启动项** ——
+    /// 它假设那个系统项还存在、还归我们管；</description></item>
+    /// <item><description><b>删除</b>只删配置：孤儿条目的系统项早已被删除，没有还原对象；
+    /// 目标程序已不存在的条目保持"最后一次纠正后的禁用态"最干净 ——
+    /// 把路径残缺的项重新启用既没意义，又制造一条开机报错。</description></item>
+    /// </list>
+    /// <para>
+    /// 删除后调度端不再调度它，运行日志里那条"每次登录都失败"的记录也随之消失。
+    /// </para>
+    /// </remarks>
+    public void Remove(DelayRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        if (!_editor.Remove(row.Item.Id))
+        {
+            throw new StartupOperationException(
+                StartupFailureReason.Unknown,
+                row.Item.Id,
+                $"配置里已经没有『{row.Item.Name}』，列表可能已过期，请刷新后重试。");
+        }
+
+        Load();
+    }
+
+    /// <summary>
+    /// 把一个失效条目转成**手动条目**：留着它，但不再去系统里找它（D81）。
+    /// </summary>
+    /// <param name="row">要转换的行。</param>
+    /// <exception cref="StartupOperationException">目标程序已不存在，或配置写盘失败。</exception>
+    /// <remarks>
+    /// 用于"程序还是我想要的，只是它当初的自启动项已经没了"这一种场景：
+    /// 转换后条目与系统完全脱钩，但调度端照样按当前的延时 / 参数 / 身份启动它。
+    /// 前提与判定都在 <see cref="DelayRow.CanConvertToManual"/> 与
+    /// <see cref="ConfigEditService.ConvertToManual"/> 里（两侧都查一遍文件，
+    /// 服务层不假设调用方守规矩）。
+    /// </remarks>
+    public void ConvertToManual(DelayRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        _ = _editor.ConvertToManual(row.Item.Id);
+        Load();
     }
 
     /// <summary>保存一次编辑（改延时 / 身份 / 参数，手动条目还可改名称与路径）。</summary>

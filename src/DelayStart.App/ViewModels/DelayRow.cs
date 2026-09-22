@@ -1,7 +1,10 @@
+using System.Collections.ObjectModel;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 
 using DelayStart.App.Services;
 using DelayStart.Core.Models;
+using DelayStart.Core.Services;
 using DelayStart.Management.Models;
 
 using Microsoft.UI.Xaml.Media;
@@ -22,23 +25,32 @@ namespace DelayStart.App.ViewModels;
 /// 因此 <see cref="Order"/> 与 <see cref="IsEnabled"/> 变成可通知属性，
 /// 其余字段仍随行对象不可变（整表 <c>Load()</c> 时才重建行）。
 /// </para>
+/// <para>
+/// 2026-09-22（D81）：失效条目不再是独立页面，而是**留在本列表里被标出来**。
+/// 于是一行有两种形态：正常行（开关 + 编辑 / 移出延时）与失效行
+/// （「已失效」文字 + 删除 / 转为手动）。三组显隐标志
+/// （<see cref="IsNormal"/> / <see cref="IsStale"/> / <see cref="CanConvertToManual"/>）
+/// 就是这件事在界面上的全部表达，XAML 只管照着摆。
+/// </para>
 /// </remarks>
 public sealed class DelayRow : ObservableObject
 {
     /// <summary>构造行。</summary>
     /// <param name="item">配置里的延时条目。</param>
-    /// <param name="isStale">该条目对应的系统自启动项是否已不存在（失效）。</param>
+    /// <param name="staleKind">失效类型；不是失效条目时为 <see langword="null"/>。</param>
+    /// <param name="canConvertToManual">能否转成手动条目（要求目标程序还在，见 D81）。</param>
     /// <param name="iconPixels">该条目的图标像素；提取失败为 <see langword="null"/>（显示占位符）。</param>
-    public DelayRow(DelayedItem item, bool isStale, IconPixels? iconPixels)
+    public DelayRow(DelayedItem item, StaleKind? staleKind, bool canConvertToManual, IconPixels? iconPixels)
     {
         ArgumentNullException.ThrowIfNull(item);
         Item = item;
-        IsStale = isStale;
+        StaleKind = staleKind;
+        CanConvertToManual = canConvertToManual;
         Icon = IconRenderer.ToImageSource(iconPixels);
         _isEnabled = item.Enabled;
     }
 
-    /// <summary>原始条目，供移除 / 编辑取用。</summary>
+    /// <summary>原始条目，供移除 / 编辑 / 删除 / 转手动取用。</summary>
     public DelayedItem Item { get; }
 
     /// <summary>条目图标；提取失败为 <see langword="null"/>，XAML 用占位符代替。</summary>
@@ -92,13 +104,49 @@ public sealed class DelayRow : ObservableObject
     public string SourceText => DisplayText.SourceOf(Item.Source);
 
     /// <summary>
-    /// 该条目对应的系统项是否已失效（路径不存在 / 任务被删）。
+    /// 该条目对应的系统项是否已失效（孤儿 / 目标程序不存在，见 <see cref="GuardStalePolicy"/>）。
     /// </summary>
     /// <remarks>
+    /// <para>
     /// 失效条目**仍留在列表里**，只是标注出来 —— 配置里留着它，用户才能看见
     /// "我配过这个，但它没了"并且主动清理。静默丢弃会让用户以为配置丢失。
+    /// </para>
+    /// <para>
+    /// 判定**不能只看"扫描结果里找不到它"**：那只能发现孤儿，发现不了
+    /// "启动项还在、程序文件没了"（FR-1.10）。两类都由 <see cref="GuardStalePolicy"/> 统一给出。
+    /// </para>
     /// </remarks>
-    public bool IsStale { get; }
+    public StaleKind? StaleKind { get; }
+
+    /// <summary>是否为失效条目。</summary>
+    public bool IsStale => StaleKind is not null;
+
+    /// <summary>
+    /// 是否为正常条目。
+    /// </summary>
+    /// <remarks>
+    /// <c>x:Bind</c> 不支持取反表达式（<c>!IsStale</c>），所以给一个正面属性：
+    /// 直接写 <c>{x:Bind !IsStale}</c> 是编译错误，而在 XAML 里做取反转换器
+    /// 又是本项目已经踩过的坑（SettingsPage 那套转换器就为了同一件事存在）。
+    /// </remarks>
+    public bool IsNormal => StaleKind is null;
+
+    /// <summary>失效原因的一句话（同时用作「已失效」文字的 Tooltip）。</summary>
+    public string StaleReason => StaleKind switch
+    {
+        Core.Services.StaleKind.Orphan => "原本接管的系统启动项已被删除（软件卸载或被手动清理），无处可还原、也无人可启动。",
+        Core.Services.StaleKind.Missing => $"目标程序已不存在：{Item.Path}",
+        _ => string.Empty,
+    };
+
+    /// <summary>
+    /// 能否转成手动条目（D81）。
+    /// </summary>
+    /// <remarks>
+    /// 前提是**目标程序还在**：条目已经失去系统锚点，路径再失效的话转成手动
+    /// 只会得到"每次登录失败一次"的定时炸弹 —— 那种情况下只该给「删除」。
+    /// </remarks>
+    public bool CanConvertToManual { get; }
 
     private bool _isEnabled;
 

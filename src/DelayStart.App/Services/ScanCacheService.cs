@@ -48,7 +48,7 @@ public sealed class ScanCacheService : IDisposable
     /// <param name="log">日志接收端。</param>
     public ScanCacheService(
         ScanService scanner,
-        IEnumerable<IStartupSource> sources,
+        IReadOnlyList<IStartupSource> sources,
         IAppConfigStore configStore,
         IconProvider icons,
         ILogSink log)

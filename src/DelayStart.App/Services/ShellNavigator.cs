@@ -19,6 +19,40 @@ public interface INavigationTarget
 }
 
 /// <summary>
+/// 页面可以在被跨进程通知定位到时重读自己的数据。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 存在的原因是一个真实的失败（2026-09-22 用户回报"点通知不刷新延时启动的数据，
+/// 需要手动刷新"）。跨进程定位走"给 <c>NavigationView.SelectedItem</c> 赋新值 →
+/// <c>SelectionChanged</c> → 换页"，两种情况都会留下旧数据：
+/// </para>
+/// <list type="bullet">
+/// <item><description>
+/// <b>目标页就是当前页</b> —— 给同一个项重新赋值不会再触发事件，页面既不重建、
+/// <c>Loaded</c> 也不再触发。用户看到的是"窗口弹到前面了，列表还是旧的"。
+/// </description></item>
+/// <item><description>
+/// <b>确实切了过去</b> —— 自启动项各页读的是启动时那一份扫描缓存（bug#7 的秒回优化），
+/// 而通知说的"有变化"恰恰是缓存里还没有的信息。
+/// </description></item>
+/// </list>
+/// <para>
+/// 只给"会被通知定位到"的页面实现：<c>延时启动</c>（失效条目）、
+/// 四个来源共用的 <c>自启动项</c>（新增条目）、<c>运行日志</c>（调度端通知）。
+/// </para>
+/// </remarks>
+public interface IReloadablePage
+{
+    /// <summary>重新读取本页数据（在 UI 线程上调用）。</summary>
+    /// <remarks>
+    /// 实现应当**异步发起、立即返回**（命令式重载），不要在这里同步等待扫描 ——
+    /// 它是在处理一次唤起信号，卡住 UI 线程会让"点了通知窗口反而不响应"。
+    /// </remarks>
+    void Reload();
+}
+
+/// <summary>
 /// 页面 → 外壳的跨页导航（总览页的计数 chip、分区链接跳到对应菜单）。
 /// </summary>
 /// <remarks>

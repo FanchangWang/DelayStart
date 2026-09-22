@@ -261,6 +261,108 @@ public sealed class ConfigEditService
         return true;
     }
 
+    /// <summary>
+    /// 从配置里移除一个条目（守卫的"失效条目清理"，D77）。
+    /// </summary>
+    /// <param name="itemId">条目主键。</param>
+    /// <returns>确实移除了为 <see langword="true"/>；配置里没有该条目时为 <see langword="false"/>（不写文件）。</returns>
+    /// <remarks>
+    /// <para>
+    /// 🔴 **只动配置，绝不碰系统自启动项**，两个来源都不需要动：
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><b>孤儿条目</b>（系统项已被整个删除）—— 根本没有可还原的对象；</description></item>
+    /// <item><description><b>已失效条目</b>（目标程序已不存在）—— 保持"最后一次纠正后的禁用态"
+    /// 最干净：把文件路径残缺的项重新启用，既没意义又制造一条开机报错。</description></item>
+    /// </list>
+    /// <para>
+    /// 移除后调度端不再调度它，运行日志里那条"永远失败"的记录也随之消失 ——
+    /// 这正是用户在失效条目视图里点「清理」想要的结果。
+    /// </para>
+    /// </remarks>
+    public bool Remove(string itemId)
+    {
+        ArgumentNullException.ThrowIfNull(itemId);
+
+        var config = _configStore.Load();
+        if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, itemId, StringComparison.Ordinal)) == 0)
+        {
+            return false;
+        }
+
+        _configStore.Save(config);
+        _log.Info($"已从配置移除失效条目（{itemId}）");
+        return true;
+    }
+
+    /// <summary>
+    /// 把一个**失效**条目转成手动条目（D81，2026-09-22 用户批复）。
+    /// </summary>
+    /// <param name="itemId">条目主键。</param>
+    /// <returns>确实转过为 <see langword="true"/>；本来就已经是手动条目时为 <see langword="false"/>（不写文件）。</returns>
+    /// <exception cref="StartupOperationException">目标程序不存在（<see cref="StartupFailureReason.TargetMissing"/>）或配置里没有该条目。</exception>
+    /// <remarks>
+    /// <para>
+    /// 语义：用户明确表示"这条我还要，但别再去系统里找它了"。转换后条目在系统中没有任何锚点，
+    /// 与「手动添加」产出的条目完全同形 —— 调度端照样按配置的路径 / 参数 / 延迟启动它，
+    /// 但它不再参于失效判定（<see cref="GuardStalePolicy"/> 跳过手动条目）。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>必须重新生成主键</b>：原主键里带着来源定位分量（<c>ItemKeyBuilder</c>），
+    /// 留着它会让"这条手动条目"看起来仍然是那个系统项（来源页会误判成"已接管"），
+    /// 也会在系统项哪天回来时与真正的系统项撞主键。换成 <c>ForManual()</c> 之后，
+    /// 它就是一个全新的、系统里查无此物的条目。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>前提是目标程序必须还在</b>：条目已经失去系统锚点，路径再失效的话
+    /// 转成手动只会得到"每次登录失败一次"的定时炸弹 —— 那种情况下唯一的合理动作是删除。
+    /// 判据是文件存在性（不是"扫描说它 Missing"），因为扫描结果可能来自上一次快照。
+    /// </para>
+    /// <para>
+    /// ⚠️ 转换会丢掉 <see cref="DelayedItem.OriginalState"/>，也就是丢掉"把系统项还原回去"的依据。
+    /// 这是可以接受的：能用得上这条路的条目，其系统项**已经不存在了**（孤儿），没有还原对象；
+    /// 界面侧也只在目标文件存在时才给这个按钮，而"系统项还在但文件没了"那类（Missing）
+    /// 本就只给「删除」。
+    /// </para>
+    /// </remarks>
+    public bool ConvertToManual(string itemId)
+    {
+        ArgumentNullException.ThrowIfNull(itemId);
+
+        var config = _configStore.Load();
+        var item = Find(config, itemId);
+
+        if (item.IsManual)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(item.Path) || !File.Exists(item.Path))
+        {
+            throw new StartupOperationException(
+                StartupFailureReason.TargetMissing,
+                itemId,
+                $"目标程序已不存在，无法转为手动条目：{item.Path}");
+        }
+
+        var previousId = item.Id;
+        item.Id = ItemKeyBuilder.ForManual();
+
+        // 三个定位分量清空 = "系统里没有对应物"，与 AddManual 产出的条目保持一致。
+        item.Source = StartupSource.Manual;
+        item.Scope = StartupScope.None;
+        item.SourceKey = string.Empty;
+        item.SourceDetail = string.Empty;
+
+        // 手动条目从不经历接管，也就没有接管前的状态要还原；取 true 表示
+        // "按用户配置的身份启动"（同 AddManual 的理由）。
+        item.OriginalState = new OriginalState { WasEnabled = true };
+
+        _configStore.Save(config);
+        _log.Info($"已把『{item.Name}』转为手动条目（{previousId} → {item.Id}）");
+        return true;
+    }
+
     /// <summary>按主键取条目；找不到就抛带 <c>EntryId</c> 的异常。</summary>
     /// <param name="config">配置。</param>
     /// <param name="itemId">条目主键。</param>

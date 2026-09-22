@@ -35,8 +35,19 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
         _config = Copy(config);
     }
 
+    /// <summary>非空时 <see cref="Load"/> 抛出它（模拟"配置版本高于本程序"这类拒绝加载的场景）。</summary>
+    public Exception? LoadException { get; init; }
+
     /// <inheritdoc />
-    public AppConfig Load() => Copy(_config);
+    public AppConfig Load()
+    {
+        if (LoadException is not null)
+        {
+            throw LoadException;
+        }
+
+        return Copy(_config);
+    }
 
     /// <inheritdoc />
     public void Save(AppConfig config)
@@ -79,5 +90,8 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
         RetryCount = source.RetryCount,
         Theme = source.Theme,
         LastRunId = source.LastRunId,
+        GuardMode = source.GuardMode,
+        GuardMinutes = source.GuardMinutes,
+        GuardNotifyMode = source.GuardNotifyMode,
     };
 }

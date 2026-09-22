@@ -32,13 +32,15 @@ namespace DelayStart.App.Cli;
 /// <param name="Scanner">全量扫描服务。</param>
 /// <param name="Takeover">接管 / 释放服务。</param>
 /// <param name="TaskRegistrar">调度计划任务注册端。</param>
+/// <param name="GuardRegistrar">守卫计划任务注册端（卸载时随 <c>--restore-all</c> 一并删除，D74）。</param>
 internal sealed record CliServices(
     PathService Paths,
     ILogSink Log,
     IAppConfigStore ConfigStore,
     ScanService Scanner,
     TakeoverService Takeover,
-    ISchedulerTaskRegistrar TaskRegistrar)
+    ISchedulerTaskRegistrar TaskRegistrar,
+    IGuardTaskRegistrar GuardRegistrar)
 {
     /// <summary>
     /// 从共享容器解析 CLI 需要的服务。
@@ -59,6 +61,7 @@ internal sealed record CliServices(
             services.GetRequiredService<IAppConfigStore>(),
             services.GetRequiredService<ScanService>(),
             services.GetRequiredService<TakeoverService>(),
-            services.GetRequiredService<ISchedulerTaskRegistrar>());
+            services.GetRequiredService<ISchedulerTaskRegistrar>(),
+            services.GetRequiredService<IGuardTaskRegistrar>());
     }
 }

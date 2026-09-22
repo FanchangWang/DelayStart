@@ -59,6 +59,33 @@ public sealed class Settings
     /// <summary>管理端界面主题（FR-9 主题设置）。</summary>
     public ThemePreference Theme { get; set; } = ThemePreference.FollowSystem;
 
+    /// <summary>
+    /// 自启动项守卫的运行模式（D74，2026-09-22 用户批复）。
+    /// </summary>
+    /// <remarks>
+    /// 默认 <see cref="GuardMode.OnceAfterLogin"/>：装完就有一层保护，不需要用户先去发现这个功能。
+    /// 档位与间隔一起决定计划任务的触发规则（见 <c>GuardSchedulePlan</c>）。
+    /// </remarks>
+    public GuardMode GuardMode { get; set; } = GuardMode.OnceAfterLogin;
+
+    /// <summary>
+    /// 守卫的间隔档位（分钟）—— 只允许取 <see cref="GuardPresets.Minutes"/> 里的值。
+    /// </summary>
+    /// <remarks>
+    /// 默认 30（2026-09-22 用户批复）。加载时由 <c>ConfigService</c> 把非法值收拢到
+    /// <see cref="GuardPresets.DefaultMinutes"/>，因此这里读到的一定是合法档位。
+    /// </remarks>
+    public int GuardMinutes { get; set; } = GuardPresets.DefaultMinutes;
+
+    /// <summary>
+    /// 守卫的通知策略（D80，2026-09-22 用户批复）。
+    /// </summary>
+    /// <remarks>
+    /// 默认 <see cref="GuardNotifyMode.OnChange"/>：守卫生成的价值主要来自"告诉你系统里多了 /
+    /// 少了什么"，默认静默等于让这个功能白跑。取值见设置页「守卫 · 通知策略」。
+    /// </remarks>
+    public GuardNotifyMode GuardNotifyMode { get; set; } = GuardNotifyMode.OnChange;
+
     /// <summary>最近一次运行的 <c>runId</c>，供管理端总览页横幅使用（FR-6.7）。从未运行时为 <see langword="null"/>。</summary>
     public string? LastRunId { get; set; }
 }

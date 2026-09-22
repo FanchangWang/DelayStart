@@ -17,6 +17,13 @@ public sealed partial class OverviewPage : Page
 {
     private readonly ShellNavigator _navigator;
 
+    /// <summary>
+    /// 初始化守卫：x:Bind 初始化 / <c>LoadAsync</c> 回灌档位时会触发一次
+    /// <c>SelectionChanged</c> —— 那一**不能落盘**（否则每次进总览页都会重存一遍档位）。
+    /// 与设置页 <c>SettingsPage._initialized</c> 同款做法。
+    /// </summary>
+    private bool _initialized;
+
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
     /// <param name="navigator">跨页导航器：计数 chip 跳到对应菜单项。</param>
@@ -36,10 +43,11 @@ public sealed partial class OverviewPage : Page
     /// <summary>本页的 ViewModel，供 <c>x:Bind</c> 使用。</summary>
     public OverviewViewModel ViewModel { get; }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         Loaded -= OnLoaded;
-        _ = ViewModel.LoadAsync();
+        await ViewModel.LoadAsync();
+        _initialized = true;
     }
 
     private void OnGoRegistry(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.ItemsRegistryTag);
@@ -55,4 +63,18 @@ public sealed partial class OverviewPage : Page
 
     /// <summary>「查看运行日志 →」：跳运行日志页（2026-09-21 批复）。</summary>
     private void OnGoRuns(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.RunsTag);
+
+    /// <summary>守卫档位被用户改变：立即落盘并同步计划任务。⚠️ 回灌事件在这里被挡掉。</summary>
+    private void OnGuardModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        if (sender is ComboBox { SelectedIndex: var index })
+        {
+            ViewModel.SetGuardIndex(index);
+        }
+    }
 }

@@ -280,8 +280,24 @@ internal sealed class SchedulerEngine
     }
 
     /// <summary>发起一次启动；失败且仍有重试额度时立即重试（同一次运行内，FR-9.6）。</summary>
+    /// <remarks>
+    /// 🔴 <b>首轮先做防双启动判定</b>（D76，2026-09-22 用户批复）。
+    /// "仅首轮"是刻意的：<see cref="Evaluate"/> 复查失败后的重试本来就可能撞上
+    /// "上一次尝试真的把进程拉起来了"，若重试轮也判定，会把正常重试误判成"已存在"而放弃。
+    /// </remarks>
     private void Launch(SchedulerRuntimeItem runtime)
     {
+        if (runtime.Result.Attempts == 0 && ShouldSkipAsAlreadyRunning(runtime.Item, out var skipReason))
+        {
+            // 🔴 标 Skipped 而不是 Failed（D1 A）：FailureStreakService 只认 Failed，
+            // 一次 Failed 就推进失败连击、触发托盘角标与失败横幅 —— 而"进程已经在跑"
+            // 根本不是失败。Skipped 语义准确，且天然不污染连击统计。
+            runtime.Result.State = RunItemState.Skipped;
+            runtime.Result.Reason = skipReason;
+            _log.Info($"『{runtime.Item.Name}』{skipReason}");
+            return;
+        }
+
         while (true)
         {
             runtime.Result.Attempts++;
@@ -308,6 +324,79 @@ internal sealed class SchedulerEngine
                 + TimeSpan.FromMilliseconds(LaunchResultEvaluator.RecheckDelayMilliseconds);
             return;
         }
+    }
+
+    /// <summary>
+    /// 启动前判断目标进程是否已在运行（D76）。
+    /// </summary>
+    /// <param name="item">条目。</param>
+    /// <param name="reason">命中时的原因文案；未命中为空串。</param>
+    /// <returns>应放弃启动时为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 🔴 整条链路都往"宁可多启动一次"一侧倒（见 <see cref="LaunchTargetResolver"/> /
+    /// <see cref="DuplicateLaunchPolicy"/> 的类注释）：推导不出目标、枚举进程失败、
+    /// 读不到模块路径一律**放行**。漏判只是多跑一个进程；误判"已存在"会让用户的条目
+    /// 永远不启动 —— 后者是功能回归。
+    /// </remarks>
+    private bool ShouldSkipAsAlreadyRunning(DelayedItem item, out string reason)
+    {
+        reason = string.Empty;
+
+        var target = LaunchTargetResolver.Resolve(item);
+        if (target is null)
+        {
+            return false;
+        }
+
+        IReadOnlyList<RunningProcessInfo> processes;
+        try
+        {
+            processes = CollectRunningProcesses(target.ProcessName);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(ex, $"『{item.Name}』防双启动检查失败，本次按「未运行」处理并照常启动。");
+            return false;
+        }
+
+        if (!DuplicateLaunchPolicy.Decide(target, processes).Skip)
+        {
+            return false;
+        }
+
+        reason = "进程已存在，未重复启动";
+        return true;
+    }
+
+    /// <summary>枚举同名进程并取各自的可执行模块路径。</summary>
+    /// <param name="processName">进程名（不含扩展名）。</param>
+    /// <returns>进程快照；模块路径读不到时为 <see langword="null"/>（该进程不参与判定）。</returns>
+    private static List<RunningProcessInfo> CollectRunningProcesses(string processName)
+    {
+        var snapshot = new List<RunningProcessInfo>();
+
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            using (process)
+            {
+                string? modulePath = null;
+                try
+                {
+                    // 提权不足 / 受保护进程 / 进程刚退出都会在这里抛 —— 属预期，按"读不到"处理。
+                    modulePath = process.MainModule?.FileName;
+                }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception
+                    or InvalidOperationException
+                    or NotSupportedException)
+                {
+                    // 故意留空：读不到模块路径的进程不算命中（不能退化成按名字匹配）。
+                }
+
+                snapshot.Add(new RunningProcessInfo(process.ProcessName, modulePath));
+            }
+        }
+
+        return snapshot;
     }
 
     /// <summary>复查窗口到期：探测进程状态并做最终判定（机制 7）。</summary>

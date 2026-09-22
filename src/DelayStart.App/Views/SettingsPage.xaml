@@ -29,6 +29,9 @@
            - 限宽回 1000 并居中 —— 已核实 PowerToys 源码（Settings.UI/SettingsXAML/App.xaml）：
              <x:Double x:Key="PageMaxWidth">1000</x:Double>，PageStyle 把它挂在内容容器上；
            - 预设延时两个边框：第一个左描述右（输入框 + 添加按钮），第二个胶囊一行多个。
+        ⑦ 2026-09-22 批复（D80）：新增「守卫」分节，目前只有一项「通知策略」
+           （有变化时通知 / 从不通知）—— 它管的是守卫发现自启动项变化后发不发系统通知，
+           与「调度」分节里的同名卡片（管调度结束弹不弹面板）互不相干。
     -->
     <Grid RowSpacing="12">
         <Grid.RowDefinitions>
@@ -185,6 +188,19 @@
                             SpinButtonPlacementMode="Compact"
                             ValueChanged="OnRetryChanged"
                             Value="{x:Bind ViewModel.RetryCount, Mode=TwoWay}" />
+                    </stc:SettingsCard>
+                </StackPanel>
+
+                <!-- ── 守卫 ──（2026-09-22 批复：新增分节，目前只有通知策略一项） -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="守卫" />
+
+                <StackPanel Spacing="2">
+                    <stc:SettingsCard Description="守卫巡检发现自启动项新增或失效时，是否发系统通知（右下角通知中心，点击可回到本程序）；无论选哪项，纠正与记录都照常进行" Header="通知策略">
+                        <ComboBox
+                            MinWidth="160"
+                            ItemsSource="{x:Bind ViewModel.GuardNotifyModes}"
+                            SelectedIndex="{x:Bind ViewModel.GuardNotifyModeIndex, Mode=TwoWay}"
+                            SelectionChanged="OnGuardNotifyModeChanged" />
                     </stc:SettingsCard>
                 </StackPanel>
 

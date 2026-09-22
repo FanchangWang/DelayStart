@@ -81,7 +81,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         ScanCacheService cache,
         TakeoverService takeover,
         ConfigEditService editor,
-        IEnumerable<IStartupSource> sources,
+        IReadOnlyList<IStartupSource> sources,
         IAppConfigStore configStore,
         ILogSink log)
     {

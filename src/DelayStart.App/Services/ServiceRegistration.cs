@@ -87,8 +87,26 @@ internal static class ServiceRegistration
         // "每次都跑"就是它的语义，不靠容器保证只解析一次；Singleton 与配置 / 日志同一批。
         services.AddSingleton<SchedulerTaskBootstrap>();
 
+        // 守卫计划任务（D74，2026-09-22 批复）：注册端 + 启动期同步。
+        // 与调度任务同款"每次启动检测、缺失即补建"，另加档位同步与"关闭即删除"，
+        // 因为守卫的档位是可配的、还能整体关掉（见 GuardTaskBootstrap 的注释）。
+        services.AddSingleton<IGuardTaskRegistrar, GuardTaskRegistrar>();
+        services.AddSingleton<GuardTaskBootstrap>();
+
+        // 守卫巡检本体（D74）：扫描 → 纠正 → 新增/失效 → 更新基线。
+        // 基线存储单例 —— 它只是一个文件读写器，多份实例没有意义；
+        // GuardService 单例与 ScanService 一致（两者都无状态）。
+        services.AddSingleton<GuardBaselineStore>();
+        services.AddSingleton<GuardService>();
+
         // 应用内右下角通知（2026-09-21 批复）：成功类提示经它广播到主窗口的通知面板。
         services.AddSingleton<ToastService>();
+
+        // 系统通知的身份登记（D80，2026-09-22 批复）：开始菜单快捷方式写 AUMID +
+        // 注册 delaystart:// 协议处理器。守卫进程发 Toast 需要 AUMID 先存在，
+        // 而它可能在任何一次 GUI 启动之前就被计划任务唤起 —— 所以管理端每次启动
+        // 都做一次幂等登记（见 App.OnLaunched），不能只在设置页里做。
+        services.AddSingleton<ShellRegistrationService>();
 
         // 主窗口句柄。unpackaged 的文件选择器必须知道自己的宿主窗口，
         // 否则 PickSingleFileAsync 直接抛异常。
@@ -99,6 +117,10 @@ internal static class ServiceRegistration
 
         // ── 跨页导航（UI v2）：总览的计数 chip 跳菜单用 ────────────────────
         services.AddSingleton<ShellNavigator>();
+
+        // ── 跨进程定位请求（D74）：守卫点「查看」/ CLI --goto-startup 写，主窗口读 ──
+        // 单例：它只是一个文件读写器，多处各持一份没有意义。
+        services.AddSingleton<UiRequestChannel>();
 
         // ── 主题（FR-9 主题设置）：读配置 + 切换广播 ────────────────────────
         services.AddSingleton<ThemeService>();
@@ -133,50 +155,20 @@ internal static class ServiceRegistration
     }
 
     /// <summary>
-    /// 注册 7 个来源实例。
+    /// 注册全部自启动来源实例（单个只读列表）。
     /// </summary>
     /// <remarks>
-    /// 🔴 **注册顺序是语义的一部分，不要重排。** 它同时决定两件事：
-    /// ① 自启动项页按来源分组的展示顺序；② <c>--scan</c> 的输出顺序。
-    /// <see cref="ServiceCollectionServiceExtensions"/> 解析 <c>IEnumerable&lt;T&gt;</c>
-    /// 时保持注册顺序，所以改这里的次序会同时改掉两处行为。
-    /// 顺序与 <c>design.md</c> 7.4 的表一致：注册表三项 → 启动文件夹两项 → 计划任务 → UWP。
+    /// 🔴 七个实例的**构造顺序是语义的一部分**，它同时决定自启动项页的来源分组顺序与
+    /// <c>--scan</c> 的输出顺序。顺序本身连同构造过程一起搬到了
+    /// <see cref="StartupSourceFactory"/>（2026-09-22，D74）—— 守卫进程要用同一批实例，
+    /// 而它引用 Management、不引用 App，所以唯一的构造点必须在 Management 侧。
     /// </remarks>
     /// <param name="services">目标容器。</param>
     private static void AddStartupSources(IServiceCollection services)
     {
-        // 注册表三处。⚠️ 32 位视图单独一个实例，它的软禁用标记要写 Run32 而不是 Run（机制 4）。
-        services.AddSingleton<IStartupSource>(static sp => new RegistryStartupSource(
-            StartupScope.Hkcu,
-            sp.GetRequiredService<IClock>(),
-            sp.GetRequiredService<ILogSink>()));
-        services.AddSingleton<IStartupSource>(static sp => new RegistryStartupSource(
-            StartupScope.Hklm,
-            sp.GetRequiredService<IClock>(),
-            sp.GetRequiredService<ILogSink>()));
-        services.AddSingleton<IStartupSource>(static sp => new RegistryStartupSource(
-            StartupScope.HklmWow,
-            sp.GetRequiredService<IClock>(),
-            sp.GetRequiredService<ILogSink>()));
-
-        // 启动文件夹两处。系统级那个需要提权才能读写。
-        services.AddSingleton<IStartupSource>(static sp => new StartupFolderSource(
-            StartupScope.UserFolder,
+        services.AddSingleton<IReadOnlyList<IStartupSource>>(static sp => StartupSourceFactory.Create(
             sp.GetRequiredService<IShellLinkResolver>(),
             sp.GetRequiredService<IClock>(),
-            sp.GetRequiredService<ILogSink>()));
-        services.AddSingleton<IStartupSource>(static sp => new StartupFolderSource(
-            StartupScope.SystemFolder,
-            sp.GetRequiredService<IShellLinkResolver>(),
-            sp.GetRequiredService<IClock>(),
-            sp.GetRequiredService<ILogSink>()));
-
-        // 计划任务。内部会跳过 \Microsoft\* 与调度端自己的任务。
-        services.AddSingleton<IStartupSource>(static sp => new ScheduledTaskSource(
-            sp.GetRequiredService<ILogSink>()));
-
-        // UWP 应用（AppModel 的 State）。
-        services.AddSingleton<IStartupSource>(static sp => new UwpStartupSource(
             sp.GetRequiredService<ILogSink>()));
     }
 }

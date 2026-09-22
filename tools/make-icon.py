@@ -9,6 +9,7 @@
     uv run tools/make-icon.py                # 生成全部（AppIcon + 调度端两枚）
     uv run tools/make-icon.py --roles app    # 只生成管理端 AppIcon.ico
     uv run tools/make-icon.py --roles tray   # 只生成调度端 Scheduler.ico / SchedulerWarning.ico
+    uv run tools/make-icon.py --roles guard  # 只生成守卫 DelayStart.Guard/Assets/Guard.ico
     uv run tools/make-icon.py --info         # 只看源图信息，不写文件
 
 产物（三份都源自同一张 assets/icon/delay.png，改图后重跑本脚本即可）：
@@ -193,7 +194,7 @@ def main() -> int:
     ap.add_argument("--dst", default=str(repo / "src" / "DelayStart.App" / "Assets" / "AppIcon.ico"),
                     help="管理端图标输出路径")
     ap.add_argument("--sizes", default=",".join(str(s) for s in DEFAULT_SIZES))
-    ap.add_argument("--roles", default="app,tray", help="app / tray / app,tray（默认全部）")
+    ap.add_argument("--roles", default="app,tray,guard", help="app / tray / app,tray（默认全部）")
     ap.add_argument("--info", action="store_true", help="只打印源图信息，不生成")
     args = ap.parse_args()
 
@@ -209,7 +210,7 @@ def main() -> int:
         return 0
 
     roles = {role.strip() for role in args.roles.split(",") if role.strip()}
-    unknown = roles - {"app", "tray"}
+    unknown = roles - {"app", "tray", "guard"}
     if unknown:
         print(f"✗ 未知的 --roles：{', '.join(sorted(unknown))}", file=sys.stderr)
         return 2
@@ -219,6 +220,10 @@ def main() -> int:
 
     if "app" in roles:
         write_ico(Path(args.dst), pack_ico([(s, scale(rgba, s)) for s in sizes]), sizes)
+
+    if "guard" in roles:
+        guard_dir = repo / "src" / "DelayStart.Guard" / "Assets"
+        write_ico(guard_dir / "Guard.ico", pack_ico([(s, scale(rgba, s)) for s in sizes]), sizes)
 
     if "tray" in roles:
         tray_dir = repo / "src" / "DelayStart.Scheduler" / "Assets"

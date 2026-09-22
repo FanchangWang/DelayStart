@@ -156,10 +156,11 @@ public sealed class StartupFolderSource : IStartupSource
             SourceKey = fileName,
             SourceDetail = Scope == StartupScope.UserFolder ? "用户启动文件夹" : "系统启动文件夹",
             IsEnabled = !StartupApprovedStore.IsDisabled(Kind, Scope, fileName),
-            // 只有解析成功时才敢判失效：解析失败说明我们不知道它指向哪儿。
-            IsMissing = !string.IsNullOrWhiteSpace(targetPath)
-                && Path.IsPathFullyQualified(targetPath)
-                && !File.Exists(targetPath),
+            // 判失效用的是**解析出来的真实目标**（targetPath），不是回退后的 effectivePath ——
+            // .lnk 文件本身几乎总是存在，拿它判等于永远不失效。解析失败时 targetPath 为空，
+            // TargetFileProbe 对空值返回 false（"不知道指向哪儿" ≠ "目标没了"）。
+            // 判据本体在 TargetFileProbe（2026-09-22 集中，此前三处各写一遍）。
+            IsMissing = TargetFileProbe.IsMissing(targetPath),
             IsProtected = Scope == StartupScope.SystemFolder,
             IsTakenOver = takenOverKeys.Contains(id),
         };

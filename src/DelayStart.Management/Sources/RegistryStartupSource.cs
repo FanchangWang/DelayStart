@@ -156,27 +156,17 @@ public sealed class RegistryStartupSource : IStartupSource
             SourceDetail = DescribeKey(),
             // FR-1.5 / 机制 2：三级回退匹配，少试一个候选就会把已禁用的项误报为启用。
             IsEnabled = !StartupApprovedStore.IsDisabled(Kind, Scope, valueName),
-            IsMissing = IsTargetMissing(parsed.Path),
+            // FR-1.10：判据集中在 TargetFileProbe 一处（2026-09-22）—— 注册表 / 启动文件夹 /
+            // 计划任务原本各写了一遍同一条式子，守卫的手动条目判定还需要第四份。
+            // 其中最要紧的是"只有绝对路径才做存在性检查"：注册表里合法地存在 OneDrive、
+            // SecurityHealth 这类裸命令名（由 PATH 解析），直接 File.Exists 必然为 false。
+            IsMissing = TargetFileProbe.IsMissing(parsed.Path),
             // 注册表 Run 项本身没有"受保护"概念（组策略下发的是 Policy 键，不在这条路径上）。
             IsProtected = false,
             // FR-1.6 / 机制 1：用稳定主键匹配，不用 (Name, Source) 二元组。
             IsTakenOver = takenOverKeys.Contains(id),
         };
     }
-
-    /// <summary>
-    /// 判断目标是否已失效（FR-1.10）。
-    /// </summary>
-    /// <remarks>
-    /// 🔴 只有**绝对路径**才做存在性检查。注册表里合法地存在
-    /// <c>OneDrive</c>、<c>SecurityHealth</c> 这类"裸命令名"（由 <c>PATH</c> 解析），
-    /// 对它们调 <see cref="File.Exists"/> 必然为 <see langword="false"/>，
-    /// 直接标"已失效"会造成大量误报 —— 用户会看到一堆其实好好的程序被打上失效标记。
-    /// </remarks>
-    private static bool IsTargetMissing(string path)
-        => !string.IsNullOrWhiteSpace(path)
-            && Path.IsPathFullyQualified(path)
-            && !File.Exists(path);
 
     private RegistryHive ResolveHive()
         => Scope == StartupScope.Hkcu ? RegistryHive.CurrentUser : RegistryHive.LocalMachine;

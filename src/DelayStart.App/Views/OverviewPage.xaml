@@ -171,6 +171,72 @@
                 </Grid>
             </Border>
 
+            <!-- ── 自启动项守卫（D74，2026-09-22 用户批复）── -->
+            <TextBlock
+                Margin="0,32,0,2"
+                Style="{StaticResource SectionHeaderStyle}"
+                Text="自启动项守卫" />
+
+            <Border
+                Margin="0,10,0,0"
+                Padding="16,12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="7">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 左：说明 + 档位释义 + 失败提示（说明要一句话讲完，
+                         机制细节（写回怎么发生 / 周期怎么排）放在 docs/design.md 十一，不占界面）。 -->
+                    <StackPanel Grid.Column="0" Spacing="4">
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            Text="应用重新打开自启动项时自动禁用；出现新增 / 失效条目时提示。" />
+
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            Text="{x:Bind ViewModel.GuardStatusDetail, Mode=OneWay}" />
+
+                        <!-- 同步失败：红字 + 重试（与上方调度任务失败态同一形态） -->
+                        <StackPanel
+                            Margin="0,2,0,0"
+                            Orientation="Horizontal"
+                            Spacing="12"
+                            Visibility="{x:Bind ViewModel.GuardHasError, Converter={StaticResource BoolToVisibility}, Mode=OneWay}">
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                Text="{x:Bind ViewModel.GuardError, Mode=OneWay}" />
+                            <Button
+                                VerticalAlignment="Center"
+                                Command="{x:Bind ViewModel.RetryGuardCommand, Mode=OneWay}"
+                                Content="重试" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- 右：档位下拉。7 个预设，顺序即 GuardPresets.Options，索引可持久化。
+                         回灌（LoadAsync 设 GuardSelectedIndex）会触发一次 SelectionChanged，
+                         由 code-behind 的 _initialized 守卫挡掉，不会误落盘。 -->
+                    <ComboBox
+                        Grid.Column="1"
+                        MinWidth="220"
+                        VerticalAlignment="Center"
+                        ItemsSource="{x:Bind ViewModel.GuardOptions}"
+                        SelectedIndex="{x:Bind ViewModel.GuardSelectedIndex, Mode=OneWay}"
+                        SelectionChanged="OnGuardModeChanged" />
+                </Grid>
+            </Border>
+
             <!-- ── 系统自启动项 ── -->
             <TextBlock
                 Margin="0,32,0,2"

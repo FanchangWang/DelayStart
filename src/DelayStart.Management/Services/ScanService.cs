@@ -29,10 +29,11 @@ public sealed class ScanService
     private readonly ILogSink _log;
 
     /// <summary>构造扫描服务。</summary>
-    /// <param name="sources">全部来源实例（顺序即展示顺序）。</param>
+    /// <param name="sources">全部来源实例（顺序即展示顺序）。由
+    /// <see cref="StartupSourceFactory"/> 统一构造 —— 顺序是语义的一部分。</param>
     /// <param name="configStore">配置读取端，用于判断"哪些项已被接管"（FR-1.6）。</param>
     /// <param name="log">日志接收端。</param>
-    public ScanService(IEnumerable<IStartupSource> sources, IAppConfigStore configStore, ILogSink log)
+    public ScanService(IReadOnlyList<IStartupSource> sources, IAppConfigStore configStore, ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(configStore);

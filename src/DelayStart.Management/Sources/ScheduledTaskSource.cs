@@ -296,7 +296,10 @@ public sealed class ScheduledTaskSource : IStartupSource
             Path = actionPath,
             // 批复 9：动作常是 cmd.exe /c start "" "C:\app\x.exe" 这类包装 —— 把真正的
             // exe 解析出来供图标展示；启动语义不动（Path + Arguments 原样保留）。
-            ExecutablePath = ResolveExecutable(actionPath, action.Arguments ?? string.Empty),
+            // 解析实现 2026-09-22 下沉到 Core（LaunchTargetResolver），调度端防双启动要用同一份。
+            ExecutablePath = LaunchTargetResolver
+                .Resolve(actionPath, action.Arguments, StartupSource.ScheduledTask)?.ExecutablePath
+                ?? string.Empty,
             Arguments = action.Arguments ?? string.Empty,
             Source = Kind,
             Scope = Scope,
@@ -306,9 +309,10 @@ public sealed class ScheduledTaskSource : IStartupSource
             // 计划任务的"软禁用"就是 Enabled 本身 —— 任务定义没有被破坏，随时可改回来。
             // 🔴 但多触发器任务上我们关的是**触发器**而不是任务（D67），所以不能只看 task.Enabled。
             IsEnabled = ComputeIsEnabled(task, definition),
-            IsMissing = !string.IsNullOrWhiteSpace(action.Path)
-                && Path.IsPathFullyQualified(action.Path)
-                && !File.Exists(action.Path),
+            // 判据本体在 TargetFileProbe（2026-09-22 集中，此前三处各写一遍）。
+            // ⚠️ 这里的 action.Path 常是 cmd.exe 这类**包装器**，包装器存在不代表真目标还在 ——
+            // 那是已知的漏判方向，与三个来源一致（真目标解析只服务双启动检测，见 LaunchTargetResolver）。
+            IsMissing = TargetFileProbe.IsMissing(action.Path),
             // \Microsoft\ 文件夹下的任务已在上面整体过滤（IsProtectedFolderPath），
             // 能走到这里的都是第三方任务 —— 包括根级名叫 \MicrosoftEdgeUpdateXxx 的那些。
             IsProtected = false,
@@ -433,102 +437,10 @@ public sealed class ScheduledTaskSource : IStartupSource
         return !hasAutostart;
     }
 
-    /// <summary>常见的"包装器"可执行文件名（小写）—— 它们只是拉起真正程序的跳板。</summary>
-    private static readonly HashSet<string> WrapperNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "cmd.exe",
-        "conhost.exe",
-        "cmd",
-        "powershell.exe",
-        "pwsh.exe",
-        "wscript.exe",
-        "cscript.exe",
-        "mshta.exe",
-        "rundll32.exe",
-    };
-
-    /// <summary>
-    /// 从任务动作里解析出实际的应用程序路径（批复 9）。
-    /// </summary>
-    /// <remarks>
-    /// 优先 <paramref name="actionPath"/> 本身；它缺失、不是 .exe、或是 cmd / powershell
-    /// 等包装器时，从 <paramref name="arguments"/> 里取第一个带引号（或空白分隔）的
-    /// token 再判一次。两步都失败返回空串 —— 图标退回占位符，不影响任何功能。
-    /// </remarks>
-    internal static string ResolveExecutable(string actionPath, string arguments)
-    {
-        var direct = NormalizeExe(actionPath);
-        if (direct is not null && !WrapperNames.Contains(Path.GetFileName(direct)))
-        {
-            return direct;
-        }
-
-        foreach (var token in SplitArguments(arguments))
-        {
-            var candidate = NormalizeExe(token);
-            if (candidate is not null)
-            {
-                return candidate;
-            }
-        }
-
-        return string.Empty;
-    }
-
-    /// <summary>展开环境变量后判定是否像可执行文件；不像返回 <see langword="null"/>。</summary>
-    private static string? NormalizeExe(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        var expanded = Environment.ExpandEnvironmentVariables(raw.Trim());
-        if (expanded.StartsWith('"'))
-        {
-            var end = expanded.IndexOf('"', 1);
-            if (end <= 1)
-            {
-                return null;
-            }
-
-            expanded = expanded[1..end];
-        }
-
-        if (!expanded.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            || !Path.IsPathFullyQualified(expanded))
-        {
-            return null;
-        }
-
-        return expanded;
-    }
-
-    /// <summary>把参数串拆成候选 token：先取带引号的，再取空白分隔的。</summary>
-    private static IEnumerable<string> SplitArguments(string arguments)
-    {
-        if (string.IsNullOrWhiteSpace(arguments))
-        {
-            yield break;
-        }
-
-        var rest = arguments.Trim();
-        if (rest.StartsWith('"'))
-        {
-            var end = rest.IndexOf('"', 1);
-            if (end > 1)
-            {
-                yield return rest[1..end];
-                rest = rest[(end + 1)..].TrimStart();
-            }
-        }
-
-        if (rest.Length > 0)
-        {
-            var space = rest.IndexOf(' ');
-            yield return space > 0 ? rest[..space] : rest;
-        }
-    }
+    // ---- 动作路径 → 真实 exe 的解析已下沉到 Core（2026-09-22，D76）----
+    // 原先本文件里的包装器名单与三个解析辅助方法只服务图标展示，而调度端"防双启动"
+    // 需要完全同一套推导规则。两份实现漂移的后果很具体：包装器名单少一个名字，那条被
+    // 接管的计划任务就会每轮判"进程已存在"、永不启动。现在统一走 Core 的 LaunchTargetResolver。
 
     /// <summary>取触发时机的展示文案；不是登录/启动触发时返回 <see langword="null"/>。</summary>
     private static string? DescribeTrigger(TaskDefinition definition)

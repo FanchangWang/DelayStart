@@ -178,6 +178,48 @@ if (-not (Test-Path -LiteralPath $brokerExe)) { throw "UIAccess 中转器产物�
 # iss 只认 SchedulerDir 一个来源目录 —— 把中转器并进调度端 publish 目录一起打包。
 Copy-Item -LiteralPath $brokerExe -Destination (Join-Path $schedulerPublishDir 'DelayStart.LaunchBroker.exe') -Force
 
+# ---- 2c) 守卫 publish（D75：形态**跟随管理端**，输出并入管理端 publish 目录）------
+# 🔴 守卫不能走 AOT：它经 Management 调 COM（IShellLinkW / TaskScheduler），
+#    AOT 产物里激活会运行时抛 PlatformNotSupportedException（docs/pitfalls.md 五 R12）。
+#    所以它的形态必须与管理端一致，而不是与 AOT 的调度端一致：
+#      full → --self-contained（管理端 publish 里本来就有一整套平铺的运行时）
+#      slim → --no-self-contained
+# 输出直接 -o 进管理端 publish 目录：落点是 {app} 根目录，iss 的 PublishDir 通配符即可覆盖。
+Write-Step "publish 守卫 ($flavor)"
+$guardArgs = @(
+    'publish', 'src\DelayStart.Guard\DelayStart.Guard.csproj',
+    '-c', $Configuration,
+    '-r', $Rid,
+    '-o', $appPublishDir,
+    '-v', 'minimal'
+)
+if ($Slim) { $guardArgs += '--no-self-contained' } else { $guardArgs += '--self-contained' }
+
+& dotnet @guardArgs
+if ($LASTEXITCODE -ne 0) { throw "守卫 publish 失败（exit $LASTEXITCODE）" }
+
+$guardExe = Join-Path $appPublishDir 'DelayStart.Guard.exe'
+if (-not (Test-Path -LiteralPath $guardExe)) { throw "守卫产物缺失：$guardExe" }
+
+# ---- 2d) 守门：slim 形态下 {app} 里绝不能出现主运行时（D64-1 / D75）---------
+# 🔴 2026-09-20 已 1:1 复现过：.NET apphost 只要在自己目录里看到 hostfxr.dll，就把
+#    "运行时根"当成程序目录，于是**框架依赖**的管理端会弹 "You must install or update .NET"
+#    —— 哪怕机器上明明装着 10.0.x。守卫与管理端同目录，它选错形态就会把这条踩响，
+#    所以在构建期直接炸掉，绝不把注定起不来的安装包发出去。
+if ($Slim) {
+    $hostFxrFiles = @(Get-ChildItem -LiteralPath $appPublishDir -Recurse -File -Filter 'hostfxr.dll')
+    if ($hostFxrFiles.Count -gt 0) {
+        throw @"
+slim 形态下 publish 目录里出现了主运行时文件（$($hostFxrFiles.Count) 个 hostfxr.dll）。
+D64-1 已复现过：框架依赖的管理端会因此无法启动。首个：$($hostFxrFiles[0].FullName)
+排查方向：守卫 publish 是否漏了 --no-self-contained（见本脚本 2c 段）。
+输出目录：$appPublishDir
+"@
+    }
+
+    Write-Host "slim 自检通过：publish 目录内无 hostfxr.dll" -ForegroundColor DarkGray
+}
+
 # ---- 3) 编译安装包 ----------------------------------------------------------
 $targetArch = if ($Rid -eq 'win-arm64') { 'arm64' } else { 'x64compatible' }
 $winAppRuntimeArch = if ($Rid -eq 'win-arm64') { 'arm64' } else { 'x64' }
@@ -218,6 +260,6 @@ Write-Host ''
 Write-Host ('[OK] {0}' -f $setup.Name) -ForegroundColor Green
 Write-Host ('     体积   {0:N1} MB' -f ($setup.Length / 1MB))
 Write-Host ('     路径   {0}' -f $setup.FullName)
-Write-Host ('     内含   管理端 {0} 个文件 / {1:N1} MB（{2}）+ 调度端 {3:N2} MB' -f `
+Write-Host ('     内含   管理端+守卫 {0} 个文件 / {1:N1} MB（{2}）+ 调度端 {3:N2} MB' -f `
         $appFiles.Count, (($appFiles | Measure-Object Length -Sum).Sum / 1MB), $flavor, `
     ((Get-Item -LiteralPath $schedulerExe).Length / 1MB))

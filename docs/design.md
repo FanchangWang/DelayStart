@@ -7,7 +7,7 @@
 
 ## 一、产品定位与三原则
 
-**扫描所有自启动位置 → 软禁用（不删数据）→ 由独立的调度进程按延时启动。**
+**扫描所有自启动位置 → 软禁用（不删数据）→ 由独立的调度进程按延时启动 → 由守卫进程持续看护（写回纠正 / 新增与失效通报）。**
 
 | 原则 | 含义 |
 |---|---|
@@ -85,7 +85,8 @@
 
 ### FR-9 设置
 
-预设编辑（FR-9.2）；上限（FR-9.3）；托盘保留时长 3/5/10s（FR-9.5）；同次运行内重试 0/1/2 次（FR-9.6）；通知策略三档（FR-9.7）；主题外观（D50 置于第一个分区）；导入/导出/重置（重置前二次确认）。字段与 `Settings.cs` 一一对应。
+预设编辑（FR-9.2）；同次运行内重试 0/1/2 次（FR-9.6）；调度通知策略三档（FR-9.7）；**守卫分节：通知策略两档 `OnChange` / `Never`**（D80）；主题外观（D50 置于第一个分区）。分节顺序：外观 → 延时 → 调度 → 守卫。字段与 `Settings.cs` 一一对应。
+> ⚠️ 本节曾列出的「单条目延时上限（FR-9.3）」「托盘保留时长 3/5/10s（FR-9.5）」「导入 / 导出 / 重置」目前都**不在**设置页里：前两项是 2026-09-19 用户批复移除（`Settings.cs` 字段一并删除），第三项见 D36、Phase 5 未落地。2026-09-22 校正。
 
 ### FR-10 模拟调度
 
@@ -98,6 +99,10 @@
 ### FR-12 配置迁移与备份
 
 v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出；损坏时保留坏文件副本并重建默认配置。
+
+### FR-13 自启动项守卫
+
+独立进程 `DelayStart.Guard.exe`，由登录触发的计划任务 `\DelayStartGuard` 拉起，跑一次巡检即退出（D74）。一次巡检 = **写回纠正**（把被应用写回启用的已接管项重新软禁用并复读确认，FR-13.1）→ **新增检测**（与基线差集，FR-13.2）→ **失效检测**（孤儿 / 目标已失效，FR-13.3）→ **更新基线**（用纠正后的结果，FR-13.4）。有变化且通知策略为「有变化时通知」时，发一条**系统通知**（右下角横幅 + 停留通知中心，标题显示 `DelayStart`）；点击经 `delaystart:` 协议拉起管理端并定位到对应来源页 /「延时启动」页（FR-13.5，D79/D80）。无变化（或策略为「从不通知」）静默退出，但**每次都写一行巡检汇总**（FR-13.6，守卫唯一的可审计痕迹）。档位 `GuardMode`（`Disabled`/`OnceAfterLogin`/`Periodic`）+ `GuardMinutes`（10/30/60），默认 `OnceAfterLogin` + 30（FR-13.7）；通知策略 `GuardNotifyMode`（`OnChange`/`Never`），默认 `OnChange`（D80）。入口自检：非管理员 / 守卫已关闭 / 已有实例 → 写日志后静默退出（FR-13.8，D78）。管理端每次启动按当前设置同步 / 补建 / 删除守卫任务（FR-13.9）。
 
 ---
 
@@ -119,7 +124,7 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 
 ---
 
-## 五、异常场景矩阵（E1–E19）
+## 五、异常场景矩阵（E1–E22）
 
 | # | 场景 | 期望行为 |
 |---|---|---|
@@ -141,31 +146,38 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 | E17 | UAC 选"否" | 说明后退出，不降级 |
 | E18 | 以其他用户身份运行 / OTS | SID 比对不一致则提示不支持 |
 | E19 | 程序目录移动 | 启动时对比安装路径，提示一键 `--reinstall-task` |
+| E20 | 应用把已接管的启动项**写回启用** | 守卫下一轮巡检重新软禁用 + **复读确认**；确认失败记 `Warn`（不静默）。纠正不计数、不升级（D74） |
+| E21 | 被接管的软件卸载，留下**孤儿条目** | 守卫通报"失效"（孤儿 / 目标已失效两类归并）；**不自动清理** —— 失效条目在「延时启动」页内联标成"已失效"，由用户确认后「删除」或「转为手动」（D77 / D81） |
+| E22 | 守卫被手动双击（未提权） | 写 `guard.log` 一行后**静默退出**，不弹窗、不改任何东西（D78） |
 
 ---
 
 ## 六、架构总览、权限模型与路径布局
 
-**解决方案**：`DelayStart.slnx` + `src/DelayStart.{Core,Management,App,Scheduler}` + `tests/DelayStart.Core.Tests`。依赖方向：
+**解决方案**：`DelayStart.slnx` + `src/DelayStart.{Core,Management,App,Scheduler,Guard}` + `tests/DelayStart.Core.Tests`。依赖方向：
 
 ```
 App ──> Management ──> Core <── Scheduler（只引用 Core，硬边界）
+                      ^──────── LaunchBroker（只引用 Core）
+                      ^──────── Guard（引用 Core + Management）
 Tests ──> Core (+ Management)
 ```
 
-**TFM**：Core/Management `net10.0-windows`（Core 另开 `IsAotCompatible=true` 守门）；App `net10.0-windows10.0.26100.0`（`TargetPlatformMinVersion=10.0.19041.0`，`WindowsPackageType=None`、`WindowsAppSDKSelfContained=true`）；Scheduler `net10.0-windows` + `PublishAot=true`。版本基线：WindowsAppSDK 1.8 元包、`TaskScheduler` 2.12.2（🔴 包名是 `TaskScheduler`，不是 `Microsoft.Win32.TaskScheduler`——那是 2016 年的死包）。
+**TFM**：Core/Management `net10.0-windows`（Core 另开 `IsAotCompatible=true` 守门）；App `net10.0-windows10.0.26100.0`（`TargetPlatformMinVersion=10.0.19041.0`，`WindowsPackageType=None`、WindowsAppSDKSelfContained=true`）；Scheduler `net10.0-windows` + `PublishAot=true`；**Guard `net10.0-windows10.0.26100.0` 但 `PublishAot=false`**（它经 Management 用到 COM，AOT 下运行必抛 `PlatformNotSupportedException`，R12/D75；带平台版本是因为要发 WinRT 系统通知，D79）。版本基线：WindowsAppSDK 1.8 元包、`TaskScheduler` 2.12.2（🔴 包名是 `TaskScheduler`，不是 `Microsoft.Win32.TaskScheduler`——那是 2016 年的死包）。
 
-**权限模型（D20）**：两个进程全程提权。App 靠 manifest；Scheduler 靠计划任务 `RunLevel=Highest`。UAC 被拒 → 退出不降级；"以其他用户身份运行"用 SID 比对拒绝（E18）。
+**权限模型（D20 / D82）**：**三个** 需提权的进程全程提权，但**保证点不同**：管理端是 `asInvoker` + **入口自提权**（D82 —— `Program.Main` 的提权门按需 `runas` 重拉自己；**已有实例在跑时只写一次性定位请求文件就退出，不弹 UAC**），Scheduler / Guard 靠计划任务 `RunLevel=Highest` + `Interactive`。🔴 不变量没变：**图形界面与 CLI 业务绝不以非提权身份运行**（降级会造成"用户以为禁用成功、实际静默失败"），所以那道门必须挡在**所有**业务分支之前，且 `--elevation-attempted`（防重拉标记）必须在交给 `CliHost` 之前摘掉。Guard 现在**没有清单文件**（`app.manifest` 随原生提示框在 D79 删除），因而是 `asInvoker` ——🔴 **这份"没有清单"的状态必须守住**：给 Guard 加一份清单并声明 `requestedExecutionLevel`，双击就会弹 UAC 并拿到提权令牌，入口自检（`Program.Main` 第 0 步）形同虚设。UAC 被拒 → 退出不降级；"以其他用户身份运行"用 SID 比对拒绝（E18）。
 
 **路径布局（D23，全部经 `PathService`，禁止硬编码）**：
 
 | 类别 | 路径 | 说明 |
 |---|---|---|
-| 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**只读** |
+| 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**只读**；四类 exe 同目录（D75） |
 | 配置 | `%APPDATA%\DelayStart\config.json` | Roaming，原子写 |
-| 日志 | `%LOCALAPPDATA%\DelayStart\logs\{scheduler,manager}.log` | 2MB 轮转 |
+| 日志 | `%LOCALAPPDATA%\DelayStart\logs\{scheduler,manager,launchbroker,guard}.log` | 2MB 轮转 |
 | 实时状态 | `%LOCALAPPDATA%\DelayStart\state\current-run.json` | 每次状态变化原子重写 |
 | 运行归档 | `%LOCALAPPDATA%\DelayStart\runs\<runId>.json` | 保留 30 次 |
+| 守卫基线 | `%LOCALAPPDATA%\DelayStart\guard\baseline.json` | 上一轮扫描快照，原子写（D74） |
+| UI 定位请求 | `%LOCALAPPDATA%\DelayStart\ui-request.json` | 守卫 → 管理端的跨进程载荷（读后即删，D74） |
 
 调试覆盖：`DELAYSTART_LOCAL_DIR` / `DELAYSTART_CONFIG_DIR`（仅开发测试用）。计划任务身份必须是交互用户——SYSTEM 下 `%APPDATA%` 解析到 systemprofile 且不报错。
 
@@ -207,14 +219,19 @@ Tests ──> Core (+ Management)
   "runAsAdmin", "enabled", "source", "scope", "sourceKey", "sourceDetail",
   "originalState": { "wasEnabled" } } ],
   "settings": { "delayPresets": [0,5,10,15,20,30,60], "defaultPreset": 10, "notifyMode",
-                "retryCount", "theme", "lastRunId" } }
+                "retryCount", "theme", "lastRunId",
+                "guardMode", "guardMinutes" } }
 ```
+
+`guardMode` / `guardMinutes` = 守卫档位（D74，默认 `onceAfterLogin` + 30）；`guardNotifyMode` = 守卫通知策略（D80，默认 `onChange`）。三个字段都是**枚举 / 白名单值一律字符串或数字落盘**（与 `notifyMode` / `theme` / `source` 一致）。`guardMode` 是**唯一**的"守卫该不该跑"的事实来源 —— 入口自检、`GuardService.RunOnce()`、`GuardTaskBootstrap` 三处都读它，不另存状态；`guardNotifyMode` 只决定"有变化时要不要发通知"（见 11.6），与"跑不跑"无关。
 
 `maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；连续失败次数不落盘，由 `FailureStreakService` 扫 `runs/` 现算（两端共用，调度端无状态）。
 
 ### 7.5 管理端（App）设计
 
-页面：Overview（统计 + 调度任务状态卡 + 最近一次开机调度表）/ Items（来源筛选 + 搜索）/ Delay（按延时分组，组 = 子标题 + 各自边框卡片）/ System（只读）/ Runs（最新一组默认展开）/ Settings（外观 → 延时 → 调度）。MVVM 用 CommunityToolkit.Mvvm 源生成器 + `x:Bind`；组合根 `ServiceRegistration` **CLI 与 GUI 共用一个容器**，容器在 CLI 分流前构建；跨页数据用 `ScanCacheService` 来源级过期标记做局部刷新（D42）。
+页面：Overview（统计 + 调度任务状态卡 + 最近一次开机调度表）/ Items（来源筛选 + 搜索）/ Delay（按延时分组，组 = 子标题 + 各自边框卡片；**失效条目内联在这一页**，D81）/ System（只读）/ Runs（最新一组默认展开）/ Settings（外观 → 延时 → 调度 → 守卫）。MVVM 用 CommunityToolkit.Mvvm 源生成器 + `x:Bind`；组合根 `ServiceRegistration` **CLI 与 GUI 共用一个容器**，容器在 CLI 分流前构建；跨页数据用 `ScanCacheService` 来源级过期标记做局部刷新（D42）。
+
+**没有独立的「失效条目」页面**（D81）：失效判定（`GuardStalePolicy`）的结果由 `DelayViewModel` 在 `Load()` 时算成 `id → StaleKind` 字典，逐行传给 `DelayRow`；行上用三个 bool（`IsNormal` / `IsStale` / `CanConvertToManual`）驱动显隐，XAML 不做取反转换。失效行「启用」列不显示开关（它根本启动不了）、改显示"已失效"，「操作」列给「删除」/「转为手动」。
 
 **提权交互约束（R10）**：`FileOpenPicker` 必须 `InitializeWithWindow` 挂 HWND；拖放走旧式 `WM_DROPFILES` + `ChangeWindowMessageFilterEx`（`UipiMessageFilter`），不通则降级纯按钮；禁止"拖出"交互。编辑器（`DelayEditorDialog`）：4 种进入方式共用，目标块 = 只读卡片 / 「程序」+「UWP 应用」分段页签（ToggleButton，禁用"再点取消选中"），参数/工作目录在页签之外按形态统一算可见性（D59 教训：可见性判据不能写在会被折叠的子树里），宽度回归框架默认 548，自定义延时二次确认用同层 overlay（ContentDialog 不能嵌套）。
 
@@ -346,3 +363,128 @@ scripts\publish.ps1 [-Rid] # AOT 发布调度端并同步进管理端 bin
 **真机手工验证清单**（要点）：软禁用前后注册表导出对比零变化；接管→重启→按预期时间启动；卸载可逆（还原失败则中止）；DPI 三档；明暗主题；安装/升级/卸载全链路（含 slim 覆盖 full 的混装回归：往安装目录丢 `hostfxr.dll` → 装 → 断言被清）。
 
 **提交前必查**：Release 构建 0 警告 0 错误 + 测试全绿；`git status` 无构建产物；新踩的坑追加进 `docs/pitfalls.md`。
+
+---
+
+## 十一、自启动项守卫（Guard）
+
+> 决策见 D74–D81。**为什么需要它**：软禁用只是"系统不再自动启动它"，原 `Run` 值 / 任务定义一个字节都没动 ——
+> 应用升级后会把自己写回启用；新软件会偷偷加自启动；被接管的软件卸载后留下永远启动失败的孤儿条目。
+> 这三件事用户都不会主动发现，需要一个"自己跑起来看一眼"的角色。
+
+### 11.1 定位与入口
+
+`DelayStart.Guard.exe` 是第四个进程：**不常驻、无窗口、跑一次巡检即退出**。它有且只有两个入口 —— 计划任务 `\DelayStartGuard`（唯一正常路径）与用户 / 调试手动运行；后者会被入口自检挡掉（D78）。
+
+| 入口自检（按序） | 不满足时 |
+|---|---|
+| 单实例互斥 `Local\DelayStart.Guard` | 已有一轮在跑 → 记日志后退出（退出码 0） |
+| `ElevationCheck.IsElevated()` | 写 `guard.log` "未以管理员身份运行（疑似手动双击启动）" → **静默退出**（D78） |
+| `settings.guardMode != Disabled` | 记日志"守卫已关闭，本次未执行巡检" → 退出 |
+
+互斥检查放在提权检查**之前**：反之用户连点几次双击，每次都先写一行"未提权"日志。未捕获异常兜底 = 记日志 + 退出码 1，**绝不带弹窗崩溃**（与调度端同款）。
+
+### 11.2 一次巡检的流程
+
+```
+读配置 → 扫描全量来源 → 写回纠正 → 新增检测 → 失效检测 → 更新基线 → 有变化才发系统通知 → 退出
+```
+
+| 步 | 动作 | 关键约束 |
+|---|---|---|
+| 1 | 读 `config.json`（接管清单 + 档位 + 通知策略） | 读到 `Disabled` 直接返回"未执行"（入口与这里都判一次：计划任务可能残留） |
+| 2 | `ScanService.Scan()` 全量扫描 | 逐源 try/catch；失败来源记进 `Failures` |
+| 3 | **写回纠正** | 见 11.3 |
+| 4 | **新增检测** | 与基线差集，见 11.4 |
+| 5 | **失效检测** | 孤儿 + 目标已失效，见 11.5 |
+| 6 | **更新基线** | 用**纠正后**的扫描结果；本次整体失败的来源沿用旧基线（见 11.4） |
+| 7 | 发系统通知 / 静默退出 | 有新增或失效 **且** 通知策略为「有变化时通知」才发（见 11.6）；无论有没有变化都写一行巡检汇总（唯一的可审计痕迹） |
+
+守卫**不抛异常**：一次来源失败已由 `ScanService` 收集成 `Failures`，纠正失败也只记进报告 —— 守卫是周期任务，让一次巡检半途崩掉会让"上一轮到底做了什么"无从得知。
+
+### 11.3 写回纠正判据
+
+🔴 **判据只有一条：本次扫描结果里该条目的 `IsEnabled`**（`GuardCorrectionPolicy`）。**禁止另写一份"是否被写回"的判据表** —— 四个来源各自的实现已经把这件事算准了（注册表三级回退、计划任务"任务开关 **且** 至少一个自启动触发器启用"、UWP 看 `State`），第二份判据必然与它们漂移。最典型的漂移后果：被接管的多触发器任务**每一轮**都被误判成"被写回"（D67 的陷阱），日志被假纠正记录淹没。
+
+- 只对**已接管**（在 `config.Items` 里）且非 `manual` 的条目出手；扫描结果里找不到的（孤儿）不动作 —— 没有对象可禁用，归 11.5 通报。
+- 来源本次整体失败 ⇒ 状态未知 ⇒ **不判**。
+- 纠正动作 = 调该来源的 `Disable(entry)`，然后**复读确认**（`ReReadDisabled` 重新 `Scan` 一次看它是否真为禁用态）。写成功 ≠ 写对了（可能被别的进程同时改回）——确认失败要记 `Warn`，静默吞掉会让用户以为"守卫在保护我"。
+- 不计数、不设阈值、不做对抗升级：接管是用户明确的期望，被写回就纠回来，与次数无关。
+
+### 11.4 新增检测
+
+差集：本次扫描结果 −（基线里的主键集合）＝ 新增（`GuardNewItemPolicy`）。三条必须守住的约束：
+
+- **首次运行（无基线）不提示**：此时"上次"不存在，任何差集都会把当前全部条目报成"新增" —— 那是噪声不是情报。
+- **来源整体失败时不参与差集**：失败意味着该来源这次根本没扫出来，把它当"条目全没了"会在下一次反过来把一整批老条目报成"新增"。
+- **基线必须最后更新，且本次失败的来源沿用旧基线**（`MergeBaselineForNext`）：否则来源恢复的那一刻就是满屏假"新增"。被纠正过的项不会误报 —— 它在基线里本来就存在。
+
+基线落 `guard/baseline.json`，走 `AtomicFileWriter`（半截 JSON 会让下一轮把全部条目报成"新增"）；读不到 / 解析失败一律按"首次运行"返回 `null`（安全侧）。
+
+### 11.5 失效检测
+
+接管清单里"已经没意义"的条目分成两类，**归并成一份通报**（`GuardStalePolicy`）：
+
+| 类型 | 含义 | 为什么归并 |
+|---|---|---|
+| `Orphan` | 清单里有它，系统启动项已被整个删除 | 对用户而言"这一条已经没用了"是同一件事 |
+| `Missing` | 启动项还在，但目标程序已不存在（`IsMissing`） | 同上 |
+
+存在的理由：调度端会照着接管清单**无条件尝试启动**每一项 —— 清单里留下已卸载软件的条目 = 每次登录都失败一次；而管理端只按主键关联显示扫描结果，孤儿条目在界面上**根本不存在**，用户无从清理。
+
+🔴 **来源整体失败时不判失效**：否则一次 ACL 拒绝或服务未启动会把整份清单报成"已失效"，诱导用户把好好的条目清理掉。`manual` 条目在系统里没有锚点，"扫不到"是它的正常状态，不是孤儿。
+
+**清理出口在用户手上**：守卫只通报；失效条目在管理端**「延时启动」页**内联显示（"已失效"行，D81），用户确认后 **「删除」**（`ConfigEditService.Remove`，**只改配置，不动系统**）或 **「转为手动」**（`ConfigEditService.ConvertToManual`，前提是目标程序还在）。见 7.5。
+
+### 11.6 通报：系统通知与通知策略
+
+**载体是 Windows 系统通知**（右下角横幅 + 停留通知中心），不是模态弹框（D79）。理由：模态框在屏幕正中、必须有人应答，会把用户从手上的事里拽出来；而通知由系统持有，**发完即忘** —— 守卫不必为了等一个可能永远不来的点击而活着（这正是它能"跑完即退"的前提）。
+
+```
+守卫：准备 XML（activationType="protocol", launch="delaystart://<token>"）→ CreateToastNotifier(AUMID).Show() → 退出
+Shell：用户点击 → 读 HKCU\Software\Classes\delaystart → 启动 DelayStart.exe --goto-startup "delaystart://<token>"
+```
+
+| 环节 | 实现 | 约束 |
+|---|---|---|
+| 身份（AUMID） | 开始菜单快捷方式的 `System.AppUserModel.ID` = `DelayStart`（`ShellRegistrationService`） | 🔴 AUMID 字符串本身**不显示**给用户；用户看到的标题来自那个快捷方式的名字 —— 所以"标题显示 DelayStart"与"通知能弹出来"是同一件事 |
+| 协议处理器 | `HKCU\Software\Classes\delaystart`（`URL Protocol` + `shell\open\command`） | 注册表键是 **HKCU**（管理端本就提权，但协议只服务当前用户）；卸载时必须 `RegDeleteKeyIncludingSubkeys` 连 `shell\open\command` 一起删（D79） |
+| 注册时机 | 管理端每次启动 + 守卫发通知前，各调一次 `EnsureRegistered()` | **幂等且绝不抛异常**：注册失败只降级成"这次通知弹不出来"，不能让管理端起不来或让守卫巡检失败 |
+| 替换 | `Tag="guard-change"` + `Group="delaystart"` | 🔴 同 Tag + Group 的通知**互相替换**：周期档位下每轮都可能"有变化"，不替换会把通知中心刷满 —— 而通知刷屏会让人直接关掉通知权限 |
+| 落点令牌 | `--goto-startup "delaystart://<token>"`，token ∈ 来源页 / `delay` | 无新增只有失效时落 `delay`（失效条目在「延时启动」页，D81） |
+| 失败 | 只记 `guard.log` 一行 `Warn` | 通知被系统关掉 / 专注助手开着 / 组策略禁用都会不显示 —— 这些**不算巡检失败**，巡检结果始终落在日志里 |
+
+**通知策略 `GuardNotifyMode`**（D80，设置页「守卫 → 通知策略」）：`OnChange`（默认，有变化时通知）/ `Never`（从不通知）。
+
+🔴 `Never` **只关通知，不关巡检** —— 扫描、纠正、基线更新照做。它与"不启动守卫"是两件事（后者是 `GuardMode.Disabled`），也与调度端的 `NotifyMode`（FR-9.7，管进度面板）没有任何关系：触发点不同、载体不同，合成一个字段会让"改了调度通知却把守卫也关掉"这种事变得可能。选 `Never` 且本轮确实有变化时**必须**写一行"本轮有变化，但通知策略为「从不通知」，已跳过通报" —— 否则它与"本轮根本没跑"在日志里长得一模一样。
+
+### 11.7 档位与计划任务
+
+| `GuardMode` | `GuardMinutes` | 触发规则（`GuardSchedulePlan.Build`） |
+|---|---|---|
+| `Disabled` | — | 无触发规则；**且任务应被删除** |
+| `OnceAfterLogin` | 10/30/60 | 登录后延迟 N 分钟执行一次 |
+| `Periodic` | 10/30/60 | 登录后延迟 N 分钟起，每 N 分钟重复（只设 `Interval`，**不设 `Duration`** = 无限期重复） |
+
+默认 `OnceAfterLogin` + 30（D74 用户批复）。界面下拉是 7 档（含"不启动"），索引 ↔（模式, 分钟）的映射是 `GuardPresets` 的单一事实来源，下拉索引即持久化身份。
+
+**任务身份与 `Settings` 六项**与调度任务**逐项一致**：`Interactive` + `RunLevel=Highest`（提权不弹 UAC），`ExecutionTimeLimit=0`、`DisallowStartIfOnBatteries=false`、`StopIfGoingOnBatteries=false`、`MultipleInstances=IgnoreNew`、`RunOnlyIfIdle=false`、`RunOnlyIfNetworkAvailable=false`。默认 `DisallowStartIfOnBatteries=true` 会让笔记本拔电时守卫**静默不跑**；缺 `IgnoreNew` 则两轮巡检可能叠在一起（全量扫描 + 改写注册表/任务库，叠着跑没有任何好处）。改一处必须改两处。
+
+**管理端每次启动同步**（`GuardTaskBootstrap`，语义对齐 `SchedulerTaskBootstrap`）：启用 ⇒ 缺失即补建、已存在也**按当前档位重写**（`CreateOrUpdate` 幂等、保留统计；与调度任务"已存在就不动"不同，因为档位是用户可调的设置）；关闭 ⇒ **删除任务**；同步失败**不抛异常**，只记日志并把原因交给总览页守卫区呈现 + 重试。
+
+### 11.8 发布形态
+
+Guard **不做 NativeAOT**（D75）：publish 形态**跟随管理端**（full 自包含 / slim 框架依赖），产物落在 `{app}` 根目录与其余 exe 同级。🔴 **slim 下绝不自包含** —— `.NET apphost` 在自己目录看到 `hostfxr.dll` 就把"运行时根"当程序目录，框架依赖的管理端于是报"必须安装 .NET"（D64-1）。构建期守门：slim 的 publish 目录里出现 `hostfxr.dll` 即中止。
+
+### 11.9 管理端落点
+
+| 落点 | 内容 |
+|---|---|
+| 总览页「自启动项守卫」区 | 档位下拉（7 档）+ 同步状态一行 + 失败时的红色说明与「重试」按钮（左右结构） |
+| 设置页「守卫」分节 | 通知策略（`OnChange` / `Never`，D80） |
+| 延时启动页的失效行 | 「启用」列显示"已失效"（悬停给原因）、「操作」列给「删除」/「转为手动」（目标程序已不存在时只剩「删除」，D81） |
+| CLI `--goto-startup [--source=registry\|startup-folder\|scheduled-task\|uwp\|stale\|delay]` | 在 `CliHost` **之前**分流（🔴 见 `pitfalls.md` 十一）；已有实例 ⇒ 写一次性请求文件 `ui-request.json` 后退出（**D82：文件本身即信号**，实例侧 `FileSystemWatcher` 收到就切页）；无实例 ⇒ 本次启动直接落到目标页 |
+| CLI `--goto-log` | 同上，只是令牌为 `runs-log`（D82 起它也走文件通道） |
+| CLI `--stale` | 等价 `--goto-startup --source=stale`（落到「延时启动」页，D81） |
+
+🔴 **为什么要请求文件（D74 的起因，D82 起升级为唯一通道）**：`EventWaitHandle` **不带载荷**，来源参数跨进程传不过去 —— 起初文件只是"载荷旁路"，唤醒仍靠命名事件。D82 之后命名事件那条路**彻底走不通**（未提权的点击方写不了提权实例的内核对象，见 `pitfalls.md` 十二），于是**文件同时承担载荷与信号**：实例侧用 `FileSystemWatcher` 盯着它，写入即唤起。实例侧读取后**立即删除**（读后即删）；收到无法识别的目标令牌时只把窗口提到前台、不切页。代价是 `--goto-log` 也需要一个跨进程令牌（`runs-log`），取舍见 D82。

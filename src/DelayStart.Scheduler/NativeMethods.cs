@@ -391,47 +391,9 @@ internal static unsafe partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PostMessageW(nint hwnd, uint message, nuint wparam, nint lparam);
 
-    // ---- 提权检测（2026-09-21 批复：非管理员静默退出，防手动双击）----
-
-    public const int TokenElevation = 20;
-
-    [LibraryImport("kernel32.dll")]
-    private static partial nint GetCurrentProcess();
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TokenElevationValue
-    {
-        public uint IsElevated;
-    }
-
-    [LibraryImport("advapi32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static unsafe partial bool GetTokenInformation(
-        nint token,
-        int infoClass,
-        TokenElevationValue* info,
-        uint length,
-        out uint returnLength);
-
-    /// <summary>当前进程令牌是否已提权（Admin Approval已批准 / RunLevel=Highest）。</summary>
-    public static bool IsElevated()
-    {
-        if (!OpenProcessToken(GetCurrentProcess(), TokenQuery, out var token))
-        {
-            return false;
-        }
-
-        try
-        {
-            var value = new TokenElevationValue();
-            var ok = GetTokenInformation(token, TokenElevation, &value, (uint)sizeof(TokenElevationValue), out _);
-            return ok && value.IsElevated != 0;
-        }
-        finally
-        {
-            _ = CloseHandle(token);
-        }
-    }
+    // ---- 提权检测已下沉到 DelayStart.Core/Services/ElevationCheck.cs（2026-09-22，D78）----
+    // 调度端与守卫端用同一个门槛，两份实现会漂移，而漂移的表现是"某一个入口的门禁失效"，
+    // 不报错也看不出来。这里只保留本工程自己还要用的令牌 P/Invoke。
 
     // ---- 系统主题探测（面板双主题，2026-09-21 批复：跟随设置「自动/浅色/深色」）----
 

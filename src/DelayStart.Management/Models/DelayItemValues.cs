@@ -39,4 +39,20 @@ public sealed class DelayItemValues
 
     /// <summary>工作目录，留空则用程序所在目录。仅手动条目可改。</summary>
     public string WorkingDirectory { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 所属调度周期 id（FR-15.1）。缺省即内置「每天」。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 这里存的是**引用**（周期 id），不是星期组合的快照（D87 = 🅑）：改周期会同步影响
+    /// 所有引用它的条目，所以这个字段在编辑条目时是"改指向"，不是"改内容"。
+    /// </para>
+    /// <para>
+    /// 与条目开关（<c>DelayedItem.Enabled</c>）的关系：<b>不存在"不选周期"这种状态</b>（FR-15.1）——
+    /// 空值一律按「每天」处理。真想让它不启动就关条目开关，不要用周期表达。
+    /// 因此本字段对**所有来源**的条目都生效（系统接管条目与手动条目无差别）。
+    /// </para>
+    /// </remarks>
+    public string ScheduleCycleId { get; init; } = BuiltinCycleIds.Everyday;
 }

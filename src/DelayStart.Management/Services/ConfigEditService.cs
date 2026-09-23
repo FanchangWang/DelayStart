@@ -94,6 +94,11 @@ public sealed class ConfigEditService
             RunAsAdmin = values.RunAsAdmin,
             Enabled = true,
 
+            // 周期（FR-15.1）：手动添加默认「每天」。空值按每天处理 —— 不存在"不选周期"的状态。
+            ScheduleCycleId = string.IsNullOrWhiteSpace(values.ScheduleCycleId)
+                ? BuiltinCycleIds.Everyday
+                : values.ScheduleCycleId.Trim(),
+
             // 手动条目在系统中的三个定位分量全是空的 —— 这正是"系统里没有对应物"的表达方式。
             Source = StartupSource.Manual,
             Scope = StartupScope.None,
@@ -152,6 +157,12 @@ public sealed class ConfigEditService
         item.DelaySeconds = values.DelaySeconds;
         item.RunAsAdmin = values.RunAsAdmin;
         item.Arguments = values.Arguments;
+
+        // 周期对所有来源的条目都生效（FR-15.1：手动条目与接管条目无差别）——
+        // 它不碰系统，改的只是"这次登录要不要启动它"。
+        item.ScheduleCycleId = string.IsNullOrWhiteSpace(values.ScheduleCycleId)
+            ? BuiltinCycleIds.Everyday
+            : values.ScheduleCycleId.Trim();
 
         if (item.IsManual)
         {
@@ -361,6 +372,194 @@ public sealed class ConfigEditService
         _configStore.Save(config);
         _log.Info($"已把『{item.Name}』转为手动条目（{previousId} → {item.Id}）");
         return true;
+    }
+
+    /// <summary>
+    /// 周期名唯一性校验（2026-09-23 批复 14）：不许与内置五档、或别的自定义周期同名。
+    /// </summary>
+    /// <param name="config">当前配置。</param>
+    /// <param name="name">拟落盘的名称。</param>
+    /// <param name="exceptCycleId">要排除的周期 id —— 改名时传自己，新建时传 <see langword="null"/>。</param>
+    /// <exception cref="ArgumentException">名称已被占用。</exception>
+    /// <remarks>
+    /// <para>
+    /// 为什么连**内置档的名字**也要拦：「每天」是列表徽标里最常见的一档，用户再建一个叫
+    /// 「每天」的自定义周期，两枚一模一样的徽标就没人分得清哪个是自己的。
+    /// </para>
+    /// <para>
+    /// 🔴 与界面上的即时红字（<c>CycleEditorForm.Validate</c>）共用 <see cref="CycleNames.IsTaken"/>
+    /// 这一份判据：界面负责"让用户在按下保存之前就知道"，这里负责"无论如何都拦得住"
+    /// —— 配置是外部可改的文件，判据只在界面上有一份等于没有。
+    /// </para>
+    /// </remarks>
+    private static void EnsureNameAvailable(AppConfig config, string? name, string? exceptCycleId)
+    {
+        var others = new List<string?>(config.Cycles.Count);
+        foreach (var cycle in config.Cycles)
+        {
+            if (cycle is not null && !string.Equals(cycle.Id, exceptCycleId, StringComparison.Ordinal))
+            {
+                others.Add(cycle.Name);
+            }
+        }
+
+        if (CycleNames.IsTaken(name, others))
+        {
+            // 名字由调用方保证非空（前面已判），这里 Trim 只是为了让报错文案里没有多余空白。
+            throw new ArgumentException($"已有同名周期「{name?.Trim()}」，换一个名字。", nameof(name));
+        }
+    }
+
+    /// <summary>
+    /// 新建一个自定义周期（FR-15.10）。
+    /// </summary>
+    /// <param name="name">周期名。</param>
+    /// <param name="days">星期集合。</param>
+    /// <returns>建好的周期（含生成的 id）。</returns>
+    /// <exception cref="ArgumentException">名为空，或一天都没选。</exception>
+    /// <remarks>
+    /// 🔴 <paramref name="days"/> 为空是**拒绝**而不是接受：空周期不是合法状态（FR-15.20）。
+    /// 想让条目不启动，请关掉条目的「启用」开关 —— 那是唯一一处表达这个意思的地方。
+    /// </remarks>
+    public ScheduleCycle AddCycle(string name, WeekdaySet days)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("周期名不能为空。", nameof(name));
+        }
+
+        if (WeekdaySets.Sanitize(days) == WeekdaySet.None)
+        {
+            throw new ArgumentException("周期至少要包含一天。", nameof(days));
+        }
+
+        var config = _configStore.Load();
+
+        // 名称唯一性（2026-09-23 批复 14）：新建时没有任何"自己"要排除。
+        EnsureNameAvailable(config, name, exceptCycleId: null);
+
+        var cycle = new ScheduleCycle
+        {
+            Id = NewCycleId(config),
+            Name = name.Trim(),
+            Days = WeekdaySets.Sanitize(days),
+        };
+
+        config.Cycles.Add(cycle);
+        _configStore.Save(config);
+        _log.Info($"已新建周期『{cycle.Name}』（{cycle.Id}）");
+        return cycle;
+    }
+
+    /// <summary>
+    /// 修改一个自定义周期（FR-15.12：引用它的条目同步生效）。
+    /// </summary>
+    /// <param name="cycleId">周期 id。</param>
+    /// <param name="name">新名称。</param>
+    /// <param name="days">新的星期集合。</param>
+    /// <returns>是否找到并修改。</returns>
+    /// <exception cref="ArgumentException">名为空，或一天都没选。</exception>
+    public bool UpdateCycle(string cycleId, string? name, WeekdaySet days)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("周期名不能为空。", nameof(name));
+        }
+
+        if (WeekdaySets.Sanitize(days) == WeekdaySet.None)
+        {
+            throw new ArgumentException("周期至少要包含一天。", nameof(days));
+        }
+
+        var config = _configStore.Load();
+
+        // 改名也要判重，但**排除自己** —— 否则"只改星期、名字照旧"会被自己挡住。
+        EnsureNameAvailable(config, name, exceptCycleId: cycleId);
+
+        var cycle = config.Cycles.Find(candidate => string.Equals(candidate.Id, cycleId, StringComparison.Ordinal));
+        if (cycle is null)
+        {
+            return false;
+        }
+
+        var references = ScheduleCycleResolver.CountReferences(cycleId, config.Items);
+        cycle.Name = name.Trim();
+        cycle.Days = WeekdaySets.Sanitize(days);
+
+        _configStore.Save(config);
+        _log.Info($"已修改周期『{cycle.Name}』（{cycle.Id}）；{references} 个条目引用它，改动已同步生效");
+        return true;
+    }
+
+    /// <summary>
+    /// 删除一个自定义周期（FR-15.14：被引用时**拒绝**，而不是把条目改成别的周期）。
+    /// </summary>
+    /// <param name="cycleId">周期 id。</param>
+    /// <returns>删除成功为 <see langword="true"/>；未找到时返回 <see langword="false"/>。</returns>
+    /// <exception cref="InvalidOperationException">正被条目引用。</exception>
+    /// <remarks>
+    /// 引用中的周期删不掉，是因为"删了之后那些条目变成什么"没有正确答案：
+    /// 自动改回「每天」会越过用户意图（他可能根本不想让它每天跑），而自动关闭又会静默停摆。
+    /// 让用户先改走别的周期，是唯一不需要替他做决定的做法。
+    /// </remarks>
+    public bool DeleteCycle(string cycleId)
+    {
+        var config = _configStore.Load();
+        var index = config.Cycles.FindIndex(candidate => string.Equals(candidate.Id, cycleId, StringComparison.Ordinal));
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var references = ScheduleCycleResolver.CountReferences(cycleId, config.Items);
+        if (references > 0)
+        {
+            throw new InvalidOperationException(
+                $"还有 {references} 个条目在使用这个周期，请先把它们改成别的周期再删除。");
+        }
+
+        var name = config.Cycles[index].Name;
+        config.Cycles.RemoveAt(index);
+        _configStore.Save(config);
+        _log.Info($"已删除周期『{name}』（{cycleId}）");
+        return true;
+    }
+
+    /// <summary>
+    /// 把某个条目改到另一个周期上（引用，不是拷贝）。
+    /// </summary>
+    /// <param name="itemId">条目主键。</param>
+    /// <param name="cycleId">目标周期 id；为空时按「每天」处理。</param>
+    /// <returns>是否找到该条目。</returns>
+    public bool SetItemCycle(string itemId, string? cycleId)
+    {
+        ArgumentNullException.ThrowIfNull(itemId);
+
+        var config = _configStore.Load();
+        var item = Find(config, itemId);
+
+        item.ScheduleCycleId = string.IsNullOrWhiteSpace(cycleId) ? BuiltinCycleIds.Everyday : cycleId.Trim();
+        _configStore.Save(config);
+        _log.Info($"已把『{item.Name}』的周期改为 {item.ScheduleCycleId}");
+        return true;
+    }
+
+    /// <summary>生成一个未被占用的自定义周期 id。</summary>
+    private static string NewCycleId(AppConfig config)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            var bytes = new byte[4];
+            Random.Shared.NextBytes(bytes);
+            var candidate = BuiltinCycleIds.CustomPrefix + Convert.ToHexString(bytes).ToLowerInvariant();
+
+            if (!config.Cycles.Exists(existing => string.Equals(existing.Id, candidate, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+
+        return BuiltinCycleIds.CustomPrefix + Guid.NewGuid().ToString("n");
     }
 
     /// <summary>按主键取条目；找不到就抛带 <c>EntryId</c> 的异常。</summary>

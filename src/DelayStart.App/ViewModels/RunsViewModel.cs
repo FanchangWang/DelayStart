@@ -218,13 +218,26 @@ public sealed class RunItemRow
     public string DelayText => $"{_result.Delay} 秒";
 
     /// <summary>结果文案。</summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b>纯中文，不带任何符号前缀</b>（2026-09-23 第三次真机反馈）。
+    /// 此前是「✓ 成功」「✗ 失败」「◌ 跳过」，试图靠"给窄符号补空格"凑等宽 ——
+    /// 补错方向，越补越歪。根因是**这些符号根本不在同一套度量里**：✓(U+2713) 与 ✗(U+2717)
+    /// 大致 1 em，◌(U+25CC)、·(U+00B7) 更窄，而 emoji（✅❌）是彩色且有 1.2–1.4 em 宽 ——
+    /// 逐字符试探字宽是个填不满的坑。
+    /// </para>
+    /// <para>
+    /// 拿掉符号后，四档都是**两个汉字**，字宽天然一致，整列左边缘对齐。
+    /// 想表达"跳过"与"失败"的差别时，用颜色（<see cref="IsFailed"/>）而不是字形。
+    /// </para>
+    /// </remarks>
     public string StateText => _result.State switch
     {
-        RunItemState.Done => "✓ 成功",
-        RunItemState.Failed => "✗ 失败",
-        RunItemState.Launching => "◐ 启动中",
-        RunItemState.Skipped => "◌ 跳过",
-        _ => "· 未执行",
+        RunItemState.Done => "成功",
+        RunItemState.Failed => "失败",
+        RunItemState.Launching => "启动",
+        RunItemState.Skipped => "跳过",
+        _ => "未执行",
     };
 
     /// <summary>是否失败（失败项标红）。</summary>

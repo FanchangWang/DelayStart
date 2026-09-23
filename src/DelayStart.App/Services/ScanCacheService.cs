@@ -197,9 +197,24 @@ public sealed class ScanCacheService : IDisposable
         var existing = _snapshot!;
 
         var takenOver = LoadTakenOverKeys();
+
+        // 三类数据按来源剔除旧值，必须**同进同退** —— 漏掉任何一类都会留下"已经不在
+        // 快照里的键"。🔴 `pixels` 此前正是漏掉的那一类（2026-09-24 批复 28 / B2）：
+        // `StartupEntry` 是**引用相等**的类，旧来源的条目已从 `entries` 里剔掉、
+        // 却仍是整份复制过来的字典的键，而下一轮重扫又从这里复制一遍 ——
+        // 每点一次「刷新本页」就永久留下该来源条目数那么多条陈旧键。
+        // 现在只保留「留下来的那些条目」的图标；查不到键时补提取一次
+        // （正常走不到，兜的是快照被外部改动的路径 —— 静默显示占位图标比多一次
+        // 字典查找难查得多）。
         var entries = existing.Entries.Where(entry => entry.Source != kind).ToList();
         var failures = existing.Failures.Where(failure => failure.Source != kind).ToList();
-        var pixels = new Dictionary<StartupEntry, IconPixels?>(existing.Pixels);
+        var pixels = new Dictionary<StartupEntry, IconPixels?>(entries.Count);
+        foreach (var retained in entries)
+        {
+            pixels[retained] = existing.Pixels.TryGetValue(retained, out var icon)
+                ? icon
+                : ExtractIcon(retained);
+        }
 
         foreach (var source in _sources.Where(source => source.Kind == kind))
         {

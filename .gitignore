@@ -68,6 +68,11 @@ demo2/
 # 原型 / 文档的本地校验产物
 *.tmp.js
 
+# FR-15 的过程留档：方案稿与交互原型。内容已并入 design.md（FR-15）与
+# decisions.md（D87–D97），只作评审期留档，不入库。
+docs/schedule-rule-plan.md
+docs/ui/
+
 # DelayStart 运行时数据目录（正常情况下在 %LOCALAPPDATA%\DelayStart\，
 # 此处兜底防止测试时误落在仓库内）
 scheduler.log

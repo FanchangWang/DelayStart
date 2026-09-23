@@ -14,8 +14,8 @@
 | 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
 | 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· **.NET 10 + 非 AOT**（守卫端）· xUnit v3（测试） |
 | 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
-| 测试 | `.\scripts\test.ps1` → **481 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
-| 状态 | 功能完整（含守卫、通知中转器），进安装包阶段；守卫 / D82 / **N1–N12 通知与面板拆分**均待真机验收；文档与代码同步 |
+| 测试 | `.\scripts\test.ps1` → **639 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 状态 | 功能完整（含守卫、通知中转器、FR-15 调度周期），进安装包阶段；守卫 / D82 / **N1–N12 通知与面板拆分** / **FR-15 真机验收**均待真机验收；文档与代码同步 |
 
 ---
 
@@ -30,6 +30,7 @@
 5. **调度端计划任务禁止 SYSTEM**（NFR-6.8）：必须 `LogonType=Interactive` + `RunLevel=Highest`。SYSTEM 下 `%APPDATA%` 会解析到 systemprofile，配置读不到、日志写错位置**且不报错**。
 6. **应用名只用英文 `DelayStart`**（D61）；中文名「延时启动管理器」仅出现在文档里。
 7. **可逆优先**：任何改变系统状态的操作必须有配对的还原路径；失败必须可见，禁止静默吞异常。
+8. **离线可判定（NFR-x）**：`Scheduler` / `Guard` / `LaunchBroker` / `NotifyBroker` **零网络代码**；节假日数据的下载只允许出现在 `DelayStart.Management`（`HolidayCalendarUpdateService`），且只在用户主动触发、或设置页「自动检查更新」开着且当年数据缺失时发生。判定输入只能来自本地文件。
 
 ---
 
@@ -39,7 +40,15 @@
 
 | 要改什么 | 去哪 |
 |---|---|
-| 调度计划（过滤 / 排序 / 到点计算） | `Services/SchedulePlan.cs` |
+| 调度计划（过滤 / 排序 / 到点计算） | `Services/SchedulePlan.cs`（🔴 `BuildWithSkipped` 才是完整判定：`Entries` = 计划、`SkippedToday` = 今天不在周期内的启用条目，调度端靠后者写运行日志 FR-15.26；`Build` = 取 `.Entries`） |
+| 周期 id → （种类 + 星期）解析 | `Services/ScheduleCycleResolver.cs`（内置 5 档与自定义档的唯一解析点） |
+| 「今天跑不跑」判定 + 降级标志 | `Services/ScheduleRulePolicy.cs`（🔴 管理端与调度端**同一份**，管理端绝不自算） |
+| 星期位掩码（周一 = bit0） | `Models/WeekdaySet.cs` + `WeekdaySets`（🔴 与 `DayOfWeek` 的换算只走这里） |
+| 周期模型 / 内置周期 id | `Models/ScheduleCycle.cs`（`BuiltinCycleIds` 含展示顺序 `Ordered`） |
+| 内置周期**名称** + 周期名判重判据 | `Models/CycleNames.cs`（🔴 界面与落盘**共用同一份** `IsTaken`；管理端也要拦"与内置档同名"，所以它必须住在 Core，不能留在界面层） |
+| 法定日历模型 | `Models/HolidayCalendar.cs`（`IsWorkday` 在未覆盖年份**抛异常**，调用方必须降级） |
+| 法定日历读写与校验 | `Services/HolidayCalendarStore.cs`（`MinimumEntryCount = 20`） |
+| 节假日归一化落盘格式 | `Serialization/HolidayCalendarDocument.cs` + `HolidayJsonContext` |
 | 收尾判据（弹不弹面板 / 退不退出） | `Services/CompletionPolicy.cs` |
 | 「跳过剩余」可跳判定 | `Services/SkipPolicy.cs` |
 | 同一次运行内的重试判定 | `Services/RetryPolicy.cs` |
@@ -61,11 +70,15 @@
 | 守卫触发规则（档位 → 触发器） | `Services/GuardSchedulePlan.cs` |
 | 提权自检（供守卫入口 / 调度端） | `Services/ElevationCheck.cs` |
 | 跨进程启动参数 / 协议常量（CLI token、`delaystart://`） | `Launch/AppActivation.cs`（🔴 守卫与管理端**共用**，改一处即改契约） |
-
 **`src/DelayStart.Management`** —— 一切 COM / 系统 API / 计划任务：
 
 | 要改什么 | 去哪 |
 |---|---|
+| 节假日下载与归一化写盘 | `Services/HolidayCalendarUpdateService.cs`（🔴 **全仓库唯一联网的地方**，三地址降级：raw.githubusercontent → fastly.jsdelivr → cdn.jsdelivr；只负责"取"，不负责"转"） |
+| 自动检查的节流判据 + "上次检查"记录文件格式 | `Services/HolidayCheckThrottle.cs`（🔴 **成功的安静期 7 天、失败只有 1 小时** —— 节流的对象是"重复的无效开销"，不是"用户想要的功能"；旧单行时间戳按"失败"兼容） |
+| **节假日格式识别与归一化**（下载与导入共用） | `Serialization/HolidaySourceConverter.cs` —— 自动识别 `holiday-cn` 原始格式（`days`）与本地归一化格式（`workdays`/`restDays`）；🔴 **改这里会同时改变下载与导入的行为**，两处都是它的调用方 |
+| 第三方数据源 schema | `Serialization/HolidaySource.cs` + `HolidaySourceJsonContext.cs` |
+| 周期级编辑（新建 / 改名改星期 / 删除 / 把条目改到别的周期） | `Services/ConfigEditService.cs` 的 `AddCycle` / `UpdateCycle` / `DeleteCycle` / `SetItemCycle`（🔴 引用完整性校验只在这里一份） |
 | 扫描编排（逐源 try/catch） | `Services/ScanService.cs` |
 | 某个来源的扫描 / 禁用 / 启用 | `Sources/RegistryStartupSource.cs` · `StartupFolderSource.cs` · `ScheduledTaskSource.cs` · `UwpStartupSource.cs`（🔴 计划任务那个**不带** `Startup` 后缀） |
 | 来源实例工厂（管理端与守卫共用的七个实例） | `Services/StartupSourceFactory.cs` |
@@ -117,7 +130,24 @@
 
 > 🔴 **没有独立的「失效条目」页面**（D81）：失效行内联在 `Views/DelayPage.xaml`，由 `ViewModels/DelayRow.cs` 的 `IsNormal` / `IsStale` / `CanConvertToManual` 三个 bool 驱动显隐（`x:Bind` 不支持 `!` 取反，别在 XAML 里做转换器）。
 
-**`tests/DelayStart.Core.Tests`** —— 32 个测试类 + `Fakes/` 假实现。🔴 **单元测试禁止触碰真实注册表 / 文件系统 / 进程**，全部注入假实现。⚠️ 跑测试用 `dotnet run --project tests/DelayStart.Core.Tests -c Release`，**`dotnet test` 在此工程下报"零个测试"**（MTP 自执行形态）。
+环节 | 去哪
+|---|---|
+| 周期目录（读 / 增改删 / 数引用 / 日历快照） | `Services/CycleCatalogService.cs`（🔴 写操作全部转交 `ConfigEditService`） |
+| 周期展示文案与"今天跳不跳"（徽标 / tooltip / 包含哪些天） | `Services/CycleInfoProvider.cs`（🔴 判定复用 Core，界面绝不自算；`DaysText` 做「每天」简写、给列表用；`DaysListText` **不简写**、给弹窗"包含哪些天"用） |
+| 启动后的节假日自动检查（只查当年；成功 7 天 / 失败 1 小时节流） | `Services/HolidayAutoCheckService.cs`（`RunIfDueAsync` 启动用、`RunNowAsync` 开关打开时用） |
+| 节假日更新的共享可见状态（进度 / 上次结果，单例 + INPC + 切回 UI 线程） | `Services/HolidayUpdateStatus.cs`（🔴 设置页与自动检查**共用同一条进度线**；`x:Bind` 直接绑它，不再往 ViewModel 里抄一份） |
+| 七宫格 / 周期表单（两个宿主共用同一控件） | `Controls/WeekdayGrid.cs`（⚠️ **只在** `CycleEditorForm` 的可编辑形态里用 —— 拿它的只读形态做"纯展示"会变成假交互，见 `pitfalls.md` 十四）· `Controls/CycleEditorForm.cs` |
+| 打开 / 另存为对话框（提权进程里 WinRT 选择器打不开） | `Interop/Win32FilePicker.cs`（`PickFile` / `PickSaveFile`） |
+| 列表徽标 + 「今⊘」跳过标记 | `Views/DelayPage.xaml` 程序名行 + `ViewModels/DelayRow.cs` 的 `CycleText` / `IsSkippedToday` / `SkipToolTip` |
+| 周期与节假日设置 | `Views/SettingsPage.xaml` 的「周期」「节假日数据」两节 + `ViewModels/SettingsViewModel.cs`（`CycleRow` / `HolidayYearRow`） |
+
+> 🔴 **「新建 / 编辑周期」面板有两副宿主**：设置页用真 `ContentDialog`，延时编辑弹窗里用同层 Overlay（`DelayEditorDialog.xaml` 的 `CycleEditOverlay`）—— **ContentDialog 之上不能叠第二个 ContentDialog**。两处的面板内容是同一个类（`CycleEditorForm`），改一处必须同时验证两处。
+
+> 🔴 **设置页底部 `InfoBar` 的 `IsOpen` 绑的是 `SettingsViewModel.HasError`（`StatusText` 的派生属性）**：动 `StatusText` 时必须确认 `OnStatusTextChanged` 里的通知还在 —— 少了它，整页所有错误提示静默（2026-09-23 真机踩过，见 `pitfalls.md` 十四）。
+
+> 🔴 **`stc:SettingsCard` 的 `Content` 区取不到 `DataContext`**：该区域内的行内按钮一律 `Tag="{x:Bind}"` 把行对象带上，不要直接读 `sender.DataContext`（`Views/SettingsPage.xaml.cs` 的 `RowOf` 是既有写法）。
+
+**`tests/DelayStart.Core.Tests`** —— 45 个测试类 + `Fakes/` 假实现 + `RealCalendar2026`（夹具）。🔴 **单元测试禁止触碰真实注册表 / 文件系统 / 进程**，全部注入假实现。⚠️ 跑测试用 `dotnet run --project tests/DelayStart.Core.Tests -c Release`，**`dotnet test` 在此工程下报"零个测试"**（MTP 自执行形态）。
 
 ---
 
@@ -132,9 +162,10 @@
 ```
 
 - 手动等价：`dotnet build DelayStart.slnx -c Release` / `dotnet run --project tests/DelayStart.Core.Tests -c Release`
+- 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + 481 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + 639 个用例全绿。
 
 ---
 
@@ -165,7 +196,7 @@
 | `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-5.3`、`NFR-1.2` |
 | `E-x` | 异常场景矩阵 | `docs/design.md` 五 | `E13` |
 | `R-x` | 技术风险（已全部闭环） | `docs/decisions.md` 附表 | `R11` |
-| `D-x` | 决策点（D1–D83） | `docs/decisions.md` | `D17` |
+| `D-x` | 决策点（D1–D97） | `docs/decisions.md` | `D17` |
 | `坑 x` | 技术陷阱（编号 1–10 沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
 
 规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；**新踩的坑必须追加进 `pitfalls.md`**。
@@ -177,10 +208,12 @@
 | 文档 | 回答什么问题 | 什么时候必须改 |
 |---|---|---|
 | `docs/design.md` | 当前方案单一来源：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发流程 | 需求 / 机制 / 交互行为发生变化 |
-| `docs/decisions.md` | 每个决策的结论与取舍（D1–D82）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
+| `docs/decisions.md` | 每个决策的结论与取舍（D1–D97）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
 | `docs/pitfalls.md` | 技术陷阱：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 | 踩到新坑，或旧坑被修掉 / 定性变化 |
 | `docs/development.md` | 面向人：环境、构建测试、调试、发布打包、真机验收 | 环境要求 / 命令 / 流程变化 |
 | `README.md` | 面向用户：项目介绍、安装、快速上手、FAQ | 用户可见行为或安装方式变化 |
+
+> 🔴 `docs/schedule-rule-plan.md`（FR-15 方案稿）与 `docs/ui/schedule-cycle-ui.html`（交互原型）是**评审期留档，不入库**（`.gitignore` 已挡）—— 内容已并入 `design.md` FR-15 与 `decisions.md` D87–D97 / 附录 A。**代码注释不要再引用这两个文件**。
 
 ---
 
@@ -216,5 +249,12 @@
 - ❌ 让 `--goto-startup` / `--goto-log` / `--stale` 走到 `CliHost`（它们以 `--` 开头会被当成未知子命令 → exit 2、GUI 从不启动）。
 - ❌ 只把 `DelayStart.Guard.exe` 拷进 App bin 就算部署（非 AOT，必须 exe+dll+runtimeconfig+deps 四件套）。
 - ❌ 让 `publish.ps1` 里 `build Guard` / `build NotifyBroker` 排在 `build App` 之后（同步钩子是"拉"式，顺序反了 App bin 里就没有对应 exe）。
+- ❌ 把 shell 的 COM coclass 强转成"看着像"的派生接口（`FileSaveDialog` → `IFileOpenDialog`）—— 两者是**平行**接口（都只继承 `IFileDialog`），QueryInterface 直接回 `E_NOINTERFACE`，CLR 抛的 `InvalidCastException` 在事件处理器里没人接就**整个进程静默消失**（2026-09-23"导出点击闪退"的根因）。要 cast 就 cast 到两个 coclass 的共同基接口（对话框 = `IFileDialog`），见 `pitfalls.md` 十五。
+- ❌ 在"多地址 / 多策略重试"的循环里把**超时**当终局 `return`（`HttpRequestException` 与空内容都 `continue` 了，偏偏最常见的那种没降级）—— 国内访问 `raw.githubusercontent.com` 稳定 15 秒超时，而两个 jsdelivr 镜像 1.1/1.5 秒返回 200，一个 `return` 就让整条降级链失效（2026-09-23"开关开着却什么都没有"的根因之一，`pitfalls.md` 十七）。
+- ❌ 让"上次尝试时间"单独当节流键，或让后台任务不往共享状态上报 —— 前者把一次网络抖动放大成静默 7 天（成功 7 天 / 失败 1 小时），后者让用户问不出"它到底跑没跑"（`Agents.md` 硬约束 8 配套，`pitfalls.md` 十七）。
+- ❌ 把"有条件地什么都不做"做成**日志空白**（周期不匹配 = 不上报、不统计、不通知）—— 功能正确但行为不可解释：用户周六登录看到一片安静，运行日志里连一行都没有。现在跳过的条目写 `Skipped` + 「今天不在启动周期内，未启动」，**全部跳过时也写一份归档 + `current-run.json`**（FR-15.26 / D89 / `pitfalls.md` 十八）。⚠️ 同时：`_items`（运行侧）与 `_record.Items`（日志侧）别再靠下标对齐，先建局部 `planned` 列表两边各自引用。
+- ❌ 用 `DayOfWeek` 的数值直接做星期位运算 —— `WeekdaySet` 是**周一 = bit0**，而 .NET 的 `DayOfWeek.Sunday == 0`，两者**不一致**；"位错位一天"会在每个星期上都成立且**不会报错**，只能靠单测锁（`WeekdaySets` 是唯一换算处）。
+- ❌ 让**引用失效**的周期兜底成"不启动"，或让**该年无节假日数据**兜底成"不启动" —— 兜底方向**只能更宽松，绝不更严格**：静默停摆是最坏的一类失败（"为什么今天没启动"是所有 bug 里最难查的），宁可近似 + 把近似说破（D87 / D90）。
+- ❌ 拿 `WeekdayGrid` 的**只读形态**当"纯展示"控件 —— 它看起来能点、点下去什么都不变（假交互比没有交互更糟）；延时弹窗里"包含哪些天"必须是一行**纯文字**（FR-15.23 / `pitfalls.md` 十四）。
 - ❌ 在收尾判定（`CompletionPolicy`）里读 `NotifyMode`，或让收尾自动弹面板 —— D83 起"面板是面板，通知是通知"：通知归 `NotifyDecision`，面板只跟随用户的手（N4）。
 - ❌ 给 `NotifyBroker` 开 AOT / 让它引用 `Management` / 让它自行注册 AUMID —— 它是"读作业 JSON → 发通知 → 退出"的哑进程（N1/D83）。

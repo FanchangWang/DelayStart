@@ -89,6 +89,8 @@
 - 🔴 **CI 里调 `gh` 的 job 必须 `actions/checkout`**（2026-09-22 v0.1.0 首次真跑暴露）：`release` job 只 `download-artifact`（想省掉检出），而 `gh release create` 靠当前目录的 `.git` 判定目标仓库 → `failed to run git: fatal: not a git repository`，`--generate-notes` 同样无从取提交历史。修法：加一步 `actions/checkout@v4`，或给 job 设 `GH_REPO` / 命令加 `--repo`。（D86 起该 job 不再用 `--generate-notes` 改 `--notes-file`，但检出仍不可省：make-release-notes.ps1 要读仓库里的 CHANGELOG.md。）**这个坑能藏很久**：该 job 带 `if: startsWith(github.ref, 'refs/tags/')`，此前两次都是 `workflow_dispatch` 触发、整段被跳过 —— "从来没跑过"和"一直好着"在日志里长得一模一样，只有真走 tag 那条路才暴露。⇒ **新加的触发路径必须实跑一次才算数。**
 - 🔴 **`gh run rerun` 用的仍是原 run 那次 commit 的 workflow 文件**：改了 `.github/workflows/*.yml` 之后 `--failed` 重跑，跑的还是**旧定义**（GH 固定沿用原 run 的 `GITHUB_SHA` + `GITHUB_REF`）。要验证 workflow 改动只能重新触发：移动 tag 重推、或新提交推 main 后再打 tag。
 - 🔴 **`shell: pwsh` 步骤里不能写 bash 风格 `${SOME_ENV}`**（2026-09-23 v0.2.0 首跑踩坑）：`${GITHUB_REF_NAME}` 在 pwsh 里是 **PowerShell 变量**（不存在 → 恒空串，报 `Cannot bind argument to parameter ... empty string`），不是环境变量；必须写 `$env:GITHUB_REF_NAME`。同文件里 bash 步骤（未写 `shell:` 的 ubuntu 默认）用 `${GITHUB_REF_NAME}` 才是对的 —— 两种风格混排时极易看错。
+- 🔴 **发布脚本的"产物核对"清单必须包含用户会去双击的那个 exe**（2026-09-23）：`scripts/publish.ps1` 原先列了 13 项 —— 调度端 / UIAccess 中转器 / 守卫四件套 / 通知中转器四件套，**唯独没有管理端本体 `DelayStart.exe`**。脚本 `exit 0`、清单一片 OK，用户照着清单找主程序却找不到，于是得出"脚本编译不出 exe"的错误结论（它一直在 `src\DelayStart.App\bin\Release\{AppTfm}\{Rid}\` 下，从未缺席）。⇒ **入清单的判据是"用户会不会去找它"，而不是"它是不是本条流水线新产出的产物"**；同时脚本结尾要直接打印"去哪个目录双击"。另注意 `publish.ps1`（开发期）**不产出 App 的 publish 目录**，可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{flavor}\` + `dist\`）—— 两者职责别混。
+- **沙箱程序黑名单拦 `reg.exe` 不会让 NativeAOT 发布失败**（2026-09-23 本机实测）：`dotnet publish` 调度端时，ILCompiler 的工具链探测会拉起 `reg.exe`，被安全策略拦下并在**外层 shell** 抛 `PROGRAM BLOCKED BY SECURITY POLICY`；但 MSBuild 把它当可选探测，`Generating native code` 照常完成、`exit 0`、产物齐全。⇒ 见到这条阻断消息，先去**读脚本自身的日志与退出码**，别据此判定构建失败（对照：同机上 `dotnet build src\DelayStart.App -c Release -r win-x64 --no-incremental` 全程无此拦截）。
 
 ## 八、WinUI 3 模板与工程创建
 
@@ -159,6 +161,93 @@
 - 🔴 **跨进程 JSON 契约的默认值必须自洽，"空字符串默认值"是哑弹**（2026-09-22）：`NotifyToastJob.Launch` 的属性默认值是 `string.Empty`，常量 `ScheduleDoneLaunch` 从未接成默认值；写作业方按注释"靠契约默认值"只填 Title/Message → 发出的 toast `launch=""` → **点击通知毫无反应**，而发送侧全程绿灯（作业落盘、`Show()` 成功、日志无异常）。修复分四层：① 契约默认值改 = `ScheduleDoneLaunch`（自洽）；② 写作业方**显式**赋值（自文档化，不依赖注释承诺）；③ broker 对空 `Launch` 记 Warn（纵深防御，不阻断发送）；④ 单测锁默认值（`NotifyToastJobTests`）。教训：契约里"能被静默取到的空值"都会等到链路最远端（用户指尖）才炸，且炸得无声无息 —— 默认值要么不存在（必填、缺了报错），要么就是正确值。
 
 ---
+
+## 十四、调度周期与节假日数据（FR-15）
+
+- 🔴 **`DataTemplate` 里的 `x:Bind` 够不到页面的 `ViewModel`**（2026-09-23）：`DataTemplate` 的绑定上下文是**行对象**，写 `{x:Bind ViewModel.IsBusy}` 直接编译失败（`x:DataType` 是 `vm:CycleRow`）。要绑页面级状态，只能 ① 把状态挂到行对象上（本项目采用：`CycleRow.CanDelete` / `EditToolTip`），或 ② 用 `ElementName` 绑定。**结论：凡是"行要不要置灰 / 显示什么"的判断，一律在行对象里算完**（顺带也避免了判定分叉 —— 界面自己再算一遍就会出现"按钮亮着但点了报错"）。
+- 🔴 **同一 `Grid` 行的两个 `InfoBar` 会互相压住**（2026-09-23）：延时页顶部有"配置坏了"和"次年数据没到"两条横幅，各自写 `Grid.Row="1"` 时后一条直接盖住前一条（`InfoBar` 不是流式布局）。要么给它们**不同的行**，要么像现在这样放进同一个 `StackPanel`（该行高度是 `Auto`）。
+- ⚠️ **`ContentDialog.Title` 吃 `object`，可以塞 `StackPanel` 做"标题 + 副标题"**（2026-09-23）：面板要显示"3 个条目正在使用它"这类影响面说明时，不必新造控件 —— `Title = StackPanel { TextBlock(标题), TextBlock(12px 次要色) }` 即可（`ContentDialog` 没有 Subtitle 属性）。
+- 🔴 **默认值写对方向是设计决定，不是随手填**（2026-09-23）：周期引用的兜底一律往**宽松**走（认不出的周期 id → 回落「每天」），绝不往**严格**走（→ 永不启动）。同理，法定数据缺失时降级成星期近似，而不是"判定不出来就不跑"。判定链上任何一个"失败方向"选错，用户看到的现象都是"我的程序今天没启动"，而且不报错。
+- ⚠️ **`CA1822` 会把"不读实例状态"的属性判成该 `static`**（2026-09-23）：本仓库 `TreatWarningsAsErrors=true`，所以 `public DateOnly Today => ...` 这种纯计算属性会直接把构建打红。**别为了加个便利属性破坏"同一快照"的设计** —— 该属性该由持有快照的类（`CycleInfoProvider`）提供，而不是由服务再取一次时间。
+- ⚠️ **新建源码文件前先确认目标目录**（2026-09-23）：一次 `Write` 把三个新文件写到了仓库根下的 `Management/`（而不是 `src/DelayStart.Management/`），**编译时表现为"类型找不到"**（因为根目录不在任何 csproj 的 `**/*.cs` 范围内），而不是"文件写错了地方"。文件建完后用 `git status` 扫一眼未跟踪目录，比在报错里找原因快得多。
+- 🔴 **`[ObservableProperty]` 只为自己生成的属性发通知，get-only 派生属性要手工补**（2026-09-23 用户真机实测）：`StatusText` 是 `[ObservableProperty]`，而 `HasError => StatusText.Length > 0` 只是普通计算属性 —— 少了 `partial void OnStatusTextChanged(string value) => OnPropertyChanged(nameof(HasError));` 这一行，后果**不是"提示难看"，而是所有 `Fail()` 全部静默**：`Message` 绑定的文本确实更新了，但 `IsOpen` 绑定的 `HasError` 永远停在 `false`，整条 `InfoBar` 从不出现。用户在设置页看到的就是"每个按钮点了都没反应"。**审查清单：凡是把 `IsOpen` / `Visibility` / `IsEnabled` 绑到 `xxx => 某字段.某判断` 的地方，都必须有对应的通知补发**（`partial void OnXxxChanged` 或显式 `OnPropertyChanged`）。
+- 🔴 **`stc:SettingsCard` 的 `Content` 区会断 `DataContext` 继承链**（2026-09-23）：在**同一个** `ItemsControl` + `DataTemplate` 结构下，`DelayPage` / `ItemsPage` 的行内按钮用 `sender is Button { DataContext: DelayRow row }` 一直好用；但同样的写法放进 `SettingsCard` 的 `Content` 之后，`DataContext` 取不到行，处理器里的 `if` 直接落空 —— **静默什么都不发生**。⚠️ 卡片标题 / 描述显示正常**不能**当作内容区 `DataContext` 正确的证据：那些走 `x:Bind` 编译期引用，与 `DataContext` 无关。对策：给按钮 `Tag="{x:Bind}"`（编译期绑到 item，不经过继承链），取行时 `Tag` 优先、`DataContext` 兜底。
+- 🔴 **把"忙"标志直接绑到 `IsEnabled` 是反相错误**（2026-09-23）：`IsEnabled="{x:Bind ViewModel.IsHolidayUpdateBusy}"` 读起来通顺，语义却恰好相反 —— 忙的时候能点、闲的时候点不了。`x:Bind` 不支持 `!`，所以要么加一个派生属性（`IsHolidayUpdateIdle => !IsHolidayUpdateBusy`）并在源属性变化时补通知。凡是"按下会进长时间操作"的按钮都该按这个套路配一个 `xxxIdle`；顺带**必须给出进行中的可见反馈**（本项目加了"正在检查并下载…"的 `InfoBar`）—— 网络操作最坏要十几秒，没有反馈就等于"按钮坏了"。
+- ⚠️ **自绘控件的"只读模式"忘了设 = 假交互**（2026-09-23）：`WeekdayGrid` 是同一套按钮网格的两种用法（可编辑 / 只读展示），只读靠 `IsReadOnly="True"` 关命中测试，但没有任何地方会提醒你漏设。漏设时格子看起来**完全可点**、点下去却不改变任何东西（连选中态都不变，因为 `IsReadOnly` 也挡着 `DaysChanged`）—— 用户只会以为自己没点对。**同一个控件承担两种身份时，"只读"必须由调用方显式声明；能用一行文字表达的"纯展示"，就不要用可交互控件**（本轮最终把弹窗里的七宫格换成了一行文字）。
+- 🔴 **"点了没反应"要先怀疑"反馈通道断了"，而不是"事件没绑上"**（2026-09-23）：本轮 4 个无响应现象（重新下载 / 立即更新 / 导出 / 导入）**事件全都正常触发了**，是三条反馈通道各断一环 —— ① 错误文案的 `IsOpen` 不更新；② 行对象取不到导致静默 return；③ 按钮被反相的 `IsEnabled` 锁死。定位顺序：**先在处理器第一行写日志确认进没进 → 再看取值是否为空 → 最后看 UI 绑定的通知源**。
+- 🔴 **`JsonElement.TryGetProperty` 是大小写敏感的，而源生成上下文默认不敏感**（2026-09-23）：用前者做"这是哪种格式"的判别式，会造出"反序列化能过、但格式认不出来"的错位 —— 文件被当成不认识的格式拒收，而且看不出原因。两个 `JsonSerializerContext` 都开了 `PropertyNameCaseInsensitive = true`，判别式也必须同口径（本项目用 `HolidaySourceConverter.TryGetProperty` 遍历属性名做 `OrdinalIgnoreCase` 比较）。
+- ⚠️ **测试里用 `ToUpperInvariant()` 伪造"键名大小写"会把 `true`/`false` 也变成 `TRUE`/`FALSE`**（2026-09-23）：那已经不是合法 JSON 了，用例断言到的其实是"解析失败"，而不是"大小写不敏感"（真实表现：用例报 `Expected: Ok, Actual: Unrecognized`，看起来像实现有 bug）。**只替换键名**（逐个 `Replace("\"key\"", "\"KEY\"")`），值一律保持原样。
+- 🔴 **同一份外部数据有两个入口时，转换只能有一份实现**（2026-09-23 用户批复）：下载通道与「从文件导入」原先各写一套解析 —— 下载路径认 `days: [{date,isOffDay}]`，导入路径只认自己的 `workdays`/`restDays`。后果不是"重复代码"，而是**同一份文件在两条路径上得到相反结局**：用户从上游直接下载的 `2026.json` 能自动下载落盘，却不能导入（报"条目数 0 少于 20"）。抽成 `HolidaySourceConverter` 之后两边共用。⚠️ 推广：**凡是"让用户自己先把文件转成内部格式"的设计，都要先问一句"他拿什么工具转"** —— 答不上来就说明该由程序转（离线机器用 U 盘传数据这件事本身，就说明他手上不该再多一道工序）。
+
+---
+
+## 十五、COM 互操作（系统对话框）
+
+- 🔴 **接口 cast 失败 = 进程静默消失**（2026-09-23 用户报"设置页导出点击闪退"）：`IFileOpenDialog` 与 `IFileSaveDialog` 是**平行接口**（两者都只继承 `IFileDialog`，彼此没有继承关系）。拿 `FileSaveDialog` 的实例去 cast `IFileOpenDialog`，QueryInterface 返回 `E_NOINTERFACE`，CLR 据此抛 `InvalidCastException` —— 它抛在事件处理器里没人接住，结果是**整个进程没了**：没有"未响应"、没有事件日志里的一句人话，只有"点一下闪退"。本机 `Marshal.QueryInterface` 实测：
+
+  ```
+  FileSaveDialog   →  IFileOpenDialog  (D57C7288-D4AD-4768-BE02-9D969532D960)   0x80004002  E_NOINTERFACE
+  FileSaveDialog   →  IFileDialog      (42F85136-DB7E-439C-85F1-E4075D135FC8)   0x00000000  OK
+  FileSaveDialog   →  IFileSaveDialog  (84BCCD23-5FDE-4CDB-AEA4-AF64B83D78AB)   0x00000000  OK
+  FileOpenDialog   →  IFileOpenDialog                                            0x00000000  OK
+  FileOpenDialog   →  IFileDialog                                                0x00000000  OK
+  ```
+
+  ⇒ **两个对话框 coclass 都 cast 到共同接口 `IFileDialog`**（那也是我们实际用到的全部方法所在：声明到 `SetFilter` 即它的完整 vtable；`IFileOpenDialog` 特有的 `GetResults` / `GetSelectedItems` 声不声明都别调）。
+
+- 🔧 **排查手法：先用 PowerShell 把 IID 逐对试一遍，比猜快得多**（同上，2026-09-23）：建实例 → 取 `IUnknown` → `Marshal.QueryInterface` 看 HRESULT。不需要启动程序、不需要弹窗、不会卡住 UI：
+
+  ```powershell
+  $inst = [Activator]::CreateInstance([type]::GetTypeFromCLSID([Guid]'C0B4E2F3-BA21-4773-8DBA-335EC946EB8B'))
+  $unk  = [System.Runtime.InteropServices.Marshal]::GetIUnknownForObject($inst)
+  $iid  = [Guid]'D57C7288-D4AD-4768-BE02-9D969532D960'; $ptr = [IntPtr]::Zero
+  'HR=0x{0:X8}' -f [System.Runtime.InteropServices.Marshal]::QueryInterface($unk, [ref]$iid, [ref]$ptr)
+  # 0x00000000 = 支持；0x80004002 = E_NOINTERFACE，cast 它必炸
+  ```
+
+  ⚠️ 这类"cast 错接口"的 bug **单测查不出来**（真实 COM 对象只在真机上，测试里没有），只能靠真机点一遍 —— 所以凡是**新接入一个 shell COM 组件**（对话框 / 快捷方式 / 任务栏），验收清单里必须有一次"点它"。
+
+## 十六、测试替身（Fakes）
+
+- 🔴 **给 `AppConfig` 加字段时，必须同步改 `InMemoryConfigStore.Copy`**（2026-09-23 实测）：那个替身的 `Copy` 是**逐字段手写**的深拷贝，FR-15 给 `AppConfig` 加 `Cycles` 时漏了这一行。后果不是"少测一个字段"，而是**所有经该替身的周期用例都跑在空周期表上** —— 新加的重名校验"拦不住"、`AddCycle` 写进去的周期在 `Save` 时凭空消失；而判据自身的纯函数用例**全是绿的**（它不经过替身），第一眼看上去像是被测代码写错了方向。
+  - **症状识别**：`AddCycle(...)` 不抛异常 + `Snapshot().Cycles.Count == 0` + 判据单测全过 ⇒ 先去看替身的 `Copy`，而不是去查被测代码。
+  - 同一条提醒在 `CopySettings` 的 remarks 里已经写过一次（2026-09-21，`Settings` 那批字段）；`AppConfig` 自己的集合字段**同样适用**，别以为"只有 Settings 要注意"。
+  - 更根本的做法：让替身只保留**一处**"全字段拷贝"的写法（或对新字段做编译期提醒），别让每个新字段都依赖"记得回来加一行"。
+
+## 十七、后台任务、网络降级与节流（FR-15 自动检查）
+
+- 🔴 **超时是"降级触发器"，不是"终局"**（2026-09-23 真机）。三个地址的降级链里，`raw.githubusercontent.com` 在国内稳定 15 秒超时（本机实测：两个 jsdelivr 镜像 1.1 / 1.5 秒返回 200），而原实现把"自己的 15 秒到点"当成终局直接 `return` —— **降级链在最常见的失败形态上完全不生效**，用户拿到的是"开关开着、什么都没有"。
+  - 为什么偏偏漏了它：`HttpRequestException`（HTTP 状态码不对）与"空内容"都 `continue` 了，唯独超时没有 —— 因为"自己超时"与"外部取消"要分开报告这件事占住了注意力，顺手把 `continue` 写成了 `return`。
+  - 判据：**凡"换个地址 / 换个策略再试"的循环，先把所有失败形态列出来逐个确认走向**，别只测理想失败路径。
+  - 回归用例：`HolidayCalendarUpdateServiceTests.FirstAddressTimingOut_FallsThroughToTheNextAddress`（假 `HttpMessageHandler` 让首个 host 抛 `TaskCanceledException`）。
+
+- 🔴 **节流不能拿"失败"记账**（同一次真机）。原实现"发请求**之前**先落时间戳"（本意是防"每次开机都卡一下网络"），代价是**一次失败 = 静默 7 天**。现在按结局分开：成功 / 上游尚未公布 = 7 天，失败 = 1 小时。
+  - 通用规则：**节流的对象是"重复的无效开销"，不是"用户想要的功能"**。当节流键是"上次尝试时间"时，必须同时记住"上次的结局"，否则一次抖动就否决了整周的功能。
+  - **旧格式必须向后兼容**：升级上来的机器上留着旧版本的**单行** ISO 时间戳（没有结局行），一律按"失败"读 —— 宁可多查一次，也不要让它被当成"上周查过了"继续安静。
+
+- 🔴 **后台任务的状态必须往"共享对象"上报**（同一次真机）。自动检查是启动后 fire-and-forget 的，而设置页的进度条只绑在 ViewModel 自己的标志上 —— 于是"启动时到底在没在下载"，**界面上无处可查**，用户唯一能得出的结论是"这功能是假的"。修法：单例 `HolidayUpdateStatus`（`INotifyPropertyChanged`）作为唯一进度源，两个触发方（页面按钮 / 启动检查）都往它上报。
+  - ⚠️ 后台线程发通知**必须切回 UI 线程**（构造时抓 `DispatcherQueue`）：从线程池线程直接发 `PropertyChanged` 不是"偶尔不刷新"，是当场抛 `RPC_E_WRONG_THREAD`。
+  - ⚠️ 单例状态 + 瞬态 ViewModel 的订阅必须在页面 `Unloaded` 里摘掉，否则每进一次页面就往单例上多挂一个处理器（连页面一起不释放）。
+  - 判定信号：**一个后台任务，如果用户在界面上问不出"它跑没跑"，那它就是缺陷** —— 不是"功能没做"，而是"做完了也看不见"。
+
+- ⚠️ **`$"""…"""` 里的花括号要升格**（同日，写回归用例时踩到）：单 `$` 的原始插值串里 `{` 一律开启插值，想输出 JSON 的花括号得写 `$$"""…{{表达式}}…"""`（双 `$` 把定界符升格成 `{{ }}`），否则 CS9006「插值原始字符串字面量的开头没有足够的 `$` 字符」。手写 JSON 夹具时最容易踩。
+
+## 十八、运行日志的可解释性（FR-15.26）
+
+- 🔴 **"不执行"也必须在日志里留痕**（2026-09-23 用户要求）。周期不匹配的条目按原设计是"不进计划 = 不上报、不统计、不通知"，逻辑自洽但**用户视角是一片空白**：两条设成「周一至周五」的条目，周六登录后什么都没启动，而运行日志里**连一行记录都没有**（计划为空 → 走 FR-5.10 静默退出，压根不写归档）。他能得到的唯一结论是"这东西坏了"。
+  - 修法：`SchedulePlan.BuildWithSkipped` 把"今天不在周期内"的启用条目单列出来（`ScheduleOutcome.SkippedToday`），调度端把它们追加成 `Skipped` 日志行；**全部被跳过时照样写一份归档 + `current-run.json`**（只写归档会让总览页的"最近一次运行"停在上一次，与运行日志页说两套话）。
+  - 判据：**任何"有条件地什么都不做"的功能，都要回答"用户怎么知道今天本来就该什么都不做"**。功能正确 ≠ 行为可解释。
+  - 次序铁律：被 `Enabled=false` 关掉的条目**不在此列** —— 算进去等于把"用户自己关的"报成"周期决定今天不启动"，运行日志立刻变成误导。
+
+- ⚠️ **运行侧与日志侧别靠下标对齐**（同日在做上面的改动时发现）。原代码是：
+
+  ```csharp
+  Items = plan.Select(entry => new RunItemResult { … }).ToList(),
+  …
+  _items.Add(new SchedulerRuntimeItem { Result = _record.Items[index], … });
+  ```
+
+  即"运行项的第 i 个 ↔ 日志项的第 i 个"。往日志里追加**不在运行列表里**的条目（周期跳过项正是这种）之前，必须先把计划项收成一个局部 `planned` 列表、两侧各自引用它 —— 否则将来某次"把追加写在建 `_items` 之前"，运行结果就会静默落到错误的行上（日志说 A 成功、实际启动的是 B），**任何一处都不会报错**。
 
 ## 教训方法论
 

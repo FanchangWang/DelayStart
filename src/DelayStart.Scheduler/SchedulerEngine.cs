@@ -34,6 +34,16 @@ internal sealed class SchedulerEngine
     /// <summary>完成后面板的自动关闭倒计时：存在失败 60 秒（留时间看失败原因）。</summary>
     private const int AutoCloseSecondsOnFailure = 60;
 
+    /// <summary>
+    /// 周期跳过条目写进运行日志的原因文案（FR-15.26）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 三种"跳过"共用 <see cref="RunItemState.Skipped"/>，区别只剩下这一句话，
+    /// 所以它必须同时说清两件事：**不是失败**、**也不是用户点了跳过**。
+    /// 只说"已跳过"等于让用户去猜是自己按错了还是程序没跑。
+    /// </remarks>
+    private const string NotInCycleReason = "今天不在启动周期内，未启动";
+
     private readonly IAppConfigStore _configStore;
     private readonly IRunStateStore _runState;
     private readonly IProcessLauncher _launcher;
@@ -125,6 +135,49 @@ internal sealed class SchedulerEngine
         return 0;
     }
 
+    /// <summary>
+    /// 读取本地法定日历（FR-15 / NFR-x）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 **只读本地磁盘，绝不联网**：这是在登录链路上跑的进程，
+    /// 此刻代理与 DNS 常常还没就绪，把"今天启不启动"押在一次 HTTP 请求上违反「判定可靠」。
+    /// 数据的下载与更新属于管理端（人工看着界面做）的职责。
+    /// </para>
+    /// <para>
+    /// 读取失败 → 返回 <see langword="null"/> 并记 error 日志，**不打断本次调度**：
+    /// 法定两档会退化成星期判定，代价远小于"今天什么都不启动"。
+    /// </para>
+    /// </remarks>
+    /// <returns>日历；没有可用数据时为 <see langword="null"/>。</returns>
+    private HolidayCalendar? LoadHolidayCalendar()
+    {
+        try
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var result = HolidayCalendarStore.Load(_paths);
+
+            foreach (var issue in result.Issues)
+            {
+                _log.Warn($"法定日历文件不可用：{issue.FilePath} —— {issue.Reason}");
+            }
+
+            if (!result.Calendar.Covers(today))
+            {
+                _log.Warn(
+                    $"本地没有 {today.Year} 年的法定节假日数据，"
+                    + "「法定工作日」「法定节假日」两档本次按星期规律近似判定（可在管理端设置页更新）。");
+            }
+
+            return result.Calendar;
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "读取法定日历失败，法定两档本次按星期规律近似判定。");
+            return null;
+        }
+    }
+
     private bool Initialize()
     {
         AppConfig config;
@@ -139,38 +192,62 @@ internal sealed class SchedulerEngine
         }
 
         // 计划生成（过滤 + 排序 + 到点时刻）下沉到 Core 的 SchedulePlan，便于单测（FR-5.3 / FR-5.4）。
-        var plan = SchedulePlan.Build(config.Items);
+        // 调度周期（FR-15）：today 与法定日历都在这一处取，全流程共用一个快照 ——
+        // 跨午夜不重判（FR-15.5），否则 23:59 启动的计划会在零点整悄悄换一套规则。
+        var calendar = LoadHolidayCalendar();
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var outcome = SchedulePlan.BuildWithSkipped(config.Items, config.Cycles, today, calendar);
+        var plan = outcome.Entries;
 
         if (plan.Count == 0)
         {
-            // D4 批复 A（2026-09-22）：空计划无特判 —— 配置能读出来就按通知策略发
-            // 完成通知（内容即"0 项成功"），与有计划的收尾走同一条 <see cref="SendCompletionNotification"/>。
-            // 配置读不出来的那条失败路径不通知（读不到策略，无从判定）。
-            _log.Info("没有启用的延时条目，按通知策略通报后退出（FR-5.10 / N2-D4）。");
+            if (outcome.SkippedToday.Count > 0)
+            {
+                // FR-15.26：今天一条都不启动时，"为什么"必须留下痕迹 ——
+                // 照旧走 FR-5.10 静默退出的话，运行日志里连一行都不会有，
+                // 用户看到的是一个没动静的早晨，而答案在延时页的一条徽标上。
+                RecordAllSkippedRun(outcome.SkippedToday);
+            }
+            else
+            {
+                // D4 批复 A（2026-09-22）：空计划无特判 —— 配置能读出来就按通知策略发
+                // 完成通知（内容即"0 项成功"），与有计划的收尾走同一条 <see cref="SendCompletionNotification"/>。
+                // 配置读不出来的那条失败路径不通知（读不到策略，无从判定）。
+                _log.Info("没有启用的延时条目，按通知策略通报后退出（FR-5.10 / N2-D4）。");
+            }
+
             SendCompletionNotification(failedCount: 0);
             return false;
         }
 
         var now = DateTimeOffset.Now;
+        var planned = plan.Select(static entry => new RunItemResult
+        {
+            Id = entry.Item.Id,
+            Name = entry.Item.Name,
+            Delay = entry.Item.DelaySeconds,
+        }).ToList();
+
         _record = new RunRecord
         {
             RunId = RunStateService.CreateRunId(now),
             StartedAt = now,
-            PlannedCount = plan.Count,
-            Items = plan.Select(static entry => new RunItemResult
-            {
-                Id = entry.Item.Id,
-                Name = entry.Item.Name,
-                Delay = entry.Item.DelaySeconds,
-            }).ToList(),
+            PlannedCount = planned.Count,
+            Items = planned,
         };
+
+        // FR-15.26：今天不在周期内的启用条目也进本次日志，排在计划项之后 ——
+        // 先"这次启动了什么"，再"什么今天轮不到"。
+        // 🔴 只进日志、**不进 _items**：它们没有到点时刻，不参与 Tick 与收尾判定，
+        // 也不该出现在进度面板的计数里（面板回答的是"这次跑得怎么样"）。
+        AppendNotInCycleItems(outcome.SkippedToday, _record.Items);
 
         for (var index = 0; index < plan.Count; index++)
         {
             _items.Add(new SchedulerRuntimeItem
             {
                 Item = plan[index].Item,
-                Result = _record.Items[index],
+                Result = planned[index],
                 LaunchAt = plan[index].LaunchAt,
             });
         }
@@ -178,8 +255,79 @@ internal sealed class SchedulerEngine
         // D40：调度端亲自降权，没有代理进程，也就没有预热这一步。
         _stopwatch.Start();
         PersistState();
-        _log.Info($"调度开始：{_record.RunId}，共 {_record.PlannedCount} 项。");
+        _log.Info($"调度开始：{_record.RunId}，共 {_record.PlannedCount} 项"
+            + (outcome.SkippedToday.Count > 0
+                ? $"，另有 {outcome.SkippedToday.Count} 项今天不在周期内（记入日志，不启动）。"
+                : "。"));
         return true;
+    }
+
+    /// <summary>
+    /// 把"今天不在周期内"的条目追加进运行日志（FR-15.26）。
+    /// </summary>
+    /// <param name="items">今天被周期跳过的启用条目。</param>
+    /// <param name="target">要追加到的运行记录条目表。</param>
+    /// <remarks>
+    /// 条目的 <see cref="RunItemResult.Delay"/> 照填配置延时（日志页那一列照常显示），
+    /// <see cref="RunItemResult.LaunchedAt"/> 留空 —— 它今天没有被发起过，
+    /// 而"没有发起时刻"正是该字段的既有语义（等待中被终止同理）。
+    /// </remarks>
+    private static void AppendNotInCycleItems(IReadOnlyList<DelayedItem> items, List<RunItemResult> target)
+    {
+        foreach (var item in items)
+        {
+            target.Add(new RunItemResult
+            {
+                Id = item.Id,
+                Name = item.Name,
+                Delay = item.DelaySeconds,
+                State = RunItemState.Skipped,
+                Reason = NotInCycleReason,
+            });
+        }
+    }
+
+    /// <summary>
+    /// 今天所有启用条目都不在周期内：写一份"只有跳过项"的运行记录（FR-15.26）。
+    /// </summary>
+    /// <param name="skipped">全部被跳过的启用条目。</param>
+    /// <remarks>
+    /// <para>
+    /// 🔴 这份记录的**全部意义就是回答一个问题**："今天为什么什么都没启动？"
+    /// 它没有任何条目被执行过，因此不进消息循环、不建托盘、不弹面板 ——
+    /// 写完就与 FR-5.10 一样静默退出（通知照旧按策略发）。
+    /// </para>
+    /// <para>
+    /// 实时状态（<c>current-run.json</c>）也一并写：总览页的"最近一次运行"读的是它，
+    /// 只写归档会让总览页停在上一次、与运行日志页说两套话。
+    /// </para>
+    /// </remarks>
+    private void RecordAllSkippedRun(IReadOnlyList<DelayedItem> skipped)
+    {
+        var now = DateTimeOffset.Now;
+        var record = new RunRecord
+        {
+            RunId = RunStateService.CreateRunId(now),
+            StartedAt = now,
+            FinishedAt = now,
+            CompletedNormally = true,
+            PlannedCount = 0,
+            Items = [],
+        };
+
+        AppendNotInCycleItems(skipped, record.Items);
+
+        try
+        {
+            _runState.WriteCurrent(record);
+            _runState.Archive(record);
+            _log.Info($"今天没有条目在启动周期内：{skipped.Count} 个启用条目全部跳过，已写入运行日志。");
+        }
+        catch (Exception ex)
+        {
+            // 写不进去也不该让登录路径上的这个进程卡住或报错 —— 与 FR-5.10 的静默退出等价。
+            _log.Warn(ex, "写入「今天全部条目不在周期内」的运行记录失败。");
+        }
     }
 
     private TrayIconHost? CreateTrayHost(IconResources? icons)

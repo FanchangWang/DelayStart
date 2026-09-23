@@ -60,18 +60,12 @@ nunit-*.xml
 # 需求分析用的参考工程。仅用于提取 Win32 / 注册表 / 计划任务的调用方式，
 # 其中的代码不是本项目的范例，不纳入仓库。
 demo/
-demo2/
 
 # WorkBuddy 工作目录：项目记忆（.workbuddy/memory）与临时校验产物（.workbuddy/tmp）
 .workbuddy/
 
 # 原型 / 文档的本地校验产物
 *.tmp.js
-
-# FR-15 的过程留档：方案稿与交互原型。内容已并入 design.md（FR-15）与
-# decisions.md（D87–D97），只作评审期留档，不入库。
-docs/schedule-rule-plan.md
-docs/ui/
 
 # DelayStart 运行时数据目录（正常情况下在 %LOCALAPPDATA%\DelayStart\，
 # 此处兜底防止测试时误落在仓库内）

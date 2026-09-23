@@ -14,7 +14,7 @@
 | 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
 | 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· **.NET 10 + 非 AOT**（守卫端）· xUnit v3（测试） |
 | 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
-| 测试 | `.\scripts\test.ps1` → **639 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 测试 | `.\scripts\test.ps1` → **643 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
 | 状态 | 功能完整（含守卫、通知中转器、FR-15 调度周期），进安装包阶段；守卫 / D82 / **N1–N12 通知与面板拆分** / **FR-15 真机验收**均待真机验收；文档与代码同步 |
 
 ---
@@ -75,7 +75,7 @@
 | 要改什么 | 去哪 |
 |---|---|
 | 节假日下载与归一化写盘 | `Services/HolidayCalendarUpdateService.cs`（🔴 **全仓库唯一联网的地方**，三地址降级：raw.githubusercontent → fastly.jsdelivr → cdn.jsdelivr；只负责"取"，不负责"转"） |
-| 自动检查的节流判据 + "上次检查"记录文件格式 | `Services/HolidayCheckThrottle.cs`（🔴 **成功的安静期 7 天、失败只有 1 小时** —— 节流的对象是"重复的无效开销"，不是"用户想要的功能"；旧单行时间戳按"失败"兼容） |
+| 自动检查的节流判据 + "上次检查"记录文件格式 | `Services/HolidayCheckThrottle.cs`（🔴 **三档**：`Updated` 的安静期以"数据仍在可用位置"为前提 —— 记录说已获取而本地没有可用数据时**立即重来**；上游未公布 7 天；失败 1 小时。节流的对象是"重复的无效开销"，不是"用户想要的功能"；旧单行时间戳按"失败"、中间那代的 `ok` 按"已获取"兼容） |
 | **节假日格式识别与归一化**（下载与导入共用） | `Serialization/HolidaySourceConverter.cs` —— 自动识别 `holiday-cn` 原始格式（`days`）与本地归一化格式（`workdays`/`restDays`）；🔴 **改这里会同时改变下载与导入的行为**，两处都是它的调用方 |
 | 第三方数据源 schema | `Serialization/HolidaySource.cs` + `HolidaySourceJsonContext.cs` |
 | 周期级编辑（新建 / 改名改星期 / 删除 / 把条目改到别的周期） | `Services/ConfigEditService.cs` 的 `AddCycle` / `UpdateCycle` / `DeleteCycle` / `SetItemCycle`（🔴 引用完整性校验只在这里一份） |
@@ -134,12 +134,12 @@
 |---|---|
 | 周期目录（读 / 增改删 / 数引用 / 日历快照） | `Services/CycleCatalogService.cs`（🔴 写操作全部转交 `ConfigEditService`） |
 | 周期展示文案与"今天跳不跳"（徽标 / tooltip / 包含哪些天） | `Services/CycleInfoProvider.cs`（🔴 判定复用 Core，界面绝不自算；`DaysText` 做「每天」简写、给列表用；`DaysListText` **不简写**、给弹窗"包含哪些天"用） |
-| 启动后的节假日自动检查（只查当年；成功 7 天 / 失败 1 小时节流） | `Services/HolidayAutoCheckService.cs`（`RunIfDueAsync` 启动用、`RunNowAsync` 开关打开时用） |
+| 启动后的节假日自动检查（只查当年；节流三档见 `HolidayCheckThrottle`） | `Services/HolidayAutoCheckService.cs`（`RunIfDueAsync` 启动用、`RunNowAsync` 开关打开时用；`Describe()` 是设置页副标题的唯一文案来源，三档结局各说各的） |
 | 节假日更新的共享可见状态（进度 / 上次结果，单例 + INPC + 切回 UI 线程） | `Services/HolidayUpdateStatus.cs`（🔴 设置页与自动检查**共用同一条进度线**；`x:Bind` 直接绑它，不再往 ViewModel 里抄一份） |
 | 七宫格 / 周期表单（两个宿主共用同一控件） | `Controls/WeekdayGrid.cs`（⚠️ **只在** `CycleEditorForm` 的可编辑形态里用 —— 拿它的只读形态做"纯展示"会变成假交互，见 `pitfalls.md` 十四）· `Controls/CycleEditorForm.cs` |
 | 打开 / 另存为对话框（提权进程里 WinRT 选择器打不开） | `Interop/Win32FilePicker.cs`（`PickFile` / `PickSaveFile`） |
 | 列表徽标 + 「今⊘」跳过标记 | `Views/DelayPage.xaml` 程序名行 + `ViewModels/DelayRow.cs` 的 `CycleText` / `IsSkippedToday` / `SkipToolTip` |
-| 周期与节假日设置 | `Views/SettingsPage.xaml` 的「周期」「节假日数据」两节 + `ViewModels/SettingsViewModel.cs`（`CycleRow` / `HolidayYearRow`） |
+| 延时 / 周期 / 节假日设置 | `Views/SettingsPage.xaml` 的「延时」「周期」「节假日数据」三节 + `ViewModels/SettingsViewModel.cs`（`PresetRow` / `CycleRow` / `HolidayYearRow`）。🔴 「延时」「周期」两节是**可展开列表**（节头一张边框、展开后子内容左右各内收 16，默认收起）：**节头整行是一个透明 `Button`（`SectionHeaderButtonStyle`），右端三角只是 `FontIcon`** —— 装饰性图标不许用 `ToggleButton`（看起来就是颗按钮），整行可点也就不需要"回写按钮选中态"那层补丁。展开后**第一条固定是「添加」行**（左描述 + 右按钮），第二条起才是数据行。延时行 = `DisplayText.LogonDelayOf`（「登录后 2 分 30 秒（150 秒）」）+ 「设为默认」/绿色「当前默认」/「删除」；周期行里**内置 5 档与自定义周期共用 `CycleRow`**（`IsBuiltin` / `CanEdit` / `CanDelete` 是唯一判据，XAML 不重算），「包含哪些天」走 `CycleInfoProvider.DaysListText`（**不简写「每天」**；列表徽标那边仍用简写，同一份数据两种宽度） |
 
 > 🔴 **「新建 / 编辑周期」面板有两副宿主**：设置页用真 `ContentDialog`，延时编辑弹窗里用同层 Overlay（`DelayEditorDialog.xaml` 的 `CycleEditOverlay`）—— **ContentDialog 之上不能叠第二个 ContentDialog**。两处的面板内容是同一个类（`CycleEditorForm`），改一处必须同时验证两处。
 
@@ -165,7 +165,7 @@
 - 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + 639 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + 643 个用例全绿。
 
 ---
 
@@ -237,7 +237,8 @@
 - ❌ 降权链失败后"提权回退"重试（必须判该条目失败并继续）。
 - ❌ 用 `(Name, Source)` 二元组判断"是不是同一项" → 用 `ItemKeyBuilder` 三元组。
 - ❌ 用字符串猜 registry hive → `StartupScope` 必须显式枚举。
-- ❌ 对非 INPC 属性写 `Mode=OneWay`，或在 `x:Bind` 里写三元表达式 / `bool→Visibility`。
+- ❌ 对非 INPC 属性写 `Mode=OneWay`，或在 `x:Bind` 里写三元表达式。
+  - ⚠️ **`bool → Visibility` 是可行的**（`x:Bind` 编译期自动转换）：`RunsPage` 的 `IsLoading`、`SettingsPage` 两节的展开状态都在这么用。此前这条一并禁掉了它，2026-09-23 复核为**过期表述**，已收窄 —— 前提仍是属性本身有通知（`[ObservableProperty]` 或手工 `OnPropertyChanged`）。
 - ❌ 空 `catch`、静默吞异常、失败后不写日志。
 - ❌ 让单元测试碰真实注册表 / 文件系统 / 进程，或让 `Tests` 引用 `App`。
 - ❌ 给 Core / Scheduler 设 `InvariantGlobalization`（计划任务注册必崩）。
@@ -251,10 +252,17 @@
 - ❌ 让 `publish.ps1` 里 `build Guard` / `build NotifyBroker` 排在 `build App` 之后（同步钩子是"拉"式，顺序反了 App bin 里就没有对应 exe）。
 - ❌ 把 shell 的 COM coclass 强转成"看着像"的派生接口（`FileSaveDialog` → `IFileOpenDialog`）—— 两者是**平行**接口（都只继承 `IFileDialog`），QueryInterface 直接回 `E_NOINTERFACE`，CLR 抛的 `InvalidCastException` 在事件处理器里没人接就**整个进程静默消失**（2026-09-23"导出点击闪退"的根因）。要 cast 就 cast 到两个 coclass 的共同基接口（对话框 = `IFileDialog`），见 `pitfalls.md` 十五。
 - ❌ 在"多地址 / 多策略重试"的循环里把**超时**当终局 `return`（`HttpRequestException` 与空内容都 `continue` 了，偏偏最常见的那种没降级）—— 国内访问 `raw.githubusercontent.com` 稳定 15 秒超时，而两个 jsdelivr 镜像 1.1/1.5 秒返回 200，一个 `return` 就让整条降级链失效（2026-09-23"开关开着却什么都没有"的根因之一，`pitfalls.md` 十七）。
-- ❌ 让"上次尝试时间"单独当节流键，或让后台任务不往共享状态上报 —— 前者把一次网络抖动放大成静默 7 天（成功 7 天 / 失败 1 小时），后者让用户问不出"它到底跑没跑"（`Agents.md` 硬约束 8 配套，`pitfalls.md` 十七）。
+- ❌ 让"上次尝试时间"单独当节流键，或让后台任务不往共享状态上报 —— 前者把一次网络抖动放大成静默 7 天（三档见 `HolidayCheckThrottle`），后者让用户问不出"它到底跑没跑"（`Agents.md` 硬约束 8 配套，`pitfalls.md` 十七）。
+- ❌ 把"已获取"与"上游未公布"合并成一个"成功"结局 —— 那样节流就表达不了**"记录说数据已写好、而它现在不在"**（文件被改名 / 删除 / 损坏），7 天安静期会退化成永久静默：用户看到"开关是开的却没反应"，年份行还说"未下载"（2026-09-23 第二次真机，`pitfalls.md` 十七）。
 - ❌ 把"有条件地什么都不做"做成**日志空白**（周期不匹配 = 不上报、不统计、不通知）—— 功能正确但行为不可解释：用户周六登录看到一片安静，运行日志里连一行都没有。现在跳过的条目写 `Skipped` + 「今天不在启动周期内，未启动」，**全部跳过时也写一份归档 + `current-run.json`**（FR-15.26 / D89 / `pitfalls.md` 十八）。⚠️ 同时：`_items`（运行侧）与 `_record.Items`（日志侧）别再靠下标对齐，先建局部 `planned` 列表两边各自引用。
 - ❌ 用 `DayOfWeek` 的数值直接做星期位运算 —— `WeekdaySet` 是**周一 = bit0**，而 .NET 的 `DayOfWeek.Sunday == 0`，两者**不一致**；"位错位一天"会在每个星期上都成立且**不会报错**，只能靠单测锁（`WeekdaySets` 是唯一换算处）。
 - ❌ 让**引用失效**的周期兜底成"不启动"，或让**该年无节假日数据**兜底成"不启动" —— 兜底方向**只能更宽松，绝不更严格**：静默停摆是最坏的一类失败（"为什么今天没启动"是所有 bug 里最难查的），宁可近似 + 把近似说破（D87 / D90）。
 - ❌ 拿 `WeekdayGrid` 的**只读形态**当"纯展示"控件 —— 它看起来能点、点下去什么都不变（假交互比没有交互更糟）；延时弹窗里"包含哪些天"必须是一行**纯文字**（FR-15.23 / `pitfalls.md` 十四）。
 - ❌ 在收尾判定（`CompletionPolicy`）里读 `NotifyMode`，或让收尾自动弹面板 —— D83 起"面板是面板，通知是通知"：通知归 `NotifyDecision`，面板只跟随用户的手（N4）。
 - ❌ 给 `NotifyBroker` 开 AOT / 让它引用 `Management` / 让它自行注册 AUMID —— 它是"读作业 JSON → 发通知 → 退出"的哑进程（N1/D83）。
+- ❌ 给状态文字加 `✓` `✗` `◌` `✅` 这类前缀去"凑等宽" —— 它们**不在同一套度量里**（`✓`/`✗` 约 1 em，`◌` 更窄，emoji 是彩色、更宽、还会被 fallback 到 Segoe UI Emoji），逐字符试探字宽是个填不满的坑。状态列一律**纯中文**、差别用**颜色**表达（D98 / `pitfalls.md` 十九）。
+- ❌ 靠"给字符塞空格 / 换个更宽的符号"去让两种形态看起来一样宽 —— 对齐靠**布局给位置**，不是靠字数。同一行里"按钮 ↔ 文字"会互换的那一格，用**固定列宽**先把位置占住（`设为默认` 按钮 / `当前默认` 文字共用中间一个 88px 列），最右那列才永远对得齐（2026-09-23 批复 24 / D102）。
+- ❌ 用 `ToggleButton` 去当展开/折叠的**装饰性三角** —— 它自带背景、边框和悬停态，看起来就是一颗按钮，用户点之前得先猜"这颗按钮干什么"，而它真正的作用只是指示符。装饰性图标用 `FontIcon`，把展开/收起交给包住**整行**的 `Button`（`SettingsPage` 的 `SectionHeaderButtonStyle`，卡面由按钮自己画，见下一条）：点哪儿都在同一件事上，也就不需要"回写按钮选中态"那层补丁（2026-09-23 批复 24 / D101）。
+- ❌ 给"整行可点"的元素**外面再套一层带 `Padding` 的容器**（`Border` 里塞 `Button`）—— 按钮的悬停高亮只会铺在容器的内边距以内（四周各让出 16 / 14、圆角还比卡片小一圈），用户看到的是"**文字那一小块变色了**"、整张卡片毫无反应，而他要的正相反：鼠标在哪、哪个面就亮。要整行可点就让**按钮自己画那个面** —— 卡面 / 描边 / 圆角 / 内边距全部写在按钮的 `Style` 上，`BasedOn="{StaticResource DefaultButtonStyle}"` 保住悬停 / 按下 / 禁用三态（2026-09-23 批复 25 / D104；`DelayPage.RowButtonStyle` 是同一手法）。
+- ❌ 手算列头 `Padding` 时把**卡片 `Border`** 和**行容器 `ListViewItem`** 的内缩也算进去 —— 列头与行之间只隔着一层容器：卡片那圈是两者**共同**吃掉的，容器那圈列头根本不在里面。多算一层列头就比行多缩 8，同一列上下两个起点（2026-09-23 批复 26 / D105）。规则：行容器 `Padding` 钉死 **0**，列头 `Padding` 的左右 = **行 `Grid` 的左右**（延时启动页是例外：列头在分组卡片**外**，= 内层卡片 8 + 行 20 = 28）。
+- ❌ 新加 `ListView` 时**忘挂 `ItemContainerStyle`** —— 它会静默落到 WinUI 默认 `ListViewItem`（`Padding 12,0`、`MinHeight 40`），行比列头多缩 12、每行还高出 40，**没有任何编译期提示**（总览小表的实测形态，2026-09-23 批复 26 / D105）。列表页的固定顺序：先挂行样式，再按「行 `Grid` 的 `Padding`」写列头。

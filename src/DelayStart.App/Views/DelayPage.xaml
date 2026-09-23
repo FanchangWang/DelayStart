@@ -117,8 +117,9 @@
         </Grid>
 
         <!-- 列表区：每组「子标题 → 表头 → 边框卡片」（2026-09-21 二轮批复：表头跟组走，
-             子标题在表头上方）。表头左内边距 28 = 组卡片 8 内边距 + 行 20 内边距，
-             与行内容逐列对齐；列标题列内水平居中。
+             子标题在表头上方）。表头左内边距 28 = **内层卡片 Border 8** + 行 Grid 20
+             —— 组本身没有卡片（组是 StackPanel），别在这条公式里塞"组卡"（批复 26 校正）；
+             列标题一律左对齐（批复 25）。
              ⚠️ 本区必须落在 * 行上（滚动 bug 教训）：放 Auto 行时 ScrollViewer 拿不到
              高度约束，会整体撑开到内容高度，滚动条永不出现（2026-09-21 实测）。 -->
         <ScrollViewer
@@ -144,7 +145,9 @@
 
                                 <!-- 表头：跟组走（每列表头，子标题在其上方）。
                                      列宽与行模板逐列相同；左内边距 28 = 卡片 8 + 行 20，
-                                     与行内容逐列对齐。 -->
+                                     与行内容逐列对齐。
+                                     列标题**一律左对齐**（2026-09-23 批复 25）：TextBlock
+                                     默认 Stretch + 左对齐，所以下面不写对齐属性。 -->
                                 <Grid Padding="28,0,28,2" ColumnSpacing="10">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="28" />
@@ -158,43 +161,36 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock
                                         Grid.Column="0"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="#" />
                                     <TextBlock
                                         Grid.Column="2"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="程序" />
                                     <TextBlock
                                         Grid.Column="3"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="延时" />
                                     <TextBlock
                                         Grid.Column="4"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="身份" />
                                     <TextBlock
                                         Grid.Column="5"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="启用" />
                                     <TextBlock
                                         Grid.Column="6"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="顺序" />
                                     <TextBlock
                                         Grid.Column="7"
-                                        HorizontalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="操作" />

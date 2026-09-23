@@ -23,9 +23,14 @@
         <conv:NonEmptyToVisibilityConverter x:Key="NonEmptyToVisibility" />
         <conv:ServiceStatusToBrushConverter x:Key="StatusColor" />
 
+        <!-- 🔴 行容器的左右内缩固定为 0（2026-09-23 批复 26）。
+             左右内缩**只由两处决定**：卡片 Border + 行 Grid 的 Padding。
+             列头不在 ListViewItem 里面，所以它的 Padding 只能等于这两者之和
+             （20 = 卡片 8 + 行 12）；一旦给容器再补一层内缩，列头就得跟着手算 +8，
+             算错一次列头与行就差 8，同一列上下两个起点。 -->
         <Style x:Key="ItemRowStyle" TargetType="ListViewItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="Padding" Value="0" />
             <Setter Property="MinHeight" Value="0" />
         </Style>
     </Page.Resources>
@@ -82,8 +87,10 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <!-- 表头：列定义与行模板一致（250/110/100/*，批复 6：描述与路径合并列） -->
-                <Grid Grid.Row="0" Padding="28,8,28,4" ColumnSpacing="12">
+                <!-- 表头：列定义与行模板一致（250/110/100/*，批复 6：描述与路径合并列）。
+                     左右内缩 = 行 Grid 的 12（列头不在 ListViewItem 里，容器那层不算，
+                     卡片 Border 的 8 两边共同吃掉；批复 26）。 -->
+                <Grid Grid.Row="0" Padding="12,8,12,4" ColumnSpacing="12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="250" />
                         <ColumnDefinition Width="110" />
@@ -97,13 +104,13 @@
                         Text="名称" />
                     <TextBlock
                         Grid.Column="1"
-                        HorizontalAlignment="Center"
+                        HorizontalAlignment="Left"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Text="启动类型" />
                     <TextBlock
                         Grid.Column="2"
-                        HorizontalAlignment="Center"
+                        HorizontalAlignment="Left"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Text="状态" />
@@ -193,9 +200,10 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
+                <!-- 名值表头：左右内缩 = 行 Grid 的 12（与上面两处同一条规则，批复 26） -->
                 <Grid
                     Grid.Row="0"
-                    Padding="28,8,28,4"
+                    Padding="12,8,12,4"
                     ColumnSpacing="12"
                     Visibility="{x:Bind ViewModel.HasTextEntries, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
                     <Grid.ColumnDefinitions>

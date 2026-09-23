@@ -10,9 +10,13 @@
 
     <!-- 「运行日志」页（FR-8）：按次分组的调度结果，最新在前，保留最近 30 次 -->
     <Page.Resources>
+        <!-- 🔴 行容器的左右内缩固定为 0（2026-09-23 批复 26）。
+             左右内缩**只由两处决定**：卡片 Border + 行 Grid 的 Padding。
+             列头不在 ListViewItem 里面（它在 Expander 的内容 StackPanel 里），
+             所以它的 Padding 只能等于这两者之和（20 = 卡片 8 + 行 12）。 -->
         <Style x:Key="RunRowStyle" TargetType="ListViewItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="Padding" Value="0" />
             <Setter Property="MinHeight" Value="0" />
         </Style>
     </Page.Resources>
@@ -67,7 +71,12 @@
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1"
             CornerRadius="7">
+            <!-- 外层分组容器也归零（2026-09-24 用户批复）：不挂样式会落到 WinUI 默认
+                 ListViewItem（Padding 12,0、MinHeight 40），整组（组标题 + 表头 + 行）
+                 都比卡片边框多缩 12。列头与行**都在这层之内**，所以归零不改变两者的
+                 相对基线，只是让分组标题与其它列表页的行内容对齐同一条内缩。 -->
             <ListView
+                ItemContainerStyle="{StaticResource RunRowStyle}"
                 ItemsSource="{x:Bind ViewModel.Groups}"
                 SelectionMode="None">
             <ListView.ItemTemplate>
@@ -82,9 +91,16 @@
                             <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" />
                         </Expander.Header>
                         <StackPanel>
-                            <!-- 表头：内缩与行内容对齐（Border 8 + ListViewItem 8 + 行 Grid 12 = 28）；
-                                 列标题列内水平居中（2026-09-21 批复） -->
-                            <Grid Padding="28,8,28,2" ColumnSpacing="12">
+                            <!-- 表头：左右内缩 = 行 Grid 的 12。
+                                 🔴 列头在 Expander 内容的 StackPanel 里、**不在**内层
+                                 ListViewItem 里，与行之间只剩一个内缩已归零的容器；
+                                 卡片 Border 的 8 是两边共同吃掉的 —— 此前写成 28
+                                 （卡片 8 + 容器 8 + 行 12）导致列头比行多缩 8（批复 26）。
+                                 列标题**一律左对齐**，与行内文字共用同一条左基线
+                                 （2026-09-23 批复 25）。TextBlock 默认就是
+                                 HorizontalAlignment=Stretch + TextAlignment=Left，
+                                 所以这里不写对齐属性即为左对齐。 -->
+                            <Grid Padding="12,8,12,2" ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="70" />
@@ -93,25 +109,21 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock
                                     Grid.Column="0"
-                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="程序" />
                                 <TextBlock
                                     Grid.Column="1"
-                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="延时" />
                                 <TextBlock
                                     Grid.Column="2"
-                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="结果" />
                                 <TextBlock
                                     Grid.Column="3"
-                                    HorizontalAlignment="Center"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
                                     Text="说明" />

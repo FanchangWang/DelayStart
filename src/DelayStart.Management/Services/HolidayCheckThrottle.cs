@@ -6,15 +6,27 @@ namespace DelayStart.Management.Services;
 /// 一次自动检查的结局分类。
 /// </summary>
 /// <remarks>
-/// 🔴 只分两类，因为**判据只有这两个分支**：值得尽快再试 / 不必再试。
-/// 这里刻意不复用 <see cref="HolidayUpdateOutcome"/> 的四档 ——
-/// 「尚未公布」对用户要区分（提示他等 11 月），但对节流而言与"已更新"完全等价：
-/// 三个地址拉到的都是同一份空内容，一小时后再拉一遍还是空的。
+/// <para>
+/// 🔴 **分三档而不是两档**（2026-09-23 第二次真机反馈后的修正）。
+/// 第一版把「已获取」与「上游未公布」合并成一个 <c>Succeeded</c>，于是节流回答不了一个
+/// 关键问题：**记录说数据已经写好了，可现在它并不在**。那种状态下"成功"的 7 天安静期
+/// 就是彻底的静默 —— 用户看到开关是开的、本地却没有数据，而且再没有人会去补，
+/// 表现与"功能根本没实现"完全一样（真机上就是这么发生的：下载确实成功过，
+/// 那份文件后来在本地被改了名，于是自动检查按"成功"记账、直到 7 天后才再试）。
+/// </para>
+/// <para>
+/// 判据与 <see cref="HolidayUpdateOutcome"/> 的四档不是一一对应：
+/// 「尚未公布」对用户要单独提示（等 11 月），对节流则等价于"不必马上再试" ——
+/// 三个地址拉到的都是同一份空内容，一小时后再拉还是空的。
+/// </para>
 /// </remarks>
 public enum HolidayCheckOutcome
 {
-    /// <summary>拿到了可用数据，或上游明确回复「尚未公布」—— 两者都不需要再试。</summary>
-    Succeeded,
+    /// <summary>拿到了数据并写进本地（或本地已有可用数据、连网都不必）。</summary>
+    Updated,
+
+    /// <summary>上游明确回复「尚未公布」—— 等下一个窗口，不必马上再试。</summary>
+    NotPublished,
 
     /// <summary>网络或内容出了问题 —— 换个时间很可能就好了，要尽快重试。</summary>
     Failed,
@@ -28,21 +40,30 @@ public enum HolidayCheckOutcome
 /// <param name="Message">给用户看的一句话。</param>
 /// <remarks>
 /// <para>
-/// 落盘成**三行纯文本**（时间 / ok 或 fail / 文案），不是 JSON：
+/// 落盘成**三行纯文本**（时间 / 结局 / 文案），不是 JSON：
 /// 这份文件要在启动路径上读写，用 <c>JsonDocument</c> 之外的任何反序列化器都会给
 /// AOT / 裁剪引入新的注意事项，而它只有三个字段、只被本程序读写。
 /// </para>
 /// <para>
-/// 🔴 **读取必须向后兼容**：旧版本（2026-09-23 之前）写的是**单行 ISO 时间戳**，没有结局行。
-/// 这种记录按 <see cref="HolidayCheckOutcome.Failed"/> 处理 —— 宁可多查一次，
-/// 也不要让升级上来的机器把"上次那次失败"当成"上周查过了"再静默等 7 天。
+/// 🔴 **读取必须向后兼容两代格式**：
+/// ① 最初（2026-09-23 之前）写的是**单行 ISO 时间戳**，没有结局行 —— 按"失败"处理，
+/// 宁可多查一次，也不要让升级上来的机器把"上次那次失败"当成"上周查过了"再静默 7 天；
+/// ② 中间那代的结局行是 <c>ok</c> / <c>fail</c>，其中 <c>ok</c> 把「已获取」与
+/// 「未公布」混在一起 —— 按「已获取」读（理由见 <see cref="TryParse"/>）。
 /// </para>
 /// </remarks>
 public readonly record struct HolidayCheckRecord(DateTimeOffset At, HolidayCheckOutcome Outcome, string Message)
 {
-    private const string SucceededFlag = "ok";
+    /// <summary>拿到数据并落盘。</summary>
+    private const string UpdatedFlag = "updated";
+
+    /// <summary>上游明确说还没公布。</summary>
+    private const string NotPublishedFlag = "nopublish";
 
     private const string FailedFlag = "fail";
+
+    /// <summary>中间那一代的"成功"标记（含「未公布」）。</summary>
+    private const string LegacySucceededFlag = "ok";
 
     /// <summary>序列化成三行文本。</summary>
     /// <returns>可写入文件的文本。</returns>
@@ -50,7 +71,12 @@ public readonly record struct HolidayCheckRecord(DateTimeOffset At, HolidayCheck
     public string Format() => string.Join(
         '\n',
         At.ToString("O", CultureInfo.InvariantCulture),
-        Outcome == HolidayCheckOutcome.Succeeded ? SucceededFlag : FailedFlag,
+        Outcome switch
+        {
+            HolidayCheckOutcome.Updated => UpdatedFlag,
+            HolidayCheckOutcome.NotPublished => NotPublishedFlag,
+            _ => FailedFlag,
+        },
         Message.Replace('\r', ' ').Replace('\n', ' ').Trim());
 
     /// <summary>
@@ -75,16 +101,27 @@ public readonly record struct HolidayCheckRecord(DateTimeOffset At, HolidayCheck
             return false;
         }
 
-        // 没有结局行（旧格式 / 写了一半）→ 按失败处理：下一次启动就重试。
+        // 没有结局行（更早的格式 / 写了一半）→ 按失败处理：下一次启动就重试。
         var outcome = HolidayCheckOutcome.Failed;
         var messageStart = 1;
 
         if (lines.Length > 1)
         {
             var flag = lines[1].Trim();
-            if (flag.Equals(SucceededFlag, StringComparison.OrdinalIgnoreCase))
+            if (flag.Equals(UpdatedFlag, StringComparison.OrdinalIgnoreCase)
+                || flag.Equals(LegacySucceededFlag, StringComparison.OrdinalIgnoreCase))
             {
-                outcome = HolidayCheckOutcome.Succeeded;
+                // 🔴 旧版的 ok 一律按「已获取」读。这一条映射的最坏后果只是"下一次启动多查一次"：
+                //    数据真在本地时，调用方在 HasUsableData 那一步就返回了，根本问不到节流；
+                //    而当初那条 ok 若其实是「尚未公布」，多查那一次正好把它纠正成 NotPublished。
+                //    反过来（旧 ok 按「未公布」读）会让"数据被删/被改名"的机器继续静默 7 天 ——
+                //    那正是这次要修掉的故障。
+                outcome = HolidayCheckOutcome.Updated;
+                messageStart = 2;
+            }
+            else if (flag.Equals(NotPublishedFlag, StringComparison.OrdinalIgnoreCase))
+            {
+                outcome = HolidayCheckOutcome.NotPublished;
                 messageStart = 2;
             }
             else if (flag.Equals(FailedFlag, StringComparison.OrdinalIgnoreCase))
@@ -120,16 +157,23 @@ public readonly record struct HolidayCheckRecord(DateTimeOffset At, HolidayCheck
 /// 用户看到的是"开关是开的，但它什么也没做"。
 /// </para>
 /// <para>
-/// 现在的规则按**结局**分开：拿到数据（或上游明说没公布）才配享 7 天安静期；
-/// 失败只安静一小时 —— 足以避开"反复启动反复打网络"，又不至于让一次网络抖动
-/// 否决一个星期的功能。
+/// 第二版按结局分开，却仍然只有"成功 / 失败"两档 —— 于是第二种静默出现了：
+/// **下载成功过、那份文件后来在本地被改名（或被删、被损坏）**，节流拿"成功"记账，
+/// 自动检查再也不会去补，界面上的年份行则显示"未下载"。现在三档：
+/// 拿到数据（<see cref="HolidayCheckOutcome.Updated"/>）本来就不该再联网，
+/// 一旦发现本地没有可用数据就立即重来；上游明说未公布
+/// （<see cref="HolidayCheckOutcome.NotPublished"/>）安静 7 天；失败只安静一小时 ——
+/// 足以避开"反复启动反复打网络"，又不至于让一次网络抖动否决一个星期的功能。
 /// </para>
 /// </remarks>
 public static class HolidayCheckThrottle
 {
-    /// <summary>成功之后的安静期。</summary>
-    /// <remarks>7 天的依据：官方数据一年只更新几次（每年约 11 月公布次年安排），
-    /// 而"当年数据已经就绪"之后本来就不会再联网。</remarks>
+    /// <summary>上一次**有了结论**（拿到数据 / 上游未公布）之后的安静期。</summary>
+    /// <remarks>
+    /// 7 天的依据：官方数据一年只更新几次（每年约 11 月公布次年安排），
+    /// 而"当年数据已经就绪"之后本来就不会再联网。实际生效的是「未公布」那一支 ——
+    /// 「已获取」会因为本地数据必然还在而在调用点就被拦下（见 <see cref="IsDue"/>）。
+    /// </remarks>
     public static readonly TimeSpan SuccessInterval = TimeSpan.FromDays(7);
 
     /// <summary>失败之后的安静期。</summary>
@@ -151,13 +195,24 @@ public static class HolidayCheckThrottle
             return true;
         }
 
-        var interval = last.Outcome == HolidayCheckOutcome.Succeeded ? SuccessInterval : FailureRetryInterval;
+        var interval = last.Outcome switch
+        {
+            HolidayCheckOutcome.Failed => FailureRetryInterval,
+            HolidayCheckOutcome.NotPublished => SuccessInterval,
+
+            // 🔴 Updated 走到这里，说明**"记录说数据已写盘，可现在它不在"**：
+            // 调用方只在本地没有可用数据时才问节流（有数据那一步就 return 了）。
+            // 文件被改名 / 被删 / 坏了都属于这种状态 —— 它不是"刚查过"，
+            // 没有等 7 天的理由；唯一能自愈的动作就是立刻再拉一次。
+            _ => TimeSpan.Zero,
+        };
+
         nextAttemptAt = last.At + interval;
         return now >= nextAttemptAt;
     }
 
     /// <summary>
-    /// 把一组更新结果归成节流用的两类。
+    /// 把一组更新结果归成节流用的三档。
     /// </summary>
     /// <param name="results">这一次的逐年结果。</param>
     /// <returns>只要有一年没成，就算失败（下次早点再试）。</returns>
@@ -165,14 +220,19 @@ public static class HolidayCheckThrottle
     {
         ArgumentNullException.ThrowIfNull(results);
 
+        var anyUpdated = false;
         foreach (var result in results)
         {
             if (result.Outcome is HolidayUpdateOutcome.NetworkFailure or HolidayUpdateOutcome.InvalidContent)
             {
                 return HolidayCheckOutcome.Failed;
             }
+
+            anyUpdated |= result.Outcome == HolidayUpdateOutcome.Updated;
         }
 
-        return HolidayCheckOutcome.Succeeded;
+        // 一年都没更新（全部"尚未公布"，或压根没有待更新年份）→ 安静期，
+        // 但**不是** Updated：本地仍然没有数据，哪天文件出现了也不该被这句话误判成"已就绪"。
+        return anyUpdated ? HolidayCheckOutcome.Updated : HolidayCheckOutcome.NotPublished;
     }
 }

@@ -7,15 +7,23 @@ namespace DelayStart.Core.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 这一层值得单独测，是因为它承载了一次真机事故的修复：第一版"发请求之前先落时间戳"，
-/// 于是**一次失败 = 静默 7 天**（本机实测：raw.githubusercontent.com 稳定超时，
-/// 两个 jsdelivr 镜像 1.1 / 1.5 秒返回 200，用户在界面上只看到"开关开着但什么都没发生"）。
-/// 现在的规则按结局分开，这两条边界（成功的 7 天、失败的 1 小时）就是被断言的对象。
+/// 这一层值得单独测，是因为它承载了两次真机事故的修复。
+/// 第一版"发请求之前先落时间戳"，于是**一次失败 = 静默 7 天**（本机实测：
+/// raw.githubusercontent.com 稳定超时，两个 jsdelivr 镜像 1.1 / 1.5 秒返回 200，
+/// 用户在界面上只看到"开关开着但什么都没发生"）。
 /// </para>
 /// <para>
-/// 🔴 另一个必须钉死的是**向后兼容**：升级上来的机器上留着的是旧版本的
-/// 单行 ISO 时间戳（没有结局行）。它必须被当成"失败"处理 —— 否则那些机器会继续
-/// 把上次那次失败当成"刚查过"，再静默等一个星期。
+/// 第二版只有"成功 / 失败"两档，于是第二种静默出现了：**下载成功过、文件后来在本地
+/// 被改了名**，节流拿"成功"记账，自动检查再也不会去补（真机实测：记录里写着
+/// <c>ok / 已获取 2026 年数据</c>，而目录里那份数据的文件名已经不是 <c>2026.json</c>，
+/// 于是它被读盘校验拒掉、年份行显示"未下载"、用户看到"开关是开的，就是没反应"）。
+/// 现在 <see cref="HolidayCheckOutcome.Updated"/> 在"本地没有可用数据"的前提下立即到期，
+/// 这条边界就是 <see cref="UpdatedRecord_ButDataIsGone_IsDueNow"/> 钉住的东西。
+/// </para>
+/// <para>
+/// 🔴 另一个必须钉死的是**向后兼容两代格式**：更早的机器上留着的是单行 ISO 时间戳
+/// （没有结局行），它必须被当成"失败"处理；中间那代写的是 <c>ok</c> / <c>fail</c>，
+/// 其中 <c>ok</c> 按"已获取"读（最坏只是多查一次，见 <see cref="LegacyOkFlag_IsReadAsUpdated"/>）。
 /// </para>
 /// </remarks>
 public sealed class HolidayCheckThrottleTests
@@ -29,13 +37,24 @@ public sealed class HolidayCheckThrottleTests
     {
         var original = new HolidayCheckRecord(
             Now,
-            HolidayCheckOutcome.Succeeded,
+            HolidayCheckOutcome.Updated,
             "已获取 2026 年数据。");
 
         Assert.True(HolidayCheckRecord.TryParse(original.Format(), out var parsed));
 
         Assert.Equal(original.At, parsed.At);
         Assert.Equal(original.Outcome, parsed.Outcome);
+        Assert.Equal(original.Message, parsed.Message);
+    }
+
+    [Fact]
+    public void NotPublishedRecord_RoundTrips()
+    {
+        var original = new HolidayCheckRecord(Now, HolidayCheckOutcome.NotPublished, "2027 年安排尚未公布（每年约 11 月）。");
+
+        Assert.True(HolidayCheckRecord.TryParse(original.Format(), out var parsed));
+
+        Assert.Equal(HolidayCheckOutcome.NotPublished, parsed.Outcome);
         Assert.Equal(original.Message, parsed.Message);
     }
 
@@ -68,7 +87,7 @@ public sealed class HolidayCheckThrottleTests
     [Fact]
     public void LegacySingleLineTimestamp_IsTreatedAsFailed()
     {
-        // 旧版本（2026-09-23 之前）写的就是这个：一行 ISO 时间戳，没有结局行。
+        // 更早的版本写的就是这个：一行 ISO 时间戳，没有结局行。
         const string Legacy = "2026-09-23T13:10:26.5914414+00:00";
 
         Assert.True(HolidayCheckRecord.TryParse(Legacy, out var parsed));
@@ -97,6 +116,19 @@ public sealed class HolidayCheckThrottleTests
         Assert.True(HolidayCheckThrottle.IsDue(parsed, oneHourLater, out _));
     }
 
+    [Fact]
+    public void LegacyOkFlag_IsReadAsUpdated()
+    {
+        // 中间那代的结局行：ok 把「已获取」与「未公布」混在一起。
+        // 按"已获取"读 —— 数据真在本地时调用方根本问不到节流，最坏只是多查一次。
+        const string Legacy = "2026-09-23T14:16:55.6005424+00:00\nok\n已获取 2026 年数据。";
+
+        Assert.True(HolidayCheckRecord.TryParse(Legacy, out var parsed));
+
+        Assert.Equal(HolidayCheckOutcome.Updated, parsed.Outcome);
+        Assert.Equal("已获取 2026 年数据。", parsed.Message);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -118,9 +150,9 @@ public sealed class HolidayCheckThrottleTests
     }
 
     [Fact]
-    public void Success_StaysQuietForSevenDays()
+    public void NotPublished_StaysQuietForSevenDays()
     {
-        var record = new HolidayCheckRecord(Now, HolidayCheckOutcome.Succeeded, "已获取 2026 年数据。");
+        var record = new HolidayCheckRecord(Now, HolidayCheckOutcome.NotPublished, "2027 年安排尚未公布（每年约 11 月）。");
 
         Assert.False(HolidayCheckThrottle.IsDue(record, Now.AddDays(7).AddMinutes(-1), out var next));
         Assert.Equal(Now + HolidayCheckThrottle.SuccessInterval, next);
@@ -140,6 +172,22 @@ public sealed class HolidayCheckThrottleTests
     }
 
     [Fact]
+    public void UpdatedRecord_ButDataIsGone_IsDueNow()
+    {
+        // 🔴 2026-09-23 真机事故的回归用例。
+        // 记录写着"已获取 2026 年数据"，可本地那份数据已经不在了（被改名 / 删掉 / 坏掉）——
+        // 调用方只在"本地没有可用数据"时才会问节流，所以这个组合的含义就是数据丢了。
+        // 此时若还按"成功 7 天"算了，用户会看到"开关是开的，却再也不补"。
+        var record = new HolidayCheckRecord(Now, HolidayCheckOutcome.Updated, "已获取 2026 年数据。");
+
+        Assert.True(HolidayCheckThrottle.IsDue(record, Now, out var next));
+        Assert.Equal(Now, next);
+
+        // 一分钟后就该重试 —— 不是 7 天后。
+        Assert.True(HolidayCheckThrottle.IsDue(record, Now.AddMinutes(1), out _));
+    }
+
+    [Fact]
     public void FailureInterval_IsStrictlyShorterThanSuccessInterval()
     {
         // 这条是在防"哪天有人把两个常量改成同一个值"——那样失败就又变成静默 7 天了。
@@ -149,8 +197,8 @@ public sealed class HolidayCheckThrottleTests
     // ── 结果 → 节流分类 ──────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(HolidayUpdateOutcome.Updated, HolidayCheckOutcome.Succeeded)]
-    [InlineData(HolidayUpdateOutcome.NotPublished, HolidayCheckOutcome.Succeeded)]
+    [InlineData(HolidayUpdateOutcome.Updated, HolidayCheckOutcome.Updated)]
+    [InlineData(HolidayUpdateOutcome.NotPublished, HolidayCheckOutcome.NotPublished)]
     [InlineData(HolidayUpdateOutcome.NetworkFailure, HolidayCheckOutcome.Failed)]
     [InlineData(HolidayUpdateOutcome.InvalidContent, HolidayCheckOutcome.Failed)]
     public void OutcomeOf_SingleYear(HolidayUpdateOutcome updateOutcome, HolidayCheckOutcome expected) =>
@@ -170,6 +218,22 @@ public sealed class HolidayCheckThrottleTests
     }
 
     [Fact]
-    public void OutcomeOf_EmptyList_IsSucceeded() =>
-        Assert.Equal(HolidayCheckOutcome.Succeeded, HolidayCheckThrottle.OutcomeOf([]));
+    public void OutcomeOf_NotPublishedMixedWithUpdated_IsUpdated()
+    {
+        // 30 天窗口跨年时会出现"今年更新了、明年还没公布"：今年的数据确实落盘了，
+        // 不能因为明年没公布就把这一轮记成"未公布"（那会让"数据不在本地"失去线索）。
+        var results = new List<HolidayUpdateResult>
+        {
+            new(2026, HolidayUpdateOutcome.Updated, "已更新"),
+            new(2027, HolidayUpdateOutcome.NotPublished, "尚未公布"),
+        };
+
+        Assert.Equal(HolidayCheckOutcome.Updated, HolidayCheckThrottle.OutcomeOf(results));
+    }
+
+    [Fact]
+    public void OutcomeOf_EmptyList_IsNotPublished() =>
+        // 没有待更新的年份 = 无事可做，安静 7 天；但它**不是**"本地已有数据"，
+        // 所以不能被记成 Updated（那会让"数据不在"与"数据在"共用一个结局）。
+        Assert.Equal(HolidayCheckOutcome.NotPublished, HolidayCheckThrottle.OutcomeOf([]));
 }

@@ -132,9 +132,17 @@ public sealed class HolidayAutoCheckService
         }
 
         var at = last.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-        return last.Outcome == HolidayCheckOutcome.Succeeded
-            ? $"上次自动检查：{at} · {last.Message}（要立刻重来，点上面的「重新下载」）"
-            : $"上次自动检查失败（{at}）：{last.Message} 稍后会自动重试。";
+        return last.Outcome switch
+        {
+            // 🔴 记录说"已获取"，可本地现在读不到它 —— 文件被改名 / 删除 / 损坏了。
+            // 这是用户唯一能看到这条线索的地方（年份行只会说"未下载"），而它恰好解释了
+            // "为什么开关是开的却一直没有动静"：见 HolidayCheckThrottle.IsDue 对 Updated 的处理。
+            HolidayCheckOutcome.Updated =>
+                $"上次自动检查（{at}）报告已获取 {year} 年数据，但本地现在读不到它（可能被改名或删除）—— 下次启动会自动重试。",
+            HolidayCheckOutcome.NotPublished =>
+                $"上次自动检查：{at} · {last.Message}（要立刻重来，点上面的「重新下载」）",
+            _ => $"上次自动检查失败（{at}）：{last.Message} 稍后会自动重试。",
+        };
     }
 
     private async Task RunAsync(bool ignoreInterval)
@@ -196,7 +204,7 @@ public sealed class HolidayAutoCheckService
 
                 WriteRecord(new HolidayCheckRecord(DateTimeOffset.UtcNow, outcome, message));
 
-                if (outcome == HolidayCheckOutcome.Succeeded)
+                if (outcome == HolidayCheckOutcome.Updated)
                 {
                     // 新数据要立刻对判定生效：丢掉日历快照（界面可能已经开着）。
                     _cycles.InvalidateCalendar();

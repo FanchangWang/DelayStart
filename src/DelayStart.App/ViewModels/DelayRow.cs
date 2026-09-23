@@ -40,7 +40,13 @@ public sealed class DelayRow : ObservableObject
     /// <param name="staleKind">失效类型；不是失效条目时为 <see langword="null"/>。</param>
     /// <param name="canConvertToManual">能否转成手动条目（要求目标程序还在，见 D81）。</param>
     /// <param name="iconPixels">该条目的图标像素；提取失败为 <see langword="null"/>（显示占位符）。</param>
-    public DelayRow(DelayedItem item, StaleKind? staleKind, bool canConvertToManual, IconPixels? iconPixels)
+    /// <param name="cycles">周期信息提供者（FR-15：徽标文案与"今天跳不跳"）。</param>
+    public DelayRow(
+        DelayedItem item,
+        StaleKind? staleKind,
+        bool canConvertToManual,
+        IconPixels? iconPixels,
+        CycleInfoProvider? cycles)
     {
         ArgumentNullException.ThrowIfNull(item);
         Item = item;
@@ -48,7 +54,53 @@ public sealed class DelayRow : ObservableObject
         CanConvertToManual = canConvertToManual;
         Icon = IconRenderer.ToImageSource(iconPixels);
         _isEnabled = item.Enabled;
+
+        if (cycles is null)
+        {
+            CycleText = string.Empty;
+            CycleToolTip = string.Empty;
+            SkipToolTip = string.Empty;
+            return;
+        }
+
+        // 徽标：**所有**周期都显示，包括内置的「每天」（FR-15.21）——
+        // "这一列空缺"会被读成"没设周期"，而默认档恰恰是最常见的值，不能让它看起来像异常。
+        var name = cycles.NameOf(item.ScheduleCycleId);
+        var skipped = cycles.IsSkipped(item.ScheduleCycleId, out var degraded, out var reason);
+
+        CycleText = degraded ? $"{name} ≈" : name;
+        CycleToolTip = CycleInfoProvider.IsDynamic(item.ScheduleCycleId)
+            ? $"{name}：以 {cycles.Today.Year} 年国务院放假安排为准，不固定在某几个星期"
+            : $"{name}：{cycles.DaysTextOf(item.ScheduleCycleId)}";
+
+        IsSkippedToday = skipped;
+        SkipToolTip = skipped
+            ? $"今天 {cycles.Today:yyyy-MM-dd}（{CycleInfoProvider.NameOfDay(cycles.Today.DayOfWeek)}）不启动"
+                + $"\n周期：{CycleText}\n原因：{reason}"
+                + (degraded ? "\n（该年法定数据不可用，当前按星期规律近似判定）" : string.Empty)
+            : string.Empty;
     }
+
+    /// <summary>
+    /// 周期徽标文案（含「每天」）。近似判定时带 <c>≈</c> 后缀 —— 那是"这不是官方答案"的意思。
+    /// </summary>
+    public string CycleText { get; }
+
+    /// <summary>周期徽标的悬停说明（周期名 + 包含哪些天 / 随放假安排变动）。</summary>
+    public string CycleToolTip { get; }
+
+    /// <summary>
+    /// 今天是否被周期跳过（FR-15.22）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这一行<b>不置灰</b>：整行变淡是「启用 = 关」的视觉语言，
+    /// 两者语义不同（一个是"今天不跑"，一个是"永久不跑"），复用同一个视觉表达
+    /// 只会让人分不清。替代做法是程序名后挂一个红圈斜杠标记，悬停给原因。
+    /// </remarks>
+    public bool IsSkippedToday { get; }
+
+    /// <summary>跳过标记的悬停说明；未跳过时为空串。</summary>
+    public string SkipToolTip { get; }
 
     /// <summary>原始条目，供移除 / 编辑 / 删除 / 转手动取用。</summary>
     public DelayedItem Item { get; }

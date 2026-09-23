@@ -83,6 +83,26 @@ internal static class ServiceRegistration
         // 因此属 Management 层而不是 Core —— 与 TakeoverService 同理。
         services.AddSingleton<ConfigEditService>();
 
+        // 界面侧「调度周期」目录（FR-15）：读周期表 / 数引用 / 增删改，外加一份本地法定日历快照。
+        // 单例：它缓存日历快照，多份实例会让"刚点完立即更新的设置页"与"列表页"看到不同数据。
+        // 它自己不落盘 —— 写操作一律转交 ConfigEditService，引用完整性校验只在那边一份。
+        services.AddSingleton<CycleCatalogService>();
+
+        // 法定节假日数据的抓取与落盘（FR-15 / NFR-x）。
+        // 🔴 全仓库唯一允许出现网络代码的服务：调度端与守卫端必须离线可判定，
+        // 下载只在管理端、且由用户在设置页主动触发。
+        services.AddSingleton<HolidayCalendarUpdateService>();
+
+        // 节假日更新的共享可见状态（进度 / 上次结果）。🔴 单例是硬要求：更新有两个触发方
+        // （设置页的按钮、启动后的自动检查），它们必须往**同一个**对象上报 ——
+        // 各持一份的话，设置页只能看见自己那一次，自动检查跑得再起劲也是隐形的。
+        // ⚠️ 构造必须发生在 UI 线程（它在构造时记住当时的 DispatcherQueue，用来把通知切回 UI 线程）。
+        services.AddSingleton<HolidayUpdateStatus>();
+
+        // 启动后的节假日自动检查（FR-15 / §6.5）：默认开，但只有"当年数据不可用 + 过了节流期"
+        // 才真的联网，所以正常机器上它一辈子只跑一次。单例只为与上面两个共享快照与状态。
+        services.AddSingleton<HolidayAutoCheckService>();
+
         // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测，缺失即自动补建。
         // "每次都跑"就是它的语义，不靠容器保证只解析一次；Singleton 与配置 / 日志同一批。
         services.AddSingleton<SchedulerTaskBootstrap>();

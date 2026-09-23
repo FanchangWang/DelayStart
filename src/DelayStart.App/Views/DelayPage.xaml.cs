@@ -22,20 +22,28 @@ public sealed partial class DelayPage : Page, IReloadablePage
 {
     private readonly WindowHandleProvider _handles;
     private readonly IconProvider _icons;
+    private readonly CycleCatalogService _cycles;
 
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
     /// <param name="handles">主窗口句柄提供者，「手动添加」的文件选择器需要它。</param>
     /// <param name="icons">图标提取服务，「选择 UWP 应用」列表需要（D46）。</param>
-    public DelayPage(DelayViewModel viewModel, WindowHandleProvider handles, IconProvider icons)
+    /// <param name="cycles">周期目录服务，编辑器里的「调度周期」一节需要（FR-15）。</param>
+    public DelayPage(
+        DelayViewModel viewModel,
+        WindowHandleProvider handles,
+        IconProvider icons,
+        CycleCatalogService cycles)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(handles);
         ArgumentNullException.ThrowIfNull(icons);
+        ArgumentNullException.ThrowIfNull(cycles);
 
         ViewModel = viewModel;
         _handles = handles;
         _icons = icons;
+        _cycles = cycles;
 
         InitializeComponent();
 
@@ -81,7 +89,7 @@ public sealed partial class DelayPage : Page, IReloadablePage
     /// </remarks>
     private async void OnAddManualRequested(object sender, RoutedEventArgs e)
     {
-        var dialog = new DelayEditorDialog(ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons)
+        var dialog = new DelayEditorDialog(ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons, _cycles)
         {
             XamlRoot = XamlRoot,
         };
@@ -114,7 +122,7 @@ public sealed partial class DelayPage : Page, IReloadablePage
             return;
         }
 
-        var dialog = new DelayEditorDialog(row.Item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons)
+        var dialog = new DelayEditorDialog(row.Item, ViewModel.DelayPresets, ViewModel.DefaultPreset, _handles, _icons, _cycles)
         {
             XamlRoot = XamlRoot,
         };

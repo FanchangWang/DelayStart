@@ -170,6 +170,183 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ── 周期 ──（FR-15，2026-09-23 批复 6：位置在「延时」与「节假日数据」之间；
+                     边框一固定是"介绍 + 新建"，之后每个自定义周期一张独立边框，
+                     内置 5 档不出现在这里 —— 它们在延时弹窗里挑，且不可改不可删。） -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="周期" />
+
+                <!-- 边框一：左介绍 + 右（新建按钮） -->
+                <Border
+                    Padding="16,14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="7">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="决定条目在哪些天启动" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                Text="一个周期可被多个条目引用；改周期会同步影响所有引用它的条目。" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Click="OnCycleAdd"
+                            Content="＋ 新建周期" />
+                    </Grid>
+                </Border>
+
+                <!-- 每个自定义周期一张独立边框（批复 6：不挤在一张卡里） -->
+                <ItemsControl Margin="0,8,0,0" ItemsSource="{x:Bind ViewModel.Cycles, Mode=OneTime}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:CycleRow">
+                            <Border
+                                Margin="0,0,0,8"
+                                Padding="16,14"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                CornerRadius="7">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        FontWeight="SemiBold"
+                                        Text="{x:Bind Name}" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind DaysText}" />
+                                    <TextBlock
+                                        Grid.Column="2"
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind UsageText}" />
+                                    <StackPanel
+                                        Grid.Column="3"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                        <Button
+                                            Click="OnCycleEdit"
+                                            Content="编辑"
+                                            ToolTipService.ToolTip="{x:Bind EditToolTip}" />
+                                        <!-- 🔴 被引用时置灰（FR-15.14）：x:Bind 不支持取反，
+                                             结论由 CycleRow.CanDelete 给出，XAML 不做判断。 -->
+                                        <Button
+                                            Click="OnCycleDelete"
+                                            Content="删除"
+                                            IsEnabled="{x:Bind CanDelete, Mode=OneTime}"
+                                            ToolTipService.ToolTip="{x:Bind DeleteToolTip}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 2026-09-23 批复 16：周期节底部原先有两句常驻说明（"周期是引用关系…"
+                     与空状态"还没有自定义周期"），已移除 —— 该说的在编辑面板副标题
+                     （N 个条目正在使用）与删除确认里都已经说过，常驻在设置页只是噪声。 -->
+
+                <!-- ── 节假日数据 ──（FR-15 / §6.5：今年 + 次年两行，逐行状态 + 更新入口） -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="节假日数据" />
+
+                <StackPanel Spacing="2">
+                    <!-- 2026-09-23 二次批复 2：点下去必须当场有可见反馈。
+                         更新要走网络（三个地址依次降级，最坏十几秒），期间什么都不显示的话，
+                         用户只会得出"这按钮坏了"这一个结论。
+                         2026-09-23 批复 20：改绑**共享状态**（ViewModel.HolidayStatus）——
+                         启动时的自动检查也在往同一个对象上报，于是"自动检查跑到一半进设置页"
+                         同样能看见这条进度，而不只是本页按钮触发的那一次。 -->
+                    <InfoBar
+                        IsClosable="False"
+                        IsOpen="{x:Bind ViewModel.HolidayStatus.IsBusy, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.HolidayStatus.ActivityText, Mode=OneWay}"
+                        Severity="Informational" />
+
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.HolidayYears, Mode=OneTime}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HolidayYearRow">
+                                <stc:SettingsCard Description="{x:Bind DetailText}" Header="{x:Bind Header}">
+                                    <StackPanel
+                                        Orientation="Horizontal"
+                                        Spacing="12"
+                                        VerticalAlignment="Center">
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind StatusText}" />
+                                        <!-- 🔴 行对象用 Tag 显式带上，不靠 DataContext 继承 ——
+                                             这些按钮长在 SettingsCard 的 Content 里，而 Content 区的
+                                             DataContext 继承链不可靠：卡片标题显示正常**不能**证明
+                                             内容区的 DataContext 是对的（标题走的是 x:Bind 编译期引用）。
+                                             取不到行的后果是静默 return，表现就是"点了没反应"。 -->
+                                        <Button
+                                            Click="OnHolidayUpdateYear"
+                                            Content="重新下载"
+                                            Tag="{x:Bind}"
+                                            ToolTipService.ToolTip="强制从网络重新拉取这一年的数据" />
+                                        <!-- 没有本地数据就没有东西可导：按钮置灰（IsEnabled 取自行对象）。 -->
+                                        <Button
+                                            Click="OnHolidayExportYear"
+                                            Content="导出"
+                                            IsEnabled="{x:Bind CanExport, Mode=OneTime}"
+                                            Tag="{x:Bind}"
+                                            ToolTipService.ToolTip="把这年的本地数据存成 JSON 文件" />
+                                    </StackPanel>
+                                </stc:SettingsCard>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <stc:SettingsCard Description="只补缺失的年份；已有合法数据时不会白跑一趟网络" Header="补齐缺失年份">
+                        <!-- 绑的是"空闲"不是"忙"：x:Bind 不支持取反，直接绑忙标志
+                             会让按钮在闲时锁死、忙时可点（2026-09-23 二次批复 2 修正）。
+                             批复 20 起改绑共享状态 —— 自动检查在跑的时候，这里的按钮同样该禁用。 -->
+                        <Button
+                            Click="OnHolidayUpdateMissing"
+                            Content="立即更新"
+                            IsEnabled="{x:Bind ViewModel.HolidayStatus.IsIdle, Mode=OneWay}" />
+                    </stc:SettingsCard>
+
+                    <!-- 副标题改成**活的**（2026-09-23 批复 20）：原先写的是规则说明
+                         （"当年数据不可用时…"），用户看完仍然不知道"它到底跑没跑"。
+                         现在这里直接报事实：关着 / 已就绪 / 上次什么时候查的、结果如何。 -->
+                    <stc:SettingsCard
+                        Description="{x:Bind ViewModel.HolidayStatus.SummaryText, Mode=OneWay}"
+                        Header="自动检查更新">
+                        <ToggleSwitch
+                            IsOn="{x:Bind ViewModel.AutoCheckHolidayUpdates, Mode=OneWay}"
+                            Toggled="OnHolidayAutoCheckToggled" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="原始格式（holiday-cn 的 days）与本程序导出的归一化格式都能直接导入，年份以文件内容为准" Header="从文件导入">
+                        <Button Click="OnHolidayImport" Content="选择文件" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="本地数据所在目录，可手工替换或校正" Header="数据文件夹">
+                        <Button Click="OnHolidayOpenFolder" Content="打开" />
+                    </stc:SettingsCard>
+                </StackPanel>
+
                 <!-- ── 调度 ── -->
                 <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="调度" />
 

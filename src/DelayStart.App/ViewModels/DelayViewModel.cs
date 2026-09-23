@@ -38,7 +38,11 @@ public sealed partial class DelayViewModel : ObservableObject
     private readonly ConfigEditService _editor;
     private readonly IconProvider _icons;
     private readonly ScanCacheService _scanCache;
+    private readonly PathService _paths;
     private readonly ILogSink _log;
+
+    /// <summary>最近一次刷新用到的周期信息（今天 + 法定日历 + 周期表）。行对象在构造时读它。</summary>
+    private CycleInfoProvider? _cycles;
 
     /// <summary>最近一次后台刷新提取到的图标像素，键为条目引用。</summary>
     /// <remarks>
@@ -69,6 +73,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <param name="editor">条目级编辑服务（改延时 / 切开关 / 调顺序 / 手动添加 / 删除 / 转手动）。</param>
     /// <param name="icons">图标提取服务（D30）。</param>
     /// <param name="scanCache">扫描缓存（移出后标记对应来源过期，供来源页重扫，D41）。</param>
+    /// <param name="paths">路径服务（法定日历的落点）。</param>
     /// <param name="log">日志接收端。</param>
     public DelayViewModel(
         IAppConfigStore configStore,
@@ -77,6 +82,7 @@ public sealed partial class DelayViewModel : ObservableObject
         ConfigEditService editor,
         IconProvider icons,
         ScanCacheService scanCache,
+        PathService paths,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(configStore);
@@ -85,6 +91,7 @@ public sealed partial class DelayViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(editor);
         ArgumentNullException.ThrowIfNull(icons);
         ArgumentNullException.ThrowIfNull(scanCache);
+        ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(log);
 
         _configStore = configStore;
@@ -93,6 +100,7 @@ public sealed partial class DelayViewModel : ObservableObject
         _editor = editor;
         _icons = icons;
         _scanCache = scanCache;
+        _paths = paths;
         _log = log;
 
         DelayPresets = new Settings().DelayPresets;
@@ -113,6 +121,55 @@ public sealed partial class DelayViewModel : ObservableObject
 
     /// <summary>列表是否为空（用于区分两种空状态）。</summary>
     public bool IsEmpty => Rows.Count == 0;
+
+    private string _cycleSummary = string.Empty;
+
+    /// <summary>
+    /// 「本次登录预览」一句话（FR-15.23）：今天有多少项会进计划、多少项被周期跳过。
+    /// </summary>
+    /// <remarks>
+    /// 列表行内的标记回答"这一行怎么了"，这一行回答"整体今天会发生什么" ——
+    /// 两者分工明确，所以编辑器弹窗里不再重复摆"今天会不会启动"。
+    /// </remarks>
+    public string CycleSummary
+    {
+        get => _cycleSummary;
+        private set
+        {
+            if (SetProperty(ref _cycleSummary, value))
+            {
+                OnPropertyChanged(nameof(HasCycleSummary));
+            }
+        }
+    }
+
+    /// <summary>是否存在「本次登录预览」文案（XAML 的 <c>Visibility</c> 只吃布尔值）。</summary>
+    public bool HasCycleSummary => _cycleSummary.Length > 0;
+
+    private string _holidayNotice = string.Empty;
+
+    /// <summary>
+    /// 「次年节假日数据还没到」的到期提醒（§6.5）。
+    /// </summary>
+    /// <remarks>
+    /// 只在三条同时成立时出现：① 已经过了 11 月 1 日（国务院差不多每年这个时间公布次年安排）；
+    /// ② 次年数据缺失；③ **确实有条目在用法定两档** —— 没有条目用的时候这条提示纯属噪音，
+    /// 因为没有任何判定会受影响。
+    /// </remarks>
+    public string HolidayNoticeText
+    {
+        get => _holidayNotice;
+        private set
+        {
+            if (SetProperty(ref _holidayNotice, value))
+            {
+                OnPropertyChanged(nameof(HasHolidayNotice));
+            }
+        }
+    }
+
+    /// <summary>是否显示到期提醒。</summary>
+    public bool HasHolidayNotice => _holidayNotice.Length > 0;
 
     /// <summary>延时预设值（秒），驱动编辑器的快选按钮（FR-4.2）。</summary>
     public int[] DelayPresets { get; private set; }
@@ -216,6 +273,10 @@ public sealed partial class DelayViewModel : ObservableObject
         // 预设值与上限随配置一起刷新：用户在设置页改过之后，编辑器立刻用新值。
         ApplySettings(config.Settings);
 
+        // 周期信息（FR-15）：一次刷新一份快照，全部行共用 ——
+        // 今天与法定日历在本次刷新里必须是同一个值，否则同一屏里上下两行可能不属于"同一天"。
+        _cycles = CreateCycleProvider(config);
+
         // 失效判定需要"系统里还有没有这一项"（来自 RefreshAsync 的后台扫描快照）。
         // 扫描整体失败时快照为空，此时**一律不标失效** —— 误标会让用户把好条目删掉，
         // 代价远大于漏标。页面尚未刷新过时同样不判（快照为空）。
@@ -232,10 +293,12 @@ public sealed partial class DelayViewModel : ObservableObject
             var canConvert = staleKind is not null && File.Exists(item.Path);
 
             var pixels = _pendingPixels.GetValueOrDefault(item) ?? _icons.TryGetIcon(IconSourceOf(item) ?? string.Empty);
-            Rows.Add(new DelayRow(item, staleKind, canConvert, pixels) { Order = ++order });
+            Rows.Add(new DelayRow(item, staleKind, canConvert, pixels, _cycles) { Order = ++order });
         }
 
         RebuildGroups();
+        CycleSummary = BuildCycleSummary();
+        HolidayNoticeText = BuildHolidayNotice(config);
 
         ErrorText = _scanHadFailures
             ? "系统扫描未完全成功，部分条目的失效状态暂时无法判断。"
@@ -464,6 +527,102 @@ public sealed partial class DelayViewModel : ObservableObject
         }
 
         return string.IsNullOrWhiteSpace(item.Path) ? null : item.Path;
+    }
+
+    /// <summary>
+    /// 造本次刷新的周期信息提供者（今天 + 本地法定日历 + 周期表）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 法定日历**只读本地**（NFR-x）：管理端也不在页面加载时联网，
+    /// 下载是设置页里由用户点「立即更新」才做的事。读取失败时日历为 <see langword="null"/>，
+    /// 法定两档退化成星期判定，并且徽标会带 <c>≈</c> —— 用户看得见这件事。
+    /// </remarks>
+    private CycleInfoProvider CreateCycleProvider(AppConfig config)
+    {
+        HolidayCalendar? calendar = null;
+        try
+        {
+            var result = HolidayCalendarStore.Load(_paths);
+            foreach (var issue in result.Issues)
+            {
+                _log.Warn($"法定日历文件不可用：{issue.FilePath} —— {issue.Reason}");
+            }
+
+            calendar = result.Calendar;
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "读取法定日历失败，法定两档按星期规律近似判定");
+        }
+
+        return new CycleInfoProvider(config.Cycles, calendar, DateOnly.FromDateTime(DateTime.Now));
+    }
+
+    /// <summary>
+    /// 拼「次年数据到期提醒」（§6.5）：11 月 1 日起、次年无数据、且确实有启用的条目在用法定两档。
+    /// </summary>
+    /// <param name="config">当前配置。</param>
+    /// <returns>提示文案；不需要提示时为空串。</returns>
+    /// <remarks>
+    /// 与设置页的年份行是同一件事的两个落点：那边是"你去更新"，这边是"你今天的判定正在近似"。
+    /// 都不弹窗 —— 它不影响任何主功能，用横幅提醒足够了。
+    /// </remarks>
+    private string BuildHolidayNotice(AppConfig config)
+    {
+        if (_cycles is null)
+        {
+            return string.Empty;
+        }
+
+        var today = _cycles.Today;
+        var nextYear = today.Year + 1;
+
+        if (today < new DateOnly(today.Year, 11, 1) || _cycles.HasCalendarFor(nextYear))
+        {
+            return string.Empty;
+        }
+
+        // 没有条目在用法定两档时不提示：那种情况下"缺数据"不影响任何判定。
+        var usesLegal = config.Items.Exists(
+            static item => item.Enabled && CycleInfoProvider.IsDynamic(item.ScheduleCycleId));
+
+        if (!usesLegal)
+        {
+            return string.Empty;
+        }
+
+        return $"{nextYear} 年法定放假安排尚未下载（每年约 11 月公布）。在它到位之前，"
+            + "「法定工作日」「法定节假日」按星期规律近似判定，调休补班日会判错 —— "
+            + "可在「设置 · 节假日数据」里更新。";
+    }
+
+    /// <summary>拼「本次登录预览」：进计划几项、跳过几项（跳过时最多列三个名字）。</summary>
+    private string BuildCycleSummary()
+    {
+        if (_cycles is null || Rows.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var today = _cycles.Today;
+        var skipped = Rows.Where(static row => row.IsSkippedToday).Select(static row => row.Name).ToArray();
+        var run = Rows.Count - skipped.Length;
+
+        var text = $"本次登录预览 · {today:yyyy-MM-dd}（{CycleInfoProvider.NameOfDay(today.DayOfWeek)}）："
+            + $"进计划 {run} 项，跳过 {skipped.Length} 项";
+
+        if (skipped.Length > 0)
+        {
+            var names = string.Join("、", skipped.Take(3));
+            text += skipped.Length > 3 ? $" — {names} 等" : $" — {names}";
+        }
+
+        if (run == 0)
+        {
+            text += "。全部被跳过 → 本次不会有启动动作。";
+        }
+
+        return text;
     }
 
     /// <summary>同步延时预设值与默认预设。</summary>

@@ -1,4 +1,5 @@
-﻿using DelayStart.Management.Services;
+﻿using DelayStart.App.Services;
+using DelayStart.Management.Services;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -99,6 +100,11 @@ public partial class App : Application, IDisposable
 
         _window = _services.GetRequiredService<MainWindow>();
         _window.Activate();
+
+        // 节假日数据自动检查（FR-15 / design.md FR-15）：后台跑、不挡启动、不弹窗。
+        // 🔴 触发条件很窄（当年数据不可用 + 距上次检查超过 7 天），且服务内部吞掉全部异常 ——
+        // 它只是"补一份可选的缓存"，失败的时候法定两档会自己降级，不影响任何主功能。
+        _ = _services.GetRequiredService<HolidayAutoCheckService>().RunIfDueAsync();
 
         // 跨进程落点入口（D82）。两个动作的相对顺序见上面的 remarks。
         StartRequestWatcher();

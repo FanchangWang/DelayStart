@@ -355,6 +355,66 @@
                 </Border>
             </StackPanel>
 
+            <!-- ══ 调度周期 ══（FR-15）
+                 🔴 这里**没有可编辑的七宫格**（批复 5）：要新的星期组合就去「＋ 新建周期」，
+                 走同层 Overlay 面板（§6.2），建完自动选中它。
+                 条目必须落在**一个**周期上（默认「每天」），不存在"不选"这种状态。 -->
+            <StackPanel Spacing="8">
+                <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="调度周期" />
+
+                <Border
+                    Padding="12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource ControlCornerRadius}">
+                    <StackPanel Spacing="10">
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            Text="决定这次登录要不要启动它；与延时相互独立。" />
+
+                        <!-- 内置 5 档（不可改不可删，FR-15.13）-->
+                        <ItemsControl x:Name="CycleChoices">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <ctl:WrapPanel Spacing="8" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+
+                        <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="我的周期" />
+
+                        <!-- 自定义周期胶囊 + 「＋ 新建周期」摆进同一个流式面板，一起换行 -->
+                        <ItemsControl x:Name="MyCycleChoices">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <ctl:WrapPanel Spacing="8" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+
+                        <!-- 下半部分只回答一个问题：这个周期包含哪些天（FR-15.23）。
+                             2026-09-23 二次批复 1：**只留一行文字**，撤掉原先的七宫格 ——
+                             那颗格子是 <c>WeekdayGrid</c> 的**可编辑**形态（只读模式当时漏设），
+                             看起来能点、点下去却不改变周期，是纯粹的假交互。
+                             正文另起：完全由 code-behind 按选中档位写这一行。 -->
+                        <TextBlock
+                            x:Name="CycleDaysText"
+                            Margin="0,4,0,0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
             <!-- ══ 启动身份 ══ -->
             <StackPanel Spacing="8">
                 <TextBlock Style="{StaticResource EditorSectionHeaderStyle}" Text="启动身份" />
@@ -514,6 +574,49 @@
                         <Button
                             Click="OnConfirmDelayAccepted"
                             Content="确认使用"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 新建周期面板（§6.2 的同层宿主）：形状与上面两块覆盖层一致 ——
+             全区遮罩 + 居中卡片 + 右下角标准按钮行。
+             🔴 内容控件与设置页那个 ContentDialog **是同一个类**（CycleEditorForm），
+             两处长得一模一样；差别只有承载方式（ContentDialog 之上不能再叠 ContentDialog）。 -->
+        <Grid x:Name="CycleEditOverlay" Visibility="Collapsed">
+            <Border Background="#88000000" />
+            <Border
+                Padding="24"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Width="420">
+                <StackPanel Spacing="14">
+                    <StackPanel Spacing="4">
+                        <TextBlock
+                            x:Name="CycleEditTitle"
+                            FontSize="18"
+                            FontWeight="SemiBold"
+                            Text="新建周期" />
+                        <TextBlock
+                            x:Name="CycleEditSubtitle"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <ctl:CycleEditorForm x:Name="CycleEditForm" />
+
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                        <Button Click="OnCycleEditCancelled" Content="取消" />
+                        <Button
+                            Click="OnCycleEditSaved"
+                            Content="保存"
                             Style="{StaticResource AccentButtonStyle}" />
                     </StackPanel>
                 </StackPanel>

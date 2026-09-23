@@ -59,16 +59,37 @@
                 Style="{StaticResource BodyTextBlockStyle}"
                 TextWrapping="Wrap"
                 Text="延时从登录时刻起算、不是累加；同一延时的条目按列表顺序依次启动。若 B 依赖 A 先就绪，请给 B 设置更大的延时。" />
+
+            <!-- 本次登录预览（FR-15.23）：进计划几项 / 跳过几项。
+                 行内标记回答"这一行怎么了"，这一行回答"整体今天会发生什么"。 -->
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="{x:Bind ViewModel.CycleSummary, Mode=OneWay}"
+                TextWrapping="Wrap"
+                Visibility="{x:Bind ViewModel.HasCycleSummary, Mode=OneWay}" />
         </StackPanel>
 
-        <!-- 配置不可用 / 扫描失败 -->
-        <InfoBar
-            Grid.Row="1"
-            IsClosable="False"
-            IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
-            Message="{x:Bind ViewModel.ErrorText, Mode=OneWay}"
-            Severity="Warning"
-            Title="提示" />
+        <!-- 顶部两条横幅共用一个 StackPanel：它们可能同时出现（配置坏了 + 次年数据没到），
+             各自占一格会互相压住 —— 这一行的高度是 Auto。 -->
+        <StackPanel Grid.Row="1" Spacing="8">
+            <!-- 配置不可用 / 扫描失败 -->
+            <InfoBar
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
+                Message="{x:Bind ViewModel.ErrorText, Mode=OneWay}"
+                Severity="Warning"
+                Title="提示" />
+
+            <!-- 次年节假日数据的到期提醒（§6.5）：11 月 1 日起、次年无数据、且有条目在用法定两档。
+                 Informational 而不是 Warning —— 它不是故障，是"官方数据还没公布"。 -->
+            <InfoBar
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasHolidayNotice, Mode=OneWay}"
+                Message="{x:Bind ViewModel.HolidayNoticeText, Mode=OneWay}"
+                Severity="Informational"
+                Title="节假日数据待更新" />
+        </StackPanel>
 
         <!-- 工具栏（本批：刷新 + 手动添加） -->
         <Grid Grid.Row="2" ColumnSpacing="12">
@@ -231,10 +252,53 @@
                                                         Grid.Column="2"
                                                         VerticalAlignment="Center"
                                                         Spacing="2">
-                                                        <TextBlock
-                                                            FontWeight="SemiBold"
-                                                            Text="{x:Bind Name}"
-                                                            TextTrimming="CharacterEllipsis" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                            <TextBlock
+                                                                FontWeight="SemiBold"
+                                                                Text="{x:Bind Name}"
+                                                                TextTrimming="CharacterEllipsis" />
+
+                                                            <!--
+                                                                周期徽标（FR-15.21）：**所有**周期都显示，包括内置的「每天」。
+                                                                悬停给"包含哪些天"或"随当年放假安排变动"。
+                                                            -->
+                                                            <Border
+                                                                Padding="6,1"
+                                                                VerticalAlignment="Center"
+                                                                Background="{ThemeResource ControlFillColorDefaultBrush}"
+                                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="10"
+                                                                ToolTipService.ToolTip="{x:Bind CycleToolTip}">
+                                                                <TextBlock
+                                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                                    Text="{x:Bind CycleText}" />
+                                                            </Border>
+
+                                                            <!--
+                                                                今日跳过徽标（FR-15.22 / 2026-09-23 批复 17）：
+                                                                与周期徽标**同款**的圆角边框，只是文字换成"今天不启动"
+                                                                并用警示色 —— 原先的"红圈 + 斜杠 + 今"三件套用户反馈不好看。
+                                                                悬停仍给"今天为什么不启动"的完整理由。
+                                                                🔴 整行**不置灰** —— 变淡是「启用 = 关」的视觉语言，
+                                                                两个语义不许共用同一个表达。
+                                                            -->
+                                                            <Border
+                                                                Padding="6,1"
+                                                                VerticalAlignment="Center"
+                                                                Background="{ThemeResource ControlFillColorDefaultBrush}"
+                                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="10"
+                                                                ToolTipService.ToolTip="{x:Bind SkipToolTip}"
+                                                                Visibility="{x:Bind IsSkippedToday}">
+                                                                <TextBlock
+                                                                    Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                                    Text="今天不启动" />
+                                                            </Border>
+                                                        </StackPanel>
                                                         <TextBlock
                                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                             Style="{StaticResource CaptionTextBlockStyle}"

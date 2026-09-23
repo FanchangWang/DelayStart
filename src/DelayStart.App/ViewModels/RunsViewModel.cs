@@ -162,6 +162,14 @@ public sealed class RunGroupRow
                 return $"{_record.StartedAt:yyyy-MM-dd HH:mm:ss} · 上次调度未正常完成";
             }
 
+            // FR-15.26：这份记录可能一条都没进过计划（当天所有条目都不在周期内）。
+            // 此时报「成功 0 · 跳过 N」会被读成"出事了"，而事实是排期结果 ——
+            // PlannedCount 为 0 且确有跳过项，就是"今天本来就不该启动"的唯一形态。
+            if (_record.PlannedCount == 0 && skipped > 0)
+            {
+                return $"{_record.StartedAt:yyyy-MM-dd HH:mm:ss} · 今天没有条目在启动周期内（跳过 {skipped}）";
+            }
+
             // 有跳过项时不能用「全部成功」—— 未启动的条目不是成功（D2 批复 2026-09-21）。
             if (skipped > 0)
             {
@@ -215,7 +223,7 @@ public sealed class RunItemRow
         RunItemState.Done => "✓ 成功",
         RunItemState.Failed => "✗ 失败",
         RunItemState.Launching => "◐ 启动中",
-        RunItemState.Skipped => "◌ 已跳过",
+        RunItemState.Skipped => "◌ 跳过",
         _ => "· 未执行",
     };
 

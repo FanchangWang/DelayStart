@@ -123,13 +123,40 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <summary>列表是否已经读过。失败时回落为 <see langword="false"/>，允许再次点击重试。</summary>
     private bool _uwpAppsLoaded;
 
+    /// <summary>周期目录服务：读周期表、新建自定义周期（FR-15）。</summary>
+    private readonly CycleCatalogService _cycleCatalog;
+
+    /// <summary>
+    /// 本次编辑选中的周期 id。<b>恒非空</b>（默认「每天」）—— 不存在"不选周期"的状态（FR-15.1）。
+    /// </summary>
+    private string _cycleId = BuiltinCycleIds.Everyday;
+
+    /// <summary>
+    /// 全部周期胶囊（内置 5 档 + 我的周期），跨两个 <c>ItemsControl</c>。
+    /// </summary>
+    /// <remarks>
+    /// 单选互斥要一次遍历所有胶囊，而它们分处两个面板（内置一组、我的周期一组 + 新建按钮）——
+    /// 从可视树里凑比在这里留一份引用麻烦得多。
+    /// </remarks>
+    private readonly List<ToggleButton> _cyclePills = [];
+
+    /// <summary>周期判定 / 展示的信息提供者（今天 + 本地法定日历 + 周期表快照）。</summary>
+    private CycleInfoProvider _cycleInfo;
+
     /// <summary>构造「加入系统项」形态：目标程序由扫描到的自启动项绑定，不可更改。</summary>
     /// <param name="entry">要接管的系统自启动项。</param>
     /// <param name="presets">延时预设值（秒），来自 <c>Settings.DelayPresets</c>。</param>
     /// <param name="defaultPreset">默认预设（秒）—— 接管时预选的延时。</param>
-    public DelayEditorDialog(StartupEntry entry, int[] presets, int defaultPreset)
+    /// <param name="cycles">周期目录服务（FR-15：读周期表 / 新建周期）。</param>
+    public DelayEditorDialog(StartupEntry entry, int[] presets, int defaultPreset, CycleCatalogService cycles)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(cycles);
+
+        _cycleCatalog = cycles;
+
+        // 周期快照在 InitializeCommon 之前备好：BuildCyclePills 要读它算"包含哪些天"。
+        _cycleInfo = cycles.CreateProvider();
 
         // 形态与 UWP 判定必须在 InitializeCommon 之前定好：BuildIdentityPills 会读 UwpMode。
         _manualForm = false;
@@ -156,19 +183,24 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <param name="defaultPreset">默认预设（秒）；编辑形态下预选条目现有延时。</param>
     /// <param name="handles">主窗口句柄提供者，手动形态选文件时需要。</param>
     /// <param name="icons">图标提取服务，UWP 应用选择列表需要（D46）。</param>
+    /// <param name="cycles">周期目录服务（FR-15：读周期表 / 新建周期）。</param>
     public DelayEditorDialog(
         DelayedItem item,
         int[] presets,
         int defaultPreset,
         WindowHandleProvider handles,
-        IconProvider icons)
+        IconProvider icons,
+        CycleCatalogService cycles)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(handles);
         ArgumentNullException.ThrowIfNull(icons);
+        ArgumentNullException.ThrowIfNull(cycles);
 
         _handles = handles;
         _icons = icons;
+        _cycleCatalog = cycles;
+        _cycleInfo = cycles.CreateProvider();
 
         var manual = item.IsManual;
         var uwp = IsUwpSource(item.Source, item.Path);
@@ -218,6 +250,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
         ArgumentsBox.Text = item.Arguments;
         SetDelay(item.DelaySeconds);
         SetIdentity(item.RunAsAdmin);
+        SetCycle(item.ScheduleCycleId);
     }
 
     /// <summary>构造「手动添加」形态：目标程序由用户在「程序」/「UWP 应用」页签里选。</summary>
@@ -225,14 +258,19 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// <param name="defaultPreset">默认预设（秒）—— 打开时预选的延时。</param>
     /// <param name="handles">主窗口句柄提供者，选文件时需要。</param>
     /// <param name="icons">图标提取服务，UWP 应用选择列表需要（D46）。</param>
-    public DelayEditorDialog(int[] presets, int defaultPreset, WindowHandleProvider handles, IconProvider icons)
+    /// <param name="cycles">周期目录服务（FR-15：读周期表 / 新建周期）。</param>
+    public DelayEditorDialog(int[] presets, int defaultPreset, WindowHandleProvider handles, IconProvider icons, CycleCatalogService cycles)
     {
         ArgumentNullException.ThrowIfNull(handles);
         ArgumentNullException.ThrowIfNull(icons);
+        ArgumentNullException.ThrowIfNull(cycles);
 
         _handles = handles;
         _icons = icons;
         _manualForm = true;
+
+        _cycleCatalog = cycles;
+        _cycleInfo = cycles.CreateProvider();
 
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
@@ -297,6 +335,7 @@ public sealed partial class DelayEditorDialog : ContentDialog
         Name = ItemName,
         Path = TargetPath,
         WorkingDirectory = WorkingDirectory,
+        ScheduleCycleId = _cycleId,
     };
 
     /// <summary>四种形态共用的初始化：延时预设、身份胶囊、tab 面板、拖放接收。</summary>
@@ -314,6 +353,10 @@ public sealed partial class DelayEditorDialog : ContentDialog
         // 只读形态在构造函数后段才切面板，这里只需把身份胶囊与 tab 状态摆对。
         BuildIdentityPills();
         ApplyTabState();
+
+        // 周期（FR-15）：先摆胶囊与默认档「每天」，编辑既有条目时由构造函数后段改成本条的周期。
+        BuildCyclePills();
+        SetCycle(BuiltinCycleIds.Everyday);
 
         // 批复 4：拖放走经典 WM_DROPFILES（FileDropReceiver 子类化接收），
         // 弹窗打开时对弹层 HWND 再补一轮启用；收到文件路径后填进目标程序。
@@ -835,6 +878,180 @@ public sealed partial class DelayEditorDialog : ContentDialog
     private void OnUwpPickCancelled(object sender, RoutedEventArgs e)
         => UwpPickerOverlay.Visibility = Visibility.Collapsed;
 
+    /// <summary>
+    /// 填充周期胶囊：内置 5 档 + 我的周期 + 「＋ 新建周期」（FR-15.10 / FR-15.11）。
+    /// </summary>
+    /// <remarks>
+    /// 可重复调用（新建完一个自定义周期后重建）：<b>先清空再填</b>，并把
+    /// <see cref="_cycleInfo"/> 换成与新胶囊表同一份的快照，避免"胶囊里有它、
+    /// 算'包含哪些天'时却说没有"。
+    /// </remarks>
+    private void BuildCyclePills()
+    {
+        CycleChoices.Items.Clear();
+        MyCycleChoices.Items.Clear();
+        _cyclePills.Clear();
+
+        foreach (var cycleId in BuiltinCycleIds.Ordered)
+        {
+            var pill = CreatePill(_cycleInfo.NameOf(cycleId), cycleId, isChecked: false, OnCyclePillChecked);
+            _cyclePills.Add(pill);
+            CycleChoices.Items.Add(pill);
+        }
+
+        var custom = _cycleCatalog.LoadCycles();
+        _cycleInfo = _cycleCatalog.CreateProvider(custom);
+
+        foreach (var cycle in custom)
+        {
+            var pill = CreatePill(cycle.Name, cycle.Id, isChecked: false, OnCyclePillChecked);
+            _cyclePills.Add(pill);
+            MyCycleChoices.Items.Add(pill);
+        }
+
+        // 「＋ 新建周期」与自定义胶囊摆进同一个流式面板，超宽时一起换行。
+        MyCycleChoices.Items.Add(CreateActionPill("＋ 新建周期", OnNewCycleRequested));
+    }
+
+    /// <summary>造一颗"动作"胶囊（长得像胶囊的按钮，用于「＋ 新建周期」）。</summary>
+    private static Button CreateActionPill(string text, RoutedEventHandler onClick)
+    {
+        var button = new Button
+        {
+            Content = text,
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(14, 6, 14, 6),
+            Margin = new Thickness(0, 0, 8, 8),
+        };
+
+        button.Click += onClick;
+        return button;
+    }
+
+    /// <summary>用户点了某颗周期胶囊：单选互斥 + 换下方只读展示。</summary>
+    private void OnCyclePillChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSync || sender is not ToggleButton { Tag: string cycleId } pill)
+        {
+            return;
+        }
+
+        MakeExclusive(_cyclePills, pill);
+        SelectCycle(cycleId);
+    }
+
+    /// <summary>把选中档位设成指定周期（空值按「每天」处理）。</summary>
+    private void SetCycle(string? cycleId)
+        => SelectCycle(string.IsNullOrWhiteSpace(cycleId) ? BuiltinCycleIds.Everyday : cycleId.Trim());
+
+    /// <summary>
+    /// 选中一个周期：画胶囊选中态 + 更新下方「包含哪些天」的只读展示（FR-15.23）。
+    /// </summary>
+    /// <param name="cycleId">目标周期 id。</param>
+    /// <remarks>
+    /// 🔴 认不出来的 id（外部手改配置删掉了周期）**回落「每天」**，并把
+    /// <see cref="_cycleId"/> 一起改掉 —— 只改显示不改提交值的话，提交上去的还是那个坏引用，
+    /// 而用户在界面上看到的是「每天」。兜底方向与 Core 的解析一致（FR-15.15）。
+    /// </remarks>
+    private void SelectCycle(string cycleId)
+    {
+        var known = _cyclePills.Exists(
+            pill => pill.Tag is string tag && string.Equals(tag, cycleId, StringComparison.Ordinal));
+
+        _cycleId = known ? cycleId : BuiltinCycleIds.Everyday;
+
+        _suppressSync = true;
+        foreach (var pill in _cyclePills)
+        {
+            pill.IsChecked = pill.Tag is string tag && string.Equals(tag, _cycleId, StringComparison.Ordinal);
+        }
+
+        _suppressSync = false;
+
+        CycleDaysText.Text = BuildCycleDaysText();
+    }
+
+    /// <summary>
+    /// 一行字说清当前周期包含哪些天（2026-09-23 二次批复 1）。
+    /// </summary>
+    /// <returns>那一行文案。</returns>
+    /// <remarks>
+    /// 🔴 这里**只解释，不给任何可点的东西**。此前摆的是 <c>WeekdayGrid</c> 的**可编辑**形态
+    /// （只读模式漏设）：格子在视觉上完全可点、点下去却不改变周期 ——
+    /// 假交互比没有交互更糟，用户会以为是自己没点对。
+    /// </remarks>
+    private string BuildCycleDaysText()
+    {
+        var name = _cycleInfo.NameOf(_cycleId);
+        var days = CycleInfoProvider.DaysListText(_cycleInfo.DaysOf(_cycleId));
+
+        // 法定两档**只说一句出处**（2026-09-23 批复 19）。
+        // 先前那行字报的是"当年落在哪几个星期"（含调休补班会把周日也点亮），本意是解释
+        // 为什么格子与"周一至周五"的印象不符 —— 但实测下来那串枚举又长又没人看：
+        // 用户选的是"按国家安排放假"，不是"周一至周五"。想知道具体哪天休，看日历远比看这行字有用。
+        // 一句话交代依据就够了，细节归国务院通知。
+        return CycleInfoProvider.IsDynamic(_cycleId)
+            ? "按国务院通知"
+            : $"「{name}」包含{days}";
+    }
+
+    /// <summary>
+    /// 点「＋ 新建周期」：打开同层的新建面板。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 用同层 Overlay 而不是第二个 <c>ContentDialog</c>：宿主本身就是 ContentDialog，
+    /// 叠不上第二层（2026-09-19 用户批复 6）。面板内容与设置页那个 <c>ContentDialog</c>
+    /// 是同一个控件类，两处长得一样。
+    /// </remarks>
+    private void OnNewCycleRequested(object sender, RoutedEventArgs e)
+    {
+        CycleEditForm.CycleName = string.Empty;
+        CycleEditForm.Days = WeekdaySet.None;
+        CycleEditTitle.Text = "新建周期";
+        CycleEditSubtitle.Visibility = Visibility.Collapsed;
+        CycleEditOverlay.Visibility = Visibility.Visible;
+        CycleEditForm.FocusName();
+    }
+
+    /// <summary>放弃新建，收起面板。</summary>
+    private void OnCycleEditCancelled(object sender, RoutedEventArgs e)
+        => CycleEditOverlay.Visibility = Visibility.Collapsed;
+
+    /// <summary>
+    /// 保存新建的周期：校验 → 落盘 → 重建胶囊并选中它。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 落盘是**立即**的（与设置页的"所有改动即时保存"一致）：周期是配置顶层的独立对象，
+    /// 不依赖这次弹窗提交与否。用户在编辑器里建完就关掉弹窗，周期仍然在 —— 那正是他要的。
+    /// 「保存」永远可点，失败时才红字报错（FR-15.20），不提前把按钮锁死。
+    /// </remarks>
+    private void OnCycleEditSaved(object sender, RoutedEventArgs e)
+    {
+        // 这个宿主只有"新建"一种形态（编辑周期在设置页），所以查重名单里没有要排除的 id。
+        if (!CycleEditForm.Validate(_cycleCatalog.CustomCycleNames()))
+        {
+            return;
+        }
+
+        ScheduleCycle created;
+        try
+        {
+            created = _cycleCatalog.Create(CycleEditForm.CycleName, CycleEditForm.Days);
+        }
+        catch (Exception ex) when (ex is ArgumentException or StartupOperationException)
+        {
+            // 校验已过，能走到这里通常是配置落盘失败。红字报在面板外的校验条上 ——
+            // 面板内的两个红字位置属于"字段级"错误，写盘失败不是字段的问题。
+            CycleEditOverlay.Visibility = Visibility.Collapsed;
+            ShowValidation("周期保存失败", ex.Message);
+            return;
+        }
+
+        BuildCyclePills();
+        SelectCycle(created.Id);
+        CycleEditOverlay.Visibility = Visibility.Collapsed;
+    }
+
     private void ShowValidation(string title, string message)
     {
         ValidationBar.Title = title;
@@ -989,6 +1206,15 @@ public sealed partial class DelayEditorDialog : ContentDialog
         if (UwpPickerOverlay.Visibility == Visibility.Visible)
         {
             UwpPickerOverlay.Visibility = Visibility.Collapsed;
+            args.Cancel = true;
+            return;
+        }
+
+        // 新建周期面板还开着时按提交：先收起面板并取消提交 —— 面板里那半截周期还没保存，
+        // 直接提交等于把"正在编辑"的状态丢掉（同 UwpPickerOverlay 的处理）。
+        if (CycleEditOverlay.Visibility == Visibility.Visible)
+        {
+            CycleEditOverlay.Visibility = Visibility.Collapsed;
             args.Cancel = true;
             return;
         }

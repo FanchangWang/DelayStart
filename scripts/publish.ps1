@@ -59,9 +59,16 @@ $AppTfm = 'net10.0-windows10.0.26100.0'
 # 让人误以为可以拿 App bin 直接跑（D61 教训：bin 能跑 ≠ publish 能跑）。
 # 🔴 清单里**必须**包含 App bin 里的三个同级 exe —— 它们是 dev 布局真正要用的东西，
 # 只核对自己 bin 里的产物等于没验证（2026-09-22 守卫就是这么漏掉的）。
+# 🔴 清单**必须**包含管理端本体 DelayStart.exe（2026-09-23 补）：
+#    原先 13 项全是配套进程（调度端 / UIAccess 中转器 / 守卫 / 通知中转器），唯独没有主程序。
+#    脚本跑完打出一片 OK，用户照着清单找 DelayStart.exe 却找不到 —— 而它一直躺在
+#    src\DelayStart.App\bin\Release\{AppTfm}\{Rid}\ 下，于是得出"脚本编译不出 exe"的错误结论。
+#    规则：**凡是用户会去双击的那个文件，就必须出现在核对清单里**。
 Write-Host "`n--- 产物核对 ---" -ForegroundColor Cyan
 $missing = @()
 foreach ($f in @(
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.exe",
+    "src\DelayStart.App\bin\Release\$AppTfm\$Rid\DelayStart.pri",
     "src\DelayStart.Scheduler\bin\Release\$SchedulerTfm\$Rid\publish\DelayStart.Scheduler.exe",
     "src\DelayStart.LaunchBroker\bin\Release\$SchedulerTfm\$Rid\publish\DelayStart.LaunchBroker.exe",
     "src\DelayStart.Guard\bin\Release\$GuardTfm\$Rid\DelayStart.Guard.exe",
@@ -82,9 +89,27 @@ foreach ($f in @(
     else    { Write-Host "MISSING: $f" -ForegroundColor Yellow; $missing += $f }
 }
 
+# App bin 的 XAML 产物：exe 在而 *.xbf / DelayStart.pri 缺失时，双击能起来但**窗口起不来**
+# （D61 同源问题：Microsoft.UI.Xaml.dll 内部 0xc000027b 秒崩）。数量按实际页面数算，只要求 ≥ 2。
+$appBinDir = "src\DelayStart.App\bin\Release\$AppTfm\$Rid"
+$xbfCount = @(Get-ChildItem -LiteralPath $appBinDir -Recurse -File -Filter '*.xbf' -ErrorAction SilentlyContinue).Count
+if ($xbfCount -ge 2) {
+    Write-Host ("{0}  {1} 个" -f '*.xbf（XAML 产物）', $xbfCount)
+}
+else {
+    Write-Host "MISSING: $appBinDir\**\*.xbf（只找到 $xbfCount 个）" -ForegroundColor Yellow
+    $missing += "$appBinDir\**\*.xbf"
+}
+
 if ($missing.Count -gt 0) {
     Write-Host "`n[X] 产物核对失败：$($missing.Count) 个文件缺失（清单见上）" -ForegroundColor Red
     exit 1
 }
 
+# 核对清单只回答"文件在不在"，不回答"该去哪个目录双击"。这两句话补齐后者 ——
+# 开发期布局就是 App bin（框架依赖，需本机有 .NET 10 Runtime）；
+# 可分发目录 / 安装包**不在本脚本职责内**，走 installer\build-installer.ps1。
 Write-Host "`n[OK] publish 完成 (exit 0)" -ForegroundColor Green
+Write-Host "     开发期运行目录  src\DelayStart.App\bin\Release\$AppTfm\$Rid\" -ForegroundColor Gray
+Write-Host "     双击入口        DelayStart.exe" -ForegroundColor Gray
+Write-Host "     可分发产物      installer\build-installer.ps1 → artifacts\publish\$Rid\<full|slim>\ + dist\DelayStart-Setup-*.exe" -ForegroundColor Gray

@@ -90,7 +90,12 @@
 ;   ③ WizardStyle 加 **dynamic**：向导与任务对话框跟随系统深浅色（Inno 6.6+ 深色模式）。
 
 #define AppName "DelayStart"
-#define AppPublisher "DelayStart"
+; D6（2026-09-24 用户批复）：发布者由裸 `DelayStart` 改为 `FanchangWang`。
+;   理由：winget 包标识前缀是 `FanchangWang.DelayStart`（D110），而 manifest 的 `Publisher`
+;   必须与"设置 → 应用"里显示的实际发布者一致 —— 三处口径就此统一。
+;   ⚠️ 这一项只喂给 ARP 的**发布者**列：老用户升级后会看到发布者名由 DelayStart 变成
+;   FanchangWang（纯显示，无功能影响）。AppId 刻意不动 —— 见 D111。
+#define AppPublisher "FanchangWang"
 #define AppExe "DelayStart.exe"
 #define SchedulerExe "DelayStart.Scheduler.exe"
 

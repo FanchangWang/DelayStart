@@ -48,7 +48,7 @@ function Get-AssetNote([string] $Name) {
         return 'ARM64 · 框架依赖：体积小，需先装 [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) 与 [Windows App Runtime ARM64](https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-arm64.exe) 才能启动'
     }
     if ($Name -like '*-win-x64.exe') {
-        return '**大多数人的选择** · 自包含运行时，装完即用'
+        return 'x64 · **大多数人的选择** · 自包含运行时，装完即用'
     }
     if ($Name -like '*-win-arm64.exe') {
         return 'ARM64 设备（骁龙 Surface 等）· 自包含运行时，装完即用'

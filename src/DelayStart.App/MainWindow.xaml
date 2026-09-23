@@ -112,6 +112,20 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
+
+            <!--
+                「关于」放在窗格**底部**（2026-09-24 批复 28）。它不是功能入口：
+                版本 / 运行环境 / 数据位置只在出问题或想核对版本时才看，
+                混在上面那串每天都要走的菜单里会平白多一次辨认。
+            -->
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem Content="关于" Tag="about">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE946;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+
             <Frame x:Name="NavFrame" />
         </NavigationView>
 

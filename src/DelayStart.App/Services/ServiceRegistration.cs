@@ -155,6 +155,7 @@ internal static class ServiceRegistration
         services.AddTransient<SystemViewModel>();
         services.AddTransient<RunsViewModel>();
         services.AddTransient<SettingsViewModel>();
+        services.AddTransient<AboutViewModel>();
 
         // ── 页面（瞬态）─────────────────────────────────────────────────────
         // 页面注册进容器，导航时由 NavigationService 解析 —— 这样页面可以直接构造函数
@@ -168,6 +169,7 @@ internal static class ServiceRegistration
         services.AddTransient<SystemPage>();
         services.AddTransient<RunsPage>();
         services.AddTransient<SettingsPage>();
+        services.AddTransient<AboutPage>();
 
         services.AddSingleton<NavigationService>();
 

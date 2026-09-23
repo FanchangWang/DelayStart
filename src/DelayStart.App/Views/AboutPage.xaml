@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="DelayStart.App.Views.AboutPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:stc="using:CommunityToolkit.WinUI.Controls"
+    xmlns:vm="using:DelayStart.App.ViewModels"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <!-- 分节标题：与总览 / 设置同一套（14px SemiBold，SubtitleTextBlockStyle 的 20px 太大） -->
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </Page.Resources>
+
+    <!--
+        「关于」页（2026-09-24 批复 28）。
+
+        ① 位置：左侧导航**底部**（NavigationView.FooterMenuItems），与上面那串功能入口分开
+           —— "关于"不是功能，放中间会插进用户每天走的那条路径里。
+        ② 版式：**照抄总览**——ScrollView 里一个 Padding 32,8,32,40 + MaxWidth 1000 +
+           HorizontalAlignment=Stretch 的容器（页头随内容滚动、内边距计入限宽），
+           正文与其它页落在同一条 1000 中轴线上。
+        ③ 内容按"排查问题时想看什么"排：先是应用本体（名称 / 版本 / 定位），
+           再是运行环境，再是四项数据位置，最后是开源与联网说明。
+           整页只做展示与三件小事（打开目录 / 复制诊断信息 / 打开项目主页），
+           不放任何会改变系统状态的入口。
+    -->
+    <Grid RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollView Grid.Row="0">
+            <StackPanel
+                Padding="32,8,32,40"
+                HorizontalAlignment="Stretch"
+                MaxWidth="1000"
+                Spacing="4">
+
+                <!-- 页头 -->
+                <StackPanel Spacing="4">
+                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="关于" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Text="版本、运行环境与本机数据位置。" />
+                </StackPanel>
+
+                <!-- ── 应用 ── -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="应用" />
+
+                <Border
+                    Padding="16,14"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="7">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="DelayStart" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind ViewModel.VersionLine, Mode=OneTime}" />
+                            <TextBlock
+                                Margin="0,6,0,0"
+                                Style="{StaticResource BodyTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                Text="{x:Bind ViewModel.Summary, Mode=OneTime}" />
+                        </StackPanel>
+
+                        <Button
+                            Grid.Column="1"
+                            VerticalAlignment="Top"
+                            Click="OnCopyDiagnostics"
+                            Content="复制诊断信息"
+                            ToolTipService.ToolTip="把版本、系统与四项路径复制成一段纯文本，提交问题时可直接附上" />
+                    </Grid>
+                </Border>
+
+                <!-- ── 运行环境 ── -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="运行环境" />
+
+                <StackPanel Spacing="2">
+                    <stc:SettingsCard Header="应用版本">
+                        <TextBlock Style="{StaticResource BodyTextBlockStyle}" Text="{x:Bind ViewModel.Version, Mode=OneTime}" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Header=".NET 运行时">
+                        <TextBlock Style="{StaticResource BodyTextBlockStyle}" Text="{x:Bind ViewModel.RuntimeText, Mode=OneTime}" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="版本号取自注册表：Windows 11 的 ProductName 至今仍写作 Windows 10，只能按内部版本号分档" Header="操作系统">
+                        <TextBlock Style="{StaticResource BodyTextBlockStyle}" Text="{x:Bind ViewModel.OsText, Mode=OneTime}" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="自启动项所在的注册表与系统目录大多受保护，所以界面与命令行一律以管理员身份运行" Header="运行身份">
+                        <TextBlock Style="{StaticResource BodyTextBlockStyle}" Text="{x:Bind ViewModel.ElevationText, Mode=OneTime}" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="进程与系统分开列：Arm64 系统上跑 x64 进程是正常的模拟运行" Header="架构">
+                        <TextBlock Style="{StaticResource BodyTextBlockStyle}" Text="{x:Bind ViewModel.ArchText, Mode=OneTime}" />
+                    </stc:SettingsCard>
+                </StackPanel>
+
+                <!-- ── 数据位置 ── -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="数据位置" />
+
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    TextWrapping="Wrap"
+                    Text="安装目录只读，所有运行数据都在用户目录下；卸载时会先还原全部接管的自启动项，再删程序文件。" />
+
+                <StackPanel Margin="0,10,0,0" Spacing="2">
+                    <stc:SettingsCard Description="{x:Bind ViewModel.ConfigPath, Mode=OneTime}" Header="配置（漫游）">
+                        <Button
+                            Click="OnOpenFolder"
+                            Content="打开"
+                            Tag="{x:Bind ViewModel.ConfigPath, Mode=OneTime}"
+                            ToolTipService.ToolTip="在资源管理器中打开该目录" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="{x:Bind ViewModel.DataPath, Mode=OneTime}" Header="数据与状态">
+                        <Button
+                            Click="OnOpenFolder"
+                            Content="打开"
+                            Tag="{x:Bind ViewModel.DataPath, Mode=OneTime}"
+                            ToolTipService.ToolTip="在资源管理器中打开该目录" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="{x:Bind ViewModel.LogsPath, Mode=OneTime}" Header="日志">
+                        <Button
+                            Click="OnOpenFolder"
+                            Content="打开"
+                            Tag="{x:Bind ViewModel.LogsPath, Mode=OneTime}"
+                            ToolTipService.ToolTip="在资源管理器中打开该目录" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="{x:Bind ViewModel.InstalledPath, Mode=OneTime}" Header="安装目录">
+                        <Button
+                            Click="OnOpenFolder"
+                            Content="打开"
+                            Tag="{x:Bind ViewModel.InstalledPath, Mode=OneTime}"
+                            ToolTipService.ToolTip="在资源管理器中打开该目录（此目录只读）" />
+                    </stc:SettingsCard>
+                </StackPanel>
+
+                <!-- ── 开源 ── -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="开源" />
+
+                <StackPanel Spacing="2">
+                    <stc:SettingsCard Description="{x:Bind ViewModel.ProjectUrl, Mode=OneTime}" Header="项目主页">
+                        <Button Click="OnOpenProjectPage" Content="打开" />
+                    </stc:SettingsCard>
+
+                    <stc:SettingsCard Description="可自由使用、修改与再分发，保留版权与许可声明即可" Header="许可证">
+                        <TextBlock Style="{StaticResource BodyTextBlockStyle}" Text="MIT" />
+                    </stc:SettingsCard>
+                </StackPanel>
+
+                <TextBlock
+                    Margin="0,28,0,0"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    TextWrapping="Wrap"
+                    Text="版权所有 © 2026 FanchangWang。本程序不收集任何使用数据；唯一的联网动作是下载法定节假日数据（在设置页可关闭、可手动触发），除此之外不向外部发送本机信息。" />
+            </StackPanel>
+        </ScrollView>
+
+        <!-- 状态条：只报错（成功类提示走右下角自动消失的通知） -->
+        <InfoBar
+            Grid.Row="1"
+            Margin="32,0,32,4"
+            IsClosable="False"
+            IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
+            Message="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+            Severity="Error" />
+    </Grid>
+</Page>

@@ -73,6 +73,9 @@ public sealed class NavigationService
     /// <summary>「设置」模块的导航标签（FR-9）。</summary>
     public const string SettingsTag = "settings";
 
+    /// <summary>「关于」的导航标签（2026-09-24 批复 28：左侧导航**底部**那一项）。</summary>
+    public const string AboutTag = "about";
+
     private readonly IServiceProvider _services;
     private readonly Dictionary<string, Type> _pages;
 
@@ -99,6 +102,7 @@ public sealed class NavigationService
             [SysGpoTag] = typeof(Views.SystemPage),
             [RunsTag] = typeof(Views.RunsPage),
             [SettingsTag] = typeof(Views.SettingsPage),
+            [AboutTag] = typeof(Views.AboutPage),
         };
     }
 

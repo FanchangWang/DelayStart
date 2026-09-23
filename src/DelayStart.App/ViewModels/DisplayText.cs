@@ -100,6 +100,48 @@ public static class DisplayText
                 : $"{seconds / 60} 分 {seconds % 60} 秒";
     }
 
+    /// <summary>延时秒数 → 「登录后 …」文案（设置页的预设延时列表用，2026-09-23 批复 24）。</summary>
+    /// <param name="seconds">相对登录时刻的绝对秒数。</param>
+    /// <returns>
+    /// 形如「登录后立即」「登录后 30 秒」「登录后 2 分（120 秒）」「登录后 2 分 30 秒（150 秒）」。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// 🔴 与 <see cref="DelayOf"/> 分开、而不是改它：那一份是**列宽敏感**的短文案
+    /// （列表列、徽标、分组标题都按它排版）。这里多出来的「（150 秒）」只服务设置页那一处
+    /// —— 用户填进去的是秒数，回到列表里却只看见「2 分 30 秒」，中间那一步换算不该由用户做。
+    /// </para>
+    /// <para>
+    /// 分钟整点时也补括号（「2 分（120 秒）」）：同样是"分 → 秒"的换算，
+    /// 只在混合形态下给会让用户以为整点的那种没被记录。
+    /// </para>
+    /// <para>
+    /// 0 秒写「登录后立即」（2026-09-24 用户批复，历经「登录后 0 秒」→「立即」→「登录后立即」）：
+    /// 同列每一行都在回答"登录后多久"，留着前缀、把 0 换成「立即」，既说清"不等待"，
+    /// 又不让这一行在纵向上落单。列表页的延时列（<see cref="DelayOf"/>）仍是裸的「立即」
+    /// —— 那一列按列宽排版，且整列本来就没有「登录后」前缀。
+    /// </para>
+    /// </remarks>
+    public static string LogonDelayOf(int seconds)
+    {
+        if (seconds <= 0)
+        {
+            return "登录后立即";
+        }
+
+        if (seconds < 60)
+        {
+            return $"登录后 {seconds} 秒";
+        }
+
+        var minutes = seconds / 60;
+        var rest = seconds % 60;
+
+        return rest == 0
+            ? $"登录后 {minutes} 分（{seconds} 秒）"
+            : $"登录后 {minutes} 分 {rest} 秒（{seconds} 秒）";
+    }
+
     /// <summary>启动身份 → 界面文案。</summary>
     /// <param name="runAsAdmin">是否继承管理员令牌。</param>
     /// <returns>界面文案。</returns>

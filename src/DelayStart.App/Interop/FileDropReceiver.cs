@@ -23,7 +23,8 @@ namespace DelayStart.App.Interop;
 /// <para>
 /// WinUI 的内容在**子 HWND**（DesktopChildSiteBridge / 弹层宿主）里，拖放落点按
 /// 光标下的窗口算 —— 所以要对主窗口 + 当前全部子窗口逐个启用；弹窗打开后再跑一次
-/// （此时弹层 HWND 已创建）。子类化幂等：已在册的窗口直接跳过。
+/// （此时弹层 HWND 已创建）。子类化幂等靠"过程是不是自己的"判断，**不是**靠
+/// "这个 HWND 值见没见过"—— 后者会被系统回收复用的 HWND 骗过去（见 <see cref="EnableSingle"/>）。
 /// </para>
 /// </remarks>
 public static partial class FileDropReceiver
@@ -42,7 +43,14 @@ public static partial class FileDropReceiver
     /// <summary>委托的原生函数指针（一次性取好）。</summary>
     private static readonly nint WndProcPointer = Marshal.GetFunctionPointerForDelegate(WndProcInstance);
 
-    /// <summary>已被子类化窗口的原过程，按 HWND 记录（子类化幂等 + 只转发不卸载）。</summary>
+    /// <summary>
+    /// 已被子类化窗口的原过程，按 HWND 记录（子类化幂等 + 只转发不卸载）。
+    /// </summary>
+    /// <remarks>
+    /// ⚠ 键是 HWND、值是"当时的窗口过程"。HWND 会被系统回收复用，所以这张表只能当
+    /// **缓存**看 —— 它是不是还成立由 <see cref="EnableSingle"/> 当场核对
+    /// （比对窗口当前的过程），不能当"这个窗口已经处理过"的证据。
+    /// </remarks>
     private static readonly Dictionary<nint, nint> OriginalProcs = new();
 
     private static readonly object Gate = new();
@@ -77,17 +85,21 @@ public static partial class FileDropReceiver
 
         lock (Gate)
         {
-            if (OriginalProcs.ContainsKey(hwnd))
-            {
-                return;
-            }
-
+            // 🔴 幂等判据是「这个窗口的过程**现在**是不是我们的」，不是「这个 HWND 值见没见过」
+            // （2026-09-24 批复 28 / B1）。HWND 会被系统回收复用给新窗口，而新窗口的过程
+            // 不是我们的 —— 按旧判据（`OriginalProcs.ContainsKey`）会直接跳过它，
+            // 于是新窗口**静默失去** `WM_DROPFILES` 转发：上面那行 `DragAcceptFiles` 已经
+            // 执行过（`WS_EX_ACCEPTFILES` 是真的设上了），资源管理器照发消息，
+            // 消息却落进默认过程，用户看到的是"拖进去完全没反应"。
             var current = GetWindowLongPtrW(hwnd, GwlpWndproc);
             if (current == WndProcPointer || current == 0)
             {
+                // 过程已经是自己的（真幂等）；或取不到过程（窗口已销毁）。
                 return;
             }
 
+            // 覆盖写而不是"仅当不存在"：HWND 被复用时表里那条旧记录属于**已销毁**的那个窗口，
+            // 留着它会让下面的转发指向一个失效的过程。
             OriginalProcs[hwnd] = current;
             _ = SetWindowLongPtrW(hwnd, GwlpWndproc, WndProcPointer);
         }

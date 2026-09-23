@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D105）
+# DelayStart — 决策记录（D1–D111）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -878,6 +878,86 @@
 
 ---
 
+### D106 拖放接收器的幂等判据：看「现在的过程」，不看「见过的 HWND」（R10，2026-09-24 用户批复 28）
+
+**结论**：`FileDropReceiver.EnableSingle` 去掉 `OriginalProcs.ContainsKey(hwnd)` 这道门，改为**先读窗口当前的过程**——等于自己的过程指针就直接返回（真幂等），否则把当前过程记进 `OriginalProcs[hwnd]`（**覆盖写**）并重新子类化。
+
+**背景**：真机反馈"偶尔往窗口里拖文件完全没反应"。根因是 **HWND 会被系统回收复用**：判据问的是"这个句柄值我见过吗"，而它该问的是"这个窗口现在的过程是不是我的"。复用命中时新窗口被跳过子类化，而 `DragAcceptFiles` 在早退**之前**已经执行（`WS_EX_ACCEPTFILES` 真的设上了）—— 资源管理器照发 `WM_DROPFILES`，消息落进默认过程。整条路径**零异常、零日志**。
+
+**代价与约束**：
+- 🔴 `WindowSizing.EnforceMinimum` 里**逐字相同**的写法**不动**：它防的是另一件事 —— 本项目有两个窗口过程子类化器，去掉那道门会让后调用者把过程再压一层、"原过程"记录指向对方 → **过程链成环 → 栈溢出**。它只在启动时对主窗口调一次、主窗口 HWND 终身不变，所以无害。
+- 按 HWND 记账的表只能当**缓存**看，是否成立必须当场核对；表只增不减是有意的（子类化不卸载），HWND 复用后旧值会被覆盖，实际几十条就平台化。
+- 判据顺序即语义：**先问"现在对不对"，再决定要不要动手**；"我做过没有"不能代替"现在对不对"（`pitfalls.md` 二十）。
+
+---
+
+### D107 局部重扫的三类数据必须同进同退（FR-1.4，2026-09-24 用户批复 28）
+
+**结论**：`ScanCacheService.RescanSourceAsync` 的图标字典不再 `new(existing.Pixels)` 整份复制，改为只保留**留下来的那些条目**的图标（`entries` 里剔完来源之后的那批），查不到键时补提取一次。
+
+**背景**：`entries` 与 `failures` 都按来源剔除了旧值，只有 `pixels` 是整份复制。`StartupEntry` 是**引用相等**的类，旧来源的条目已经不在快照的 `entries` 里、却仍是字典的键；而下一轮重扫又从这里复制一遍 —— 每点一次「刷新本页」就永久留下该来源条目数那么多条陈旧键（字典槽 + `StartupEntry` 及其字符串）。
+
+**代价与约束**：内存不会翻倍（`IconPixels` 与 `IconProvider` 的缓存共享同一批实例），但这是**随用户操作无界累积**的一条真实路径，量级与"点过多少次"成正比而非固定。补提取那一支正常走不到，兜的是快照被外部改动的路径 —— 静默显示占位图标，比多一次字典查找难查得多。
+
+---
+
+### D108 新增「关于」页，挂在导航底部（2026-09-24 用户批复 28）
+
+**结论**：`NavigationView.FooterMenuItems` 新增一项「关于」（tag `about` → `Views/AboutPage.xaml` + `ViewModels/AboutViewModel.cs`）。版式**照抄总览**：`ScrollView` 里一个 `Padding="32,8,32,40"` + `MaxWidth="1000"` + `HorizontalAlignment="Stretch"` 的容器（页头随内容滚动、内边距计入限宽）。内容四节 —— **应用**（名称 / 版本 / 一句话定位 + 「复制诊断信息」）、**运行环境**（应用版本 / .NET 运行时 / 操作系统 / 运行身份 / 架构，`stc:SettingsCard` 只读行）、**数据位置**（配置 / 数据 / 日志 / 安装目录，各带「打开」按钮）、**开源**（项目主页 + MIT + 联网说明）。
+
+**为什么**：
+- **放底部**：它不是功能入口 —— 版本 / 环境 / 路径只在排查问题或核对版本时才看，混进用户每天都要走的那串菜单里会平白多一次辨认。导航层因此不必知道"底部"这件事，"关于"在 `NavigationService` 里就是一个普通 tag。
+- **版式照抄总览**：全套界面只有一条中轴线（1000 居中），多一页就多一个要对齐的东西。
+- **只做展示 + 三件小事**：打开某个数据目录、复制诊断信息、打开项目主页。**不放任何会改变系统状态的入口** —— 状态改动的出口都在各自的页上。
+- **取当下真值**：版本来自程序集（`AssemblyInformationalVersion`，剥掉 SourceLink 的 `+<commit>`）；系统来自注册表（Win11 的 `ProductName` 至今写 Windows 10 → 按内部版本 **22000** 分档）；身份用 `Environment.IsPrivilegedProcess`；四项路径全部来自 `PathService`（D23）。
+- 🔴 **刻意不显示在线版本信息**：设计前提是离线可用（NFR-x 只允许节假日数据联网，且在设置页可控）。一个会变慢、无网时留白的位置，不值得放进"关于"。
+
+**代价与约束**：① `Clipboard.SetContent` 走系统剪贴板（与自启动项页同款），被别的进程占着会抛 —— 报错而不重试；② 「打开项目主页」在提权进程里 ShellExecute 一个 http 地址，浏览器**可能**继承提权（现代浏览器一般会自行降权重启）；要彻底规避得用调度端那套 `DeElevatedProcessLauncher`，为一条"打开网页"引入跨进程启动器不划算；③ "值本身是常量"的成员必须写成**带初始值的自动属性** —— `=> 常量` 会撞 CA1822，改 `static` 又绑不上 `x:Bind`（`pitfalls.md` 二十一）。
+
+---
+
+### D109 Release 附件说明带上架构前缀（installer，2026-09-24 用户批复 28）
+
+**结论**：`installer/make-release-notes.ps1` 的 x64 自包含档说明由「`**大多数人的选择** · 自包含运行时，装完即用`」改为「`x64 · **大多数人的选择** · 自包含运行时，装完即用`」。
+
+**背景**：四档里另外三档（x64 slim / ARM64 slim / ARM64 自包含）的说明都带架构，只有这一档没有 —— 而它恰恰是**默认推荐**那一行，读者得从文件名里自己找架构。改完四档句式一致。
+
+---
+
+### D110 上架 winget：首版手工提 slim，包标识 FanchangWang.DelayStart（2026-09-24 用户批复 29）
+
+**结论**：以 `PackageIdentifier` = **`FanchangWang.DelayStart`** 提交到 `microsoft/winget-pkgs` 社区源（命名空间对应 GitHub 账号，与仓库 `FanchangWang/DelayStart` 一致）。首版**手工提 PR**（D2）；提交 **slim 形态 × x64 / arm64**（D3）；manifest 里声明两个**包依赖**让 winget 自动补齐运行时；自动化等首次合并后再接（D5）。手工提交教程：`docs/winget.md`。版本号同步升 `0.3.2`（D1）。
+
+**为什么 slim**：winget 用户必然在线，"体积"不是首要考虑 —— slim 15 MB、full 217 MB。slim 缺的运行时交给包管理器按依赖装，比让用户自己去找安装器结尾给出的下载链接更直接。**只发一个形态**：同架构摆两个 installer 时 winget 只取第一个匹配，行为不直观。
+
+**为什么声明包依赖**：`Microsoft.DotNet.Runtime.10`（slim 缺 .NET）+ `Microsoft.WindowsAppRuntime.1.8`（**两种形态都缺** —— 那是 WinUI 3 要的 MSIX 框架包，安装器从来不管它）。两者都已在 winget 源中，会被自动安装。
+
+**为什么首版必须手工**：`komac` / `winget-releaser` 都要求仓库里**已有一个版本**当模板，没有第一版就没有第二版。
+
+**代价与约束**：
+- 🔴 **静默卸载会弹一次 UAC**：卸载器 `InitializeUninstall` 里的 `ShellExec('runas', … --restore-all)`（D61 定的 —— 不还原就中止卸载），而验证流水线把"UAC 弹窗阻塞进度"列为失败条件。**本轮刻意不改**：那条失败分支有 `SuppressibleMsgBox(Default=IDYES)` 兜底、卸载最终仍会完成；先看验证结果，真被拦了再单独评估 —— 顺手改它会牵连 D61/D84/D85 逐轮真机验过的卸载路径。
+- 🔴 **PUA 是一票否决**（政策原文：不看应用是否正当）。本程序的核心行为（改写其他程序的自启动项、注册计划任务、常驻托盘、注册协议处理器）在自动扫描里属高风险特征，**结果只能提了才知道**。
+- `PackageIdentifier` 一旦合并 *基本不可变*（目录名就是标识），`FanchangWang` 这个命名空间是长期承诺。
+- **`ProductCode` 按 Inno 的形状写**（2026-09-24 更正）：`AppsAndFeaturesEntries.ProductCode` 填**卸载注册表键名** `{8F4C0B6A-…-DELAYSTART001}_is1`（= Inno 的 `AppId` + `_is1`）。
+  ⚠️ 本处原先写的是"`ProductCode` 要求 GUID 形状、所以不写" —— **是错的**：winget 1.12 的 installer schema 对 `ProductCode` 只声明 `type: string`，**没有任何 GUID pattern**；社区源里 Inno 包的惯例就是 `<AppId>_is1`，官方 `JRSoftware.InnoSetup` 6.7.3 写的正是 `ProductCode: Inno Setup 6_is1`。写它比只靠 `DisplayName` 匹配更硬（`Update` 的已装检测直接命中注册表键）。
+- **未改什么**：本轮不动 C#、不加 workflow 作业；`DelayStart.iss` 只改 `AppPublisher` 一行（D6）。
+
+**D6 已批（2026-09-24）**：`installer/DelayStart.iss` 的 `#define AppPublisher` 由 `DelayStart` 改为 `FanchangWang` ——「设置 → 应用」的发布者、manifest 的 `Publisher`、包标识前缀三处口径统一。代价是老用户升级后该处显示名变化（纯显示，无功能影响）。
+
+### D111 Inno `AppId` 保持原值（2026-09-24 用户询问后定案）
+
+**结论**：`installer/DelayStart.iss` 的 `AppId={{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}` **保持不变**。
+
+**背景**：上架 winget 牵出发布者口径（D6），顺带被问到"这个不是 GUID 的 `AppId` 当初怎么来的、要不要一起换掉"。
+
+**当初怎么来的**：2026-09-19 首版安装器脚本**手写**的仿 GUID 串（`commit 2ca0129`）。Inno 对 `AppId` 的要求只有"任意字符串、≤127 字符、不要中途改"，**没有"必须是 GUID"** —— 规范形状的 GUID 只是社区惯例（VS 的安装项目模板会给一个）。
+
+**为什么能改但选择不改**：`AppId` 决定两件事 —— ① 卸载注册表键名（`AppId` + `_is1`）；② 写进 `unins000.dat`，后续安装据此判断能否**追加到同一个**卸载记录。中途改的后果（Inno 官方 FAQ 口径）：安装程序不再认得旧版本 → "设置 → 应用"里出现**两个条目**，并生成一份新的卸载记录文件，而旧条目的卸载器仍指向同一个安装目录。**收益是零**：winget 不要求 `ProductCode` 是 GUID（见上），不换也能把 `ProductCode` 写全。
+
+**未生效的备选**：换成真 GUID（`New-Guid` 生成）并同步 manifest 的 `ProductCode` —— 只在"尚无任何公开装机量"时才值得做（现在 v0.2.0–v0.3.1 已经发出去过）。
+
+---
+
 ### 附表：R1–R13 技术风险与去向（已全部闭环）
 
 | # | 风险 | 怎么闭环的 |
@@ -896,7 +976,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D105 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D111 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

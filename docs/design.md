@@ -355,7 +355,9 @@ Tests ──> Core (+ Management)
 
 ### 7.5 管理端（App）设计
 
-页面：Overview（统计 + 调度任务状态卡 + 最近一次开机调度表）/ Items（来源筛选 + 搜索）/ Delay（按延时分组，组 = 子标题 + 各自边框卡片；**失效条目内联在这一页**，D81）/ System（只读）/ Runs（最新一组默认展开）/ Settings（外观 → 延时 → 调度 → 守卫）。MVVM 用 CommunityToolkit.Mvvm 源生成器 + `x:Bind`；组合根 `ServiceRegistration` **CLI 与 GUI 共用一个容器**，容器在 CLI 分流前构建；跨页数据用 `ScanCacheService` 来源级过期标记做局部刷新（D42）。
+页面：Overview（统计 + 调度任务状态卡 + 最近一次开机调度表）/ Items（来源筛选 + 搜索）/ Delay（按延时分组，组 = 子标题 + 各自边框卡片；**失效条目内联在这一页**，D81）/ System（只读）/ Runs（最新一组默认展开）/ Settings（外观 → 延时 → 调度 → 守卫）/ About（**导航底部**的「关于」，见 D108）。MVVM 用 CommunityToolkit.Mvvm 源生成器 + `x:Bind`；组合根 `ServiceRegistration` **CLI 与 GUI 共用一个容器**，容器在 CLI 分流前构建；跨页数据用 `ScanCacheService` 来源级过期标记做局部刷新（D42）。
+
+**导航分组（D108）**：功能入口在 `NavigationView.MenuItems`，唯一的例外是「**关于**」—— 它挂在 `NavigationView.FooterMenuItems`（窗格底部）。分开放的理由不是审美：版本 / 运行环境 / 数据路径只在**排查问题或核对版本**时才看，混进用户每天都要走的那串菜单里会平白多一次辨认。它在 `NavigationService` 里同样只是一个 tag（`about`），页面照样由容器解析 —— 导航层不知道"底部"这件事，那是 XAML 的属性。
 
 **没有独立的「失效条目」页面**（D81）：失效判定（`GuardStalePolicy`）的结果由 `DelayViewModel` 在 `Load()` 时算成 `id → StaleKind` 字典，逐行传给 `DelayRow`；行上用三个 bool（`IsNormal` / `IsStale` / `CanConvertToManual`）驱动显隐，XAML 不做取反转换。失效行「启用」列不显示开关（它根本启动不了）、改显示"已失效"，「操作」列给「删除」/「转为手动」。
 

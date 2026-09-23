@@ -284,6 +284,38 @@ emoji 那行还有两个额外问题：① WinUI 会把它们 fallback 到 **Seg
 
 ---
 
+## 二十、Win32 句柄不是身份（HWND 复用）
+
+**症状**：往窗口里拖文件**偶尔完全没反应** —— 不报错、不写日志、鼠标也没有 🚫，就是什么都不发生。反复开关延时编辑器之后更容易撞上。
+
+**根因**：`FileDropReceiver.EnableSingle` 的幂等判据是"**这个 HWND 值我见过吗**"（`OriginalProcs.ContainsKey(hwnd)`），而不是"这个窗口现在的过程是不是我们的"。**HWND 会被系统回收复用**：旧窗口销毁、句柄值被分配给新窗口，于是新窗口在表里"命中"、被直接跳过子类化。
+
+为什么表现得像"没接线"：`DragAcceptFiles(hwnd, true)` 在早退**之前**已经执行，`WS_EX_ACCEPTFILES` 是真的设上了 —— 资源管理器照发 `WM_DROPFILES`，而该窗口的过程不是我们的，消息落进默认处理，`FilesDropped` 永远不会触发。整条路径**零异常、零日志**。
+
+**做**：判据换成"**现在的状态对不对**"——`GetWindowLongPtrW(hwnd, GWLP_WNDPROC)` 是不是自己的过程指针；不是就（重新）记录原过程并子类化。那张按 HWND 记账的表只能当**缓存**看，它是否还成立必须**当场核对**（2026-09-24 批复 28 / D106）。
+
+**顺序本身就是语义**：先问"现在对不对"，再决定要不要动手；"我做过没有"不能代替"现在对不对"。
+
+⚠ **同一个写法在别处可能是故意的**：`WindowSizing.EnforceMinimum` 里那道 `ContainsKey` 门防的是**另一件事** —— 本项目有两个窗口过程子类化器，删掉那道门会让后调用者把自己的过程再压一层、而它的"原过程"记录指向对方，**过程链成环 → 栈溢出**。它只在启动时对主窗口调一次、主窗口 HWND 终身不变，所以无害。两条代码长得一模一样，改之前先想清楚自己在改哪一条。
+
+---
+
+## 二十一、`x:Bind` 与 CA1822：常量成员不能写成表达式体
+
+**症状**：`public string Summary => "……";` 这类"值本身是常量"的 ViewModel 成员，构建直接失败（本仓库 `TreatWarningsAsErrors=true`）：
+
+```
+error CA1822: 成员"Summary"不访问实例数据，可标记为 static
+```
+
+**根因**：分析器（`AnalysisLevel=latest-recommended`）看到表达式体不碰 `this` 就建议 `static`；而 `x:Bind` **绑不到静态属性**（`{x:Bind ViewModel.X}` 走的是实例成员）。两边都满足不了。
+
+**做**：写成**带初始值的自动属性** —— `public string Summary { get; } = "……";`。它有后备字段，不算"不访问实例数据"，分析器不报；同时仍是实例成员，`x:Bind` 正常可用（2026-09-24 批复 28 / `AboutViewModel`）。
+
+同一条也适用于 `RuntimeInformation.FrameworkDescription`、`Environment.IsPrivilegedProcess` 这类"启动后不会再变"的值：**取一次存进自动属性**，别每次渲染调一遍 API。
+
+---
+
 ## 教训方法论
 
 1. **先取证再改**：报错框是证据不是结论——"读到 A 要求 B、本机只有 C"要直接调一次探针验证（D64 的 DDLM 假铁证）。

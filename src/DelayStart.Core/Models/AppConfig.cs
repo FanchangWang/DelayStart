@@ -21,6 +21,21 @@ public sealed class AppConfig
     /// <summary>全部延时条目。</summary>
     public List<DelayedItem> Items { get; set; } = [];
 
+    /// <summary>
+    /// 用户自定义的**调度周期**（FR-15.10）。条目通过 <c>Items[].scheduleCycleId</c> 引用这里的表项。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 内置五档（每天 / 周一至周五 / 周六日 / 法定工作日 / 法定节假日）**不进这张表** ——
+    /// 它们由代码给出（<see cref="BuiltinCycleIds"/>），不可改不可删，写进表反而给了手改配置制造矛盾的机会。
+    /// </para>
+    /// <para>
+    /// 删除策略见 FR-15.14：被引用中的周期不允许删除（管理端拦不住的外部手改会导致引用失效，
+    /// 由 <see cref="Services.ScheduleCycleResolver"/> 兜底为「每天」，见 FR-15.15）。
+    /// </para>
+    /// </remarks>
+    public List<ScheduleCycle> Cycles { get; set; } = [];
+
     /// <summary>全局设置。</summary>
     public Settings Settings { get; set; } = new();
 }

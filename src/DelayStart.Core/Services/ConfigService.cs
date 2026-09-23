@@ -281,6 +281,7 @@ public sealed class ConfigService : IAppConfigStore
         }
 
         NormalizeSettings(config.Settings);
+        NormalizeCycles(config);
 
         foreach (var item in config.Items)
         {
@@ -292,7 +293,78 @@ public sealed class ConfigService : IAppConfigStore
             item.SourceKey ??= string.Empty;
             item.SourceDetail ??= string.Empty;
             item.OriginalState ??= new OriginalState();
+            item.ScheduleCycleId = string.IsNullOrWhiteSpace(item.ScheduleCycleId)
+                ? BuiltinCycleIds.Everyday
+                : item.ScheduleCycleId.Trim();
         }
+    }
+
+    /// <summary>
+    /// 周期表的规范化（FR-15.7 / FR-15.20）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 刻意**不删除**任何一条周期定义，哪怕它已经过期或 <c>Days</c> 被手改成 0：
+    /// 删掉等于替用户做决定，而且会连带让引用它的条目失去本来还保留着的意图。
+    /// 无效定义的处理交给 <see cref="ScheduleCycleResolver"/>（按引用失效兜底为「每天」）。
+    /// </para>
+    /// </remarks>
+    private static void NormalizeCycles(AppConfig config)
+    {
+        if (config.Cycles is null)
+        {
+            config.Cycles = [];
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cycle in config.Cycles)
+        {
+            if (cycle is null)
+            {
+                continue;
+            }
+
+            cycle.Id ??= string.Empty;
+            cycle.Name ??= string.Empty;
+
+            // 越界位清零（FR-15.7）：0x80 这类脏位在判定里没有意义，留着会污染未来的扩展。
+            cycle.Days = WeekdaySets.Sanitize(cycle.Days);
+            cycle.Id = cycle.Id.Trim();
+
+            if (string.IsNullOrWhiteSpace(cycle.Id))
+            {
+                cycle.Id = NewCycleId(seen);
+            }
+
+            if (seen.Add(cycle.Id))
+            {
+                continue;
+            }
+
+            // 重复 id：后续条目的解析永远取不到自己，等于被悄悄屏蔽 —— 重发一个 id 比留着好。
+            cycle.Id = NewCycleId(seen);
+        }
+    }
+
+    /// <summary>生成一个未被占用的自定义周期 id（<c>c-</c> + 8 位十六进制）。</summary>
+    private static string NewCycleId(HashSet<string> seen)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            // 十六进制比 int.ToString("x8") 好在：不走任何文化相关的格式化，
+            // 也避免 CA1305 那类"换台机器就变样"的格式串风险。
+            var bytes = new byte[4];
+            Random.Shared.NextBytes(bytes);
+            var candidate = BuiltinCycleIds.CustomPrefix + Convert.ToHexString(bytes).ToLowerInvariant();
+            if (seen.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        // 到了这里说明配置已经坏到难以理喻；给一个唯一的 Guid 也比空 id 好。
+        return BuiltinCycleIds.CustomPrefix + Guid.NewGuid().ToString("n");
     }
 
     private static void NormalizeSettings(Settings settings)

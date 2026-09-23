@@ -89,8 +89,20 @@ public sealed class PathService
     /// <summary>守卫日志完整路径（D74）。</summary>
     public string GuardLogPath => Path.Combine(LogsRoot, "guard.log");
 
-    /// <summary>守卫的数据目录：基线与一次性请求文件都放这里。</summary>
+    /// <summary>
+    /// 守卫的数据目录：基线与一次性请求文件都放这里。
+    /// </summary>
     public string GuardRoot => Path.Combine(LocalRoot, "guard");
+
+    /// <summary>
+    /// 法定日历数据目录（FR-15）：<c>{LocalRoot}\holidays</c>，每年一个 <c>{year}.json</c>。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 落 **Local** 而不是 Roaming：它不是个人配置，是"下载来的可复现缓存"。
+    /// 混进漫游配置会让一台机器下载的数据被同步到另一台，而另一台的用户并不知道这份数据从哪来。
+    /// 目录由写入方按需创建（<c>AtomicFileWriter.WriteAllText</c> 自带建目录），读取方目录不存在即视为"无数据"。
+    /// </remarks>
+    public string HolidaysRoot => Path.Combine(LocalRoot, "holidays");
 
     /// <summary>新增自启动项检测的基线快照路径（D74）。</summary>
     public string GuardBaselinePath => Path.Combine(GuardRoot, "baseline.json");
@@ -137,6 +149,21 @@ public sealed class PathService
     /// <param name="runId">运行标识，格式 <c>yyyyMMdd-HHmmss</c>。</param>
     /// <returns>归档文件完整路径。</returns>
     public string GetRunFilePath(string runId) => Path.Combine(RunsRoot, $"{runId}.json");
+
+    /// <summary>取某一年份的法定日历文件路径（文件不一定存在）。</summary>
+    /// <param name="year">年份，如 2026。</param>
+    /// <returns>在 <see cref="HolidaysRoot"/> 下的完整路径。</returns>
+    public string GetHolidayFilePath(int year) => Path.Combine(HolidaysRoot, $"{year}.json");
+
+    /// <summary>
+    /// 节假日自动检查的时间戳文件（§6.5：同一年 7 天内不重复联网）。
+    /// </summary>
+    /// <remarks>
+    /// 放在 <see cref="HolidaysRoot"/> 下而不是别处：它与那份数据同生共死 ——
+    /// 用户手工清空数据目录时，时间戳也该一起消失（否则下次启动会以为"刚查过"而不去补）。
+    /// 文件名以 <c>.</c> 开头，与 <c>{year}.json</c> 一眼可分，不会被当成某年的数据。
+    /// </remarks>
+    public string HolidayCheckStampPath => Path.Combine(HolidaysRoot, ".last-check");
 
     /// <summary>
     /// 创建全部运行时目录（幂等）。**不会**创建或触碰安装目录。

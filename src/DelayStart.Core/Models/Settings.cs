@@ -88,4 +88,20 @@ public sealed class Settings
 
     /// <summary>最近一次运行的 <c>runId</c>，供管理端总览页横幅使用（FR-6.7）。从未运行时为 <see langword="null"/>。</summary>
     public string? LastRunId { get; set; }
+
+    /// <summary>
+    /// 管理端启动时是否自动检查节假日数据（FR-15 / design.md FR-15「管理端呈现」）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 默认 <see langword="true"/>，但**触发条件很窄**：只有"当前年份的本地数据不可用"
+    /// 且"距上次检查超过 7 天"才会真的联网 —— 正常情况下它一辈子只跑一次，
+    /// 次年的安排则在 11 月公布后被下一次检查补上。
+    /// </para>
+    /// <para>
+    /// 🔴 联网只可能发生在管理端（NFR-x）：这是一次后台的、可失败的数据缓存刷新，
+    /// 失败只记日志，绝不弹窗打断用户。调度端与守卫端永远离线判定。
+    /// </para>
+    /// </remarks>
+    public bool AutoCheckHolidayUpdates { get; set; } = true;
 }

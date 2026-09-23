@@ -41,6 +41,33 @@ internal sealed partial class JsonContext : JsonSerializerContext
 }
 
 /// <summary>
+/// 法定日历文件的 JSON 上下文（FR-15 / NFR-x）。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 🔴 **必须 <c>public</c>**：这份文件由管理端（<c>DelayStart.Management</c>）写、
+/// 由 Core 侧的 <c>HolidayCalendarStore</c> 读（调度端与守卫端间接用它），
+/// 跨程序集就不能像 <see cref="JsonContext"/> 那样锁成 <c>internal</c>。
+/// 与 <see cref="BrokerJsonContext"/> 同理：凡是跨 exe 交接的数据都不能用内部上下文。
+/// </para>
+/// <para>
+/// 写出侧带缩进：<c>holidays\2026.json</c> 是暴露给用户的数据文件，
+/// 手改与排查都要看它，压成一行没有收益。
+/// </para>
+/// </remarks>
+[JsonSourceGenerationOptions(
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    PropertyNameCaseInsensitive = true,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    ReadCommentHandling = JsonCommentHandling.Skip,
+    AllowTrailingCommas = true)]
+[JsonSerializable(typeof(HolidayCalendarDocument))]
+public sealed partial class HolidayJsonContext : JsonSerializerContext
+{
+}
+
+/// <summary>
 /// UIAccess 中转器（<c>DelayStart.LaunchBroker.exe</c>）作业/结果的 JSON 上下文（D70）。
 /// </summary>
 /// <remarks>

@@ -59,9 +59,24 @@ public sealed class DelayedItem
     /// <summary>条目级开关。关闭后本次登录不启动，配置与原始自启动项状态均不变（FR-4.6）。</summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>
+    /// 所属**调度周期**的 id（FR-15.1）。缺省即内置「每天」，与升级前行为完全一致。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 这是一条**引用**，不是拷贝：周期定义（名称与星期集合）在配置的
+    /// <c>cycles</c> 顶层集合里，改一处影响所有引用它的条目（D87 = 🅑）。
+    /// </para>
+    /// <para>
+    /// 🔴 **不存在"没选周期"的状态**（用户 2026-09-23 批复 2）：一个条目永远属于某个周期，
+    /// 默认是「每天」。不允许用"空引用"或"星期集合为空"来表达"永不启动" ——
+    /// 想让条目不跑，请关掉 <see cref="Enabled"/>；那是唯一一处表达这个意思的地方。
+    /// </para>
+    /// </remarks>
+    public string ScheduleCycleId { get; set; } = BuiltinCycleIds.Everyday;
+
     /// <summary>来源类型。手动条目为 <see cref="StartupSource.Manual"/>。</summary>
     public StartupSource Source { get; set; } = StartupSource.Manual;
-
     /// <summary>作用域。手动条目为 <see cref="StartupScope.None"/>。</summary>
     public StartupScope Scope { get; set; } = StartupScope.None;
 

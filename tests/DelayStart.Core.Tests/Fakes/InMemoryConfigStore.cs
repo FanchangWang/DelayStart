@@ -71,8 +71,36 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
     {
         Version = source.Version,
         Items = [.. source.Items],
+        Cycles = CopyCycles(source.Cycles),
         Settings = CopySettings(source.Settings),
     };
+
+    /// <summary>深拷贝 <c>cycles</c> 节点。</summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="Settings"/> 同理：<see cref="ScheduleCycle"/> 是**可变类**（有 setter），
+    /// 浅拷贝列表会让"调用方手里的周期"与"存储里的周期"变成同一个对象。
+    /// <para>
+    /// ⚠️ **2026-09-23 补**：FR-15 给 <see cref="AppConfig"/> 加 <c>Cycles</c> 字段时，
+    /// 这个替身漏了同步。后果不是"少测一个字段"，而是**所有经替身的周期用例都跑在空周期表上** ——
+    /// 表现为"重名校验拦不住、AddCycle 写进去的周期在 Save 时凭空消失"，而判据本身的单元测试
+    /// 全是绿的（它不经过替身），很容易误判成被测代码有问题。
+    /// ⇒ 凡 <see cref="AppConfig"/> 新增集合 / 引用字段，<see cref="Copy"/> 里必须跟着加一行。
+    /// </para>
+    /// </remarks>
+    private static List<ScheduleCycle> CopyCycles(List<ScheduleCycle> source)
+    {
+        var copy = new List<ScheduleCycle>(source.Count);
+        foreach (var cycle in source)
+        {
+            // 忠实保留 null 元素：配置是外部可改的文件，"表里有半个对象"是真实可能出现的情形，
+            // 替身不该替被测代码把它抹平（被测代码自己会判断）。
+            copy.Add(cycle is null
+                ? null!
+                : new ScheduleCycle { Id = cycle.Id, Name = cycle.Name, Days = cycle.Days });
+        }
+
+        return copy;
+    }
 
     /// <summary>深拷贝 <c>settings</c> 节点。</summary>
     /// <remarks>

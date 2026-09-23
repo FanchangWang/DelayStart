@@ -375,24 +375,13 @@
                             TextWrapping="Wrap"
                             Text="决定这次登录要不要启动它；与延时相互独立。" />
 
-                        <!-- 内置 5 档（不可改不可删，FR-15.13）-->
+                        <!-- 周期胶囊：内置 5 档 + 我的周期 + 「＋ 新建周期」，**不分组、同一个流式面板**
+                             （2026-09-23 批复 23）。先内置（顺序固定）后自定义，一起换行。
+                             🔴 原先拆成两块、中间横一条分隔线加「我的周期」小标题 —— 那是把
+                             "谁定义的"当首要信息摆出来，而用户在这一屏要回答的是"这条哪天启动"。
+                             "内置 / 自建"只是**将来能不能改删**的差别，不值得占一层视觉层级；
+                             真需要区分时，设置页那一列有明确的「内置周期，禁止删除」。 -->
                         <ItemsControl x:Name="CycleChoices">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <ctl:WrapPanel Spacing="8" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                        </ItemsControl>
-
-                        <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
-
-                        <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="我的周期" />
-
-                        <!-- 自定义周期胶囊 + 「＋ 新建周期」摆进同一个流式面板，一起换行 -->
-                        <ItemsControl x:Name="MyCycleChoices">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <ctl:WrapPanel Spacing="8" />

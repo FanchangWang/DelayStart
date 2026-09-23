@@ -20,57 +20,88 @@ namespace DelayStart.App.ViewModels;
 /// 预设延时列表的一行（FR-9.2，2026-09-19 用户批复的新编辑形态）。
 /// </summary>
 /// <remarks>
-/// 左侧选中状态（选中 = 默认）+ 中间时间文本 + 右侧删除图标；
+/// <para>
+/// 左「登录后 …」时间文案 + 右侧「设为默认 / 当前默认」与「删除」；
 /// 整行是不可变快照 —— 任何增删改都整表重建，避免行内状态与配置半同步。
+/// </para>
+/// <para>
+/// 🔴 选中形态从"点整行 = 那个是默认"改成两个显式按钮（2026-09-23 批复 24）：
+/// 整行可点的代价是行内其余控件都要防冒泡，而"点一下这一行"到底会发生什么
+/// 在界面上没有任何字说出来 —— 摆明按钮，代价与收益都写在脸上。
+/// </para>
 /// </remarks>
 public sealed class PresetRow
 {
     /// <summary>构造一行。</summary>
     /// <param name="seconds">延时秒数。</param>
-    /// <param name="isDefault">是否为默认预设（列表中处于「选中」状态的那一项）。</param>
+    /// <param name="isDefault">是否为默认预设（列表中被选中的那一项）。</param>
     /// <param name="canDelete">当前能否删除（列表只剩一项时不允许）。</param>
     public PresetRow(int seconds, bool isDefault, bool canDelete)
     {
         Seconds = seconds;
         IsDefault = isDefault;
         CanDelete = canDelete;
-        Display = DisplayText.DelayOf(seconds);
+        Display = DisplayText.LogonDelayOf(seconds);
     }
 
     /// <summary>延时秒数。</summary>
     public int Seconds { get; }
 
-    /// <summary>是否为默认预设。</summary>
+    /// <summary>是否为默认预设（是 → 行右侧显示「当前默认」）。</summary>
     public bool IsDefault { get; }
+
+    /// <summary>不是默认（否 → 行右侧显示「设为默认」按钮）。</summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="IsDefault"/> 成对存在：<c>x:Bind</c> **不支持取反**，
+    /// 两个互斥形态各绑一个真值，界面不做判断、也不摆一颗永远点不动的按钮。
+    /// </remarks>
+    public bool IsNotDefault => !IsDefault;
 
     /// <summary>能否删除（只剩一项时为 <see langword="false"/>）。</summary>
     public bool CanDelete { get; }
 
-    /// <summary>时间文案（立即 / n 秒 / n 分 n 秒）。</summary>
+    /// <summary>时间文案（如「登录后 2 分 30 秒（150 秒）」）。</summary>
     public string Display { get; }
 }
 
 /// <summary>
-/// 设置页「周期」一节里的一行（一个自定义周期，FR-15.13）。
+/// 设置页「周期」一节里的一行（内置 5 档与自定义周期**共用**同一行类型，FR-15.13）。
 /// </summary>
 /// <remarks>
+/// <para>
 /// 与 <see cref="PresetRow"/> 一样是不可变快照：任何增删改都整表重建。
-/// 「能不能删」的结论在这里就定下来（由构造时的引用数决定），界面只负责照着画 ——
-/// 界面再算一遍的话，判定分叉时会出现"按钮亮着但点了报错"这种事。
+/// 「能不能编辑 / 能不能删」的结论在这里就定下来（内置档恒不行；自定义周期由引用数决定），
+/// 界面只负责照着画 —— 界面再算一遍的话，判定分叉时会出现"按钮亮着但点了报错"这种事。
+/// </para>
+/// <para>
+/// 🔴 <c>daysText</c> 由调用方（<c>SettingsViewModel.RebuildCycles</c>）翻好传进来，
+/// 而不是在这里拿 <see cref="WeekdaySet"/> 现算：法定两档要显示「按国务院通知」而不是
+/// 一串星期 —— 而"它是不是法定档"只有拿着 id 的调用方知道。行对象因此不需要认识
+/// <see cref="CycleInfoProvider"/>，也就不会因为"两处各翻一遍"而分叉。
+/// </para>
+/// <para>
+/// 🔴 内置 5 档之所以也走这一行类型（2026-09-23 批复 23 之前它们不出现在设置页）：
+/// 用户要在一个列表里看见"总共有哪些周期可选"。给它们单独一套只读控件，等于把
+/// 「内置 / 自建」这条**将来能不能改**的差别，放大成一整套视觉差异。
+/// </para>
 /// </remarks>
 public sealed class CycleRow
 {
     /// <summary>构造一行。</summary>
-    /// <param name="cycle">周期定义。</param>
+    /// <param name="id">周期 id。</param>
+    /// <param name="name">周期名。</param>
+    /// <param name="days">包含哪些天（内置法定两档是"今年实际落到的星期"，仅供编辑面板回填）。</param>
+    /// <param name="daysText">「包含哪些天」的文案（已由调用方翻好）。</param>
     /// <param name="references">引用它的延时条目数。</param>
-    public CycleRow(ScheduleCycle cycle, int references)
+    /// <param name="isBuiltin">是否内置档。</param>
+    public CycleRow(string id, string name, WeekdaySet days, string daysText, int references, bool isBuiltin)
     {
-        ArgumentNullException.ThrowIfNull(cycle);
-
-        Id = cycle.Id;
-        Name = cycle.Name;
-        Days = cycle.Days;
+        Id = id;
+        Name = name;
+        Days = days;
+        DaysText = daysText;
         References = references;
+        IsBuiltin = isBuiltin;
     }
 
     /// <summary>周期 id。</summary>
@@ -79,35 +110,52 @@ public sealed class CycleRow
     /// <summary>周期名。</summary>
     public string Name { get; }
 
-    /// <summary>包含哪些天。</summary>
+    /// <summary>包含哪些天（编辑面板回填七宫格用）。</summary>
     public WeekdaySet Days { get; }
+
+    /// <summary>「包含哪些天」的文案（「周一、周三、周五」；法定两档是「按国务院通知」）。</summary>
+    public string DaysText { get; }
 
     /// <summary>引用它的条目数。</summary>
     public int References { get; }
 
-    /// <summary>星期文案（「周一、周三、周五」；七天全选是「每天」）。</summary>
-    public string DaysText => CycleInfoProvider.DaysText(Days);
+    /// <summary>是否内置档（内置不可改、不可删，FR-15.13）。</summary>
+    public bool IsBuiltin { get; }
+
+    /// <summary>能否编辑（内置档恒不能）。</summary>
+    public bool CanEdit => !IsBuiltin;
+
+    /// <summary>能否删除（内置档恒不能；自定义周期被引用时不能，FR-15.14）。</summary>
+    public bool CanDelete => !IsBuiltin && References == 0;
 
     /// <summary>引用数文案（右列）。</summary>
     /// <remarks>
-    /// 被引用时直接把"不能删"写在数字后面（2026-09-23 批复 20）：原先只写「N 个条目在用」，
+    /// <para>
+    /// 不能删的时候直接把原因写在右列（2026-09-23 批复 20）：原先只写「N 个条目在用」，
     /// 而"删除"按钮变灰是**要用户自己把两件事连起来**才知道的 —— 灰按钮配一句解释，
     /// 比让用户猜"为什么点不动"省一次完整的困惑。
+    /// </para>
+    /// <para>
+    /// 内置档的措辞是用户点名的原文（2026-09-23 批复 23）。
+    /// </para>
     /// </remarks>
-    public string UsageText => References > 0 ? $"{References} 个条目在用，禁止删除" : "未使用";
-
-    /// <summary>能否删除（FR-15.14：被引用时置灰）。</summary>
-    public bool CanDelete => References == 0;
+    public string UsageText => IsBuiltin
+        ? "内置周期，禁止删除"
+        : References > 0 ? $"{References} 个条目在用，禁止删除" : "未使用";
 
     /// <summary>删除按钮的悬停说明 —— 置灰时解释**为什么**不能删。</summary>
-    public string DeleteToolTip => CanDelete
-        ? "删除这个周期"
-        : $"{References} 个条目正在使用，先把它们改成别的周期才能删除";
+    public string DeleteToolTip => IsBuiltin
+        ? "内置周期不能删除"
+        : References > 0
+            ? $"{References} 个条目正在使用，先把它们改成别的周期才能删除"
+            : "删除这个周期";
 
     /// <summary>编辑按钮的悬停说明（带上影响面，FR-15.16）。</summary>
-    public string EditToolTip => References > 0
-        ? $"改它会影响 {References} 个正在使用它的条目"
-        : "修改这个周期";
+    public string EditToolTip => IsBuiltin
+        ? "内置周期不能修改"
+        : References > 0
+            ? $"改它会影响 {References} 个正在使用它的条目"
+            : "修改这个周期";
 
     /// <summary>名称 + 星期（删除二次确认里引用它）。</summary>
     public string Display => $"{Name}（{DaysText}）";
@@ -308,9 +356,46 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>预设延时列表（选中项 = 默认）。</summary>
     public ObservableCollection<PresetRow> Presets { get; } = [];
 
-    /// <summary>「添加」输入框的秒数（NumberBox 双向绑定；NaN 表示未填）。</summary>
+    /// <summary>
+    /// 「延时」一节的展开状态（**默认收起**，2026-09-23 批复 23）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 收起是默认值：设置页上这两节各自可能攒下十几行（一列延时 + 一列周期），
+    /// 常驻展开会把「外观 / 节假日数据 / 调度 / 守卫」几节都挤到需要滚动才看得见。
+    /// 节头那行已经说清了这一节是干什么的，想看细节再展开 —— 收起不等于隐藏信息。
+    /// </para>
+    /// <para>
+    /// 🔴 状态记在 ViewModel 而不是控件的 <c>IsChecked</c> 上：三角按钮与节头左半边的
+    /// 透明按钮是两个入口，只有一个真值才不会出现"点了左边、三角还是朝下的"。
+    /// </para>
+    /// </remarks>
     [ObservableProperty]
-    public partial double NewPresetValue { get; set; } = double.NaN;
+    public partial bool IsDelaySectionExpanded { get; set; }
+
+    /// <summary>「周期」一节的展开状态（默认收起，2026-09-23 批复 23）。</summary>
+    [ObservableProperty]
+    public partial bool IsCycleSectionExpanded { get; set; }
+
+    /// <summary>「延时」节三角的图标字形（展开朝上、收起朝下）。</summary>
+    public string DelaySectionGlyph => IsDelaySectionExpanded ? "\uE70E" : "\uE70D";
+
+    /// <summary>「周期」节三角的图标字形（展开朝上、收起朝下）。</summary>
+    public string CycleSectionGlyph => IsCycleSectionExpanded ? "\uE70E" : "\uE70D";
+
+    /// <summary>展开状态变化时补发字形通知（<c>[ObservableProperty]</c> 不会替派生属性发）。</summary>
+    /// <param name="value">新的展开状态。</param>
+    partial void OnIsDelaySectionExpandedChanged(bool value) => OnPropertyChanged(nameof(DelaySectionGlyph));
+
+    /// <summary>展开状态变化时补发字形通知。</summary>
+    /// <param name="value">新的展开状态。</param>
+    partial void OnIsCycleSectionExpandedChanged(bool value) => OnPropertyChanged(nameof(CycleSectionGlyph));
+
+    /// <summary>翻转「延时」节的展开状态（节头左半边与三角按钮共用）。</summary>
+    public void ToggleDelaySection() => IsDelaySectionExpanded = !IsDelaySectionExpanded;
+
+    /// <summary>翻转「周期」节的展开状态。</summary>
+    public void ToggleCycleSection() => IsCycleSectionExpanded = !IsCycleSectionExpanded;
 
     /// <summary>重试次数（0–5），NumberBox 的数值形式。</summary>
     [ObservableProperty]
@@ -382,7 +467,6 @@ public partial class SettingsViewModel : ObservableObject
             NotifyModeIndex = (int)settings.NotifyMode;
             GuardNotifyModeIndex = (int)settings.GuardNotifyMode;
             ThemeIndex = (int)settings.Theme;
-            NewPresetValue = double.NaN;
             RebuildCycles();
             RebuildHolidayYears();
             AutoCheckHolidayUpdates = settings.AutoCheckHolidayUpdates;
@@ -513,43 +597,40 @@ public partial class SettingsViewModel : ObservableObject
         ReloadPresetsFromConfig();
     }
 
-    /// <summary>按输入框里的秒数添加一个预设。</summary>
-    public void AddPreset()
+    /// <summary>添加一个预设延时（值来自「＋ 新建延时」弹窗，2026-09-23 批复 23）。</summary>
+    /// <param name="seconds">延时秒数。</param>
+    /// <returns>成功为 <see langword="null"/>；否则是交给弹窗红字显示的失败原因。</returns>
+    /// <remarks>
+    /// 🔴 返回值是**错误原因**而不是 <see cref="bool"/>：调用方是一层 <c>ContentDialog</c>，
+    /// 失败时它要 ① 不关窗 ② 当场说清哪儿不对。走页面状态条或右下角通知都不行 ——
+    /// 弹窗还盖在上面，那两条通道用户根本看不见（批复 23 之前是页面上的内联输入框，
+    /// 报错落在页面上没问题；换成弹窗之后这一条就不成立了）。
+    /// </remarks>
+    public string? AddPreset(int seconds)
     {
         if (_loading)
         {
-            return;
+            return null;
         }
-
-        if (double.IsNaN(NewPresetValue))
-        {
-            Fail("先填一个以秒计的延时，再点「添加」");
-            return;
-        }
-
-        var seconds = (int)Math.Round(NewPresetValue);
 
         var settings = _configStore.Load().Settings;
+
         if (seconds < 0)
         {
-            Fail("延时不能是负数");
-            return;
+            return "延时不能是负数。";
         }
 
         if (settings.DelayPresets.Contains(seconds))
         {
-            // 2026-09-21 批复：重复添加走右下角通知（与成功提示同一通道），不占状态条。
-            _toast.Show($"「{DisplayText.DelayOf(seconds)}」已在列表里，无需重复添加");
-            NewPresetValue = double.NaN;
-            return;
+            return $"「{DisplayText.DelayOf(seconds)}」已经在列表里了。";
         }
 
         Persist(settings => settings.DelayPresets = [.. settings.DelayPresets.Append(seconds).Order()]);
-        NewPresetValue = double.NaN;
         ReloadPresetsFromConfig();
 
-        // 2026-09-21 批复：添加成功改走右下角自动消失的应用内通知（不再占用状态条）。
+        // 成功提示仍走右下角自动消失的应用内通知（2026-09-21 批复）—— 此刻弹窗正在关闭。
         _toast.Show($"已添加预设延时 {DisplayText.DelayOf(seconds)}");
+        return null;
     }
 
     // ── 周期（FR-15.10–15.14，§6.4）─────────────────────────────────────────
@@ -580,15 +661,68 @@ public partial class SettingsViewModel : ObservableObject
         return RunCycleChange(() => _ = _cycles.Delete(row.Id), $"已删除周期「{row.Name}」");
     }
 
-    /// <summary>按配置现状重建周期行（整表快照，见 <see cref="CycleRow"/>）。</summary>
+    /// <summary>
+    /// 按配置现状重建周期行：**内置 5 档在前，自定义周期在后**（整表快照，见 <see cref="CycleRow"/>）。
+    /// </summary>
+    /// <remarks>
+    /// 两段合在一张列表里、顺序固定（内置顺序由 <see cref="BuiltinCycleIds.Ordered"/> 决定）：
+    /// 分批展示会让用户以为"我的周期"是另一类东西；按名字排序则会让新加的周期插进列表中间，
+    /// 下次进来找不到刚建的那一个。
+    /// </remarks>
     private void RebuildCycles()
     {
         Cycles.Clear();
+
+        // 一份快照给所有行共用：「包含哪些天」对法定两档要扫一整年日历，
+        // 逐行各建一次提供者就是逐行各读一次盘、各扫一年。
+        var info = _cycles.CreateProvider();
+
+        foreach (var cycleId in BuiltinCycleIds.Ordered)
+        {
+            Cycles.Add(new CycleRow(
+                cycleId,
+                info.NameOf(cycleId),
+                info.DaysOf(cycleId),
+                DaysTextOf(cycleId, info),
+                references: 0,
+                isBuiltin: true));
+        }
+
         foreach (var cycle in _cycles.LoadCycles())
         {
-            Cycles.Add(new CycleRow(cycle, _cycles.CountReferences(cycle.Id)));
+            Cycles.Add(new CycleRow(
+                cycle.Id,
+                cycle.Name,
+                cycle.Days,
+                info.DaysTextOf(cycle.Id),
+                _cycles.CountReferences(cycle.Id),
+                isBuiltin: false));
         }
     }
+
+    /// <summary>周期「包含哪些天」的文案：法定两档只说依据，其余**逐天列出来**。</summary>
+    /// <param name="cycleId">周期 id。</param>
+    /// <param name="info">本次快照的信息提供者（今天 + 法定日历 + 周期表）。</param>
+    /// <returns>文案。</returns>
+    /// <remarks>
+    /// <para>
+    /// 与延时弹窗里那句（<c>DelayEditorDialog.BuildCycleDaysText</c>）同一个口径：
+    /// 法定两档"落在哪几天"由国务院通知定义，摆一串星期既不准确（调休会把周日点亮）
+    /// 也没人看 —— 想知道具体哪天休，看日历比看这行字有用（2026-09-23 批复 19/22）。
+    /// </para>
+    /// <para>
+    /// 🔴 这里用 <see cref="CycleInfoProvider.DaysListText"/> 而不是 <c>DaysTextOf</c>
+    /// （2026-09-23 批复 24）：这一列要和上下文里的其它周期并排比较，
+    /// 「每天」和「周一、周二」放在一起是两种粒度 —— 简化名省下的几个字，
+    /// 换来的是用户得先在脑子里把「每天」翻译成七个星期，才能回答"这两个周期差在哪"。
+    /// </para>
+    /// <para>
+    /// 列表徽标那边仍然用简写（那里是窄徽标，七个星期会撑爆列宽）——
+    /// 同一份数据、两种宽度，各自取合适的那一种，不是"两处不一致"。
+    /// </para>
+    /// </remarks>
+    private static string DaysTextOf(string cycleId, CycleInfoProvider info)
+        => CycleInfoProvider.IsDynamic(cycleId) ? "按国务院通知" : CycleInfoProvider.DaysListText(info.DaysOf(cycleId));
 
     /// <summary>执行一次周期增删改：成功重建列表 + 右下角通知，失败转状态条。</summary>
     /// <param name="action">实际动作（转交 <see cref="CycleCatalogService"/>）。</param>

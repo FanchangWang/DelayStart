@@ -132,11 +132,11 @@ public sealed partial class DelayEditorDialog : ContentDialog
     private string _cycleId = BuiltinCycleIds.Everyday;
 
     /// <summary>
-    /// 全部周期胶囊（内置 5 档 + 我的周期），跨两个 <c>ItemsControl</c>。
+    /// 全部周期胶囊（内置 5 档 + 我的周期），按顺序排在同一个 <c>ItemsControl</c> 里。
     /// </summary>
     /// <remarks>
-    /// 单选互斥要一次遍历所有胶囊，而它们分处两个面板（内置一组、我的周期一组 + 新建按钮）——
-    /// 从可视树里凑比在这里留一份引用麻烦得多。
+    /// 单选互斥要一次遍历所有胶囊，而它们与「＋ 新建周期」那颗动作按钮混在同一个面板里 ——
+    /// 从可视树里筛（还得把动作按钮排除掉）比在这里留一份引用麻烦得多。
     /// </remarks>
     private readonly List<ToggleButton> _cyclePills = [];
 
@@ -879,7 +879,8 @@ public sealed partial class DelayEditorDialog : ContentDialog
         => UwpPickerOverlay.Visibility = Visibility.Collapsed;
 
     /// <summary>
-    /// 填充周期胶囊：内置 5 档 + 我的周期 + 「＋ 新建周期」（FR-15.10 / FR-15.11）。
+    /// 填充周期胶囊：内置 5 档 + 我的周期 + 「＋ 新建周期」，**按顺序摆进同一个面板**
+    /// （FR-15.10 / FR-15.11，2026-09-23 批复 23）。
     /// </summary>
     /// <remarks>
     /// 可重复调用（新建完一个自定义周期后重建）：<b>先清空再填</b>，并把
@@ -889,9 +890,10 @@ public sealed partial class DelayEditorDialog : ContentDialog
     private void BuildCyclePills()
     {
         CycleChoices.Items.Clear();
-        MyCycleChoices.Items.Clear();
         _cyclePills.Clear();
 
+        // 内置 5 档在最前（顺序固定），随后是自定义周期，最后是「＋ 新建周期」——
+        // 三者同在一个流式面板里，超宽时一起换行。
         foreach (var cycleId in BuiltinCycleIds.Ordered)
         {
             var pill = CreatePill(_cycleInfo.NameOf(cycleId), cycleId, isChecked: false, OnCyclePillChecked);
@@ -906,11 +908,10 @@ public sealed partial class DelayEditorDialog : ContentDialog
         {
             var pill = CreatePill(cycle.Name, cycle.Id, isChecked: false, OnCyclePillChecked);
             _cyclePills.Add(pill);
-            MyCycleChoices.Items.Add(pill);
+            CycleChoices.Items.Add(pill);
         }
 
-        // 「＋ 新建周期」与自定义胶囊摆进同一个流式面板，超宽时一起换行。
-        MyCycleChoices.Items.Add(CreateActionPill("＋ 新建周期", OnNewCycleRequested));
+        CycleChoices.Items.Add(CreateActionPill("＋ 新建周期", OnNewCycleRequested));
     }
 
     /// <summary>造一颗"动作"胶囊（长得像胶囊的按钮，用于「＋ 新建周期」）。</summary>

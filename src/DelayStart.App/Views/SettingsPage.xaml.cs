@@ -14,8 +14,8 @@ namespace DelayStart.App.Views;
 /// 「设置」页（FR-9，UI v2.2 重做）。所有操作即时落盘，没有保存按钮。
 /// </summary>
 /// <remarks>
-/// 预设胶囊的行内控件（选中 / 删除 / 添加）走 code-behind 事件而不是命令：
-/// 行是整表重建的快照，事件带上 <see cref="PresetRow"/> 的 DataContext 最直接。
+/// 预设延时与周期两节的行内控件（设为默认 / 删除 / 添加 / 编辑）走 code-behind 事件
+/// 而不是命令：行是整表重建的快照，事件带上行的 DataContext 最直接。
 /// </remarks>
 public sealed partial class SettingsPage : Page
 {
@@ -56,55 +56,17 @@ public sealed partial class SettingsPage : Page
 
     private void OnUnloaded(object sender, RoutedEventArgs e) => ViewModel.DetachHolidayStatus();
 
-    /// <summary>某个预设被选为默认。</summary>
+    /// <summary>某一行的「设为默认」。</summary>
     /// <remarks>
-    /// 🔴 胶囊是 <see cref="ToggleButton"/>，**没有原生单选语义** —— 用户实测能同时
-    /// 选中多个（二轮 bug 批复 2）。这里手工互斥：选中一个就遍历可视树弹起其余胶囊。
+    /// 🔴 原先"点整行 = 设为默认"的互斥逻辑（遍历可视树弹起其余行）已随形态一起删掉：
+    /// 默认值本来就只有一份、写在配置里，界面每次都是按配置整表重建 ——
+    /// 手工互斥是在补控件没有的能力，现在由按钮直接表达，这层补丁就是负债。
     /// </remarks>
-    private void OnPresetChecked(object sender, RoutedEventArgs e)
+    private void OnPresetSetDefault(object sender, RoutedEventArgs e)
     {
-        if (sender is not ToggleButton source)
-        {
-            return;
-        }
-
-        if (source.DataContext is PresetRow { IsDefault: false } row)
+        if (sender is FrameworkElement { DataContext: PresetRow row })
         {
             ViewModel.SetDefaultPreset(row);
-        }
-
-        UncheckOtherPills(PresetPills, source);
-    }
-
-    /// <summary>默认胶囊被再次点击弹起：默认值必须始终存在，弹回去。</summary>
-    private void OnPresetUnchecked(object sender, RoutedEventArgs e)
-    {
-        if (sender is ToggleButton { DataContext: PresetRow { IsDefault: true } } pill)
-        {
-            pill.IsChecked = true;
-        }
-    }
-
-    /// <summary>遍历可视树，把 <paramref name="source"/> 以外的胶囊全部弹起。</summary>
-    /// <remarks>
-    /// 🔴 跳过 <c>DataContext.IsDefault == true</c> 的胶囊：SetDefaultPreset 触发集合重建，
-    /// 新容器的生成可能落后于本方法执行 —— 不加守卫会把"新默认胶囊"弹起，
-    /// 进而触发 Unchecked→Checked 回环。按 DataContext 判定与容器代次无关，天然幂等。
-    /// </remarks>
-    private static void UncheckOtherPills(DependencyObject parent, ToggleButton source)
-    {
-        var count = VisualTreeHelper.GetChildrenCount(parent);
-        for (var i = 0; i < count; i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is ToggleButton button
-                && !ReferenceEquals(button, source)
-                && button.DataContext is not PresetRow { IsDefault: true })
-            {
-                button.IsChecked = false;
-            }
-
-            UncheckOtherPills(child, source);
         }
     }
 
@@ -138,8 +100,84 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    /// <summary>添加一个预设。</summary>
-    private void OnPresetAdd(object sender, RoutedEventArgs e) => ViewModel.AddPreset();
+    /// <summary>
+    /// 「＋ 新建延时」：弹窗输入秒数（2026-09-23 批复 23；批复 24 起挂在子内容第一条上）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 校验失败时**不关窗**（<c>args.Cancel = true</c>）并把原因写在弹窗内的 InfoBar 上：
+    /// 弹窗是模态的，页面底部状态条与右下角通知都在它后面 —— 报在那两处等于没报。
+    /// </para>
+    /// <para>
+    /// 面板内容用代码拼而不单开一个 XAML：只有一个数字框加一条错误提示，
+    /// 为它立一个 <c>ContentDialog</c> 子类，收益不抵"又多一处要同步的版式"。
+    /// </para>
+    /// </remarks>
+    private async void OnPresetAddDialog(object sender, RoutedEventArgs e)
+    {
+        var box = new NumberBox
+        {
+            Header = "延时（秒）",
+            Minimum = 0,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            Value = double.NaN,
+        };
+
+        var error = new InfoBar
+        {
+            IsClosable = false,
+            IsOpen = false,
+            Severity = InfoBarSeverity.Error,
+        };
+
+        var panel = new StackPanel { Spacing = 10 };
+        panel.Children.Add(CaptionText("编辑器快选按钮里会多出这一项，接管条目时自动填入。"));
+        panel.Children.Add(box);
+        panel.Children.Add(error);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "新建预设延时",
+            Content = panel,
+            PrimaryButtonText = "添加",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (double.IsNaN(box.Value))
+            {
+                error.Message = "先填一个以秒计的延时。";
+                error.IsOpen = true;
+                args.Cancel = true;
+                return;
+            }
+
+            if (ViewModel.AddPreset((int)Math.Round(box.Value)) is { } reason)
+            {
+                error.Message = reason;
+                error.IsOpen = true;
+                args.Cancel = true;
+            }
+        };
+
+        await dialog.ShowAsync();
+    }
+
+    // ── 两节的展开 / 收起（2026-09-23 批复 23；批复 24 起整行都可点）──────────────
+
+    /// <summary>「延时」节的展开 / 收起。</summary>
+    /// <remarks>
+    /// 🔴 三角**不再是 ToggleButton**（批复 24）：它现在只是一枚跟着 ViewModel 变的图标，
+    /// 展开 / 收起的唯一入口是整行那个透明按钮。这样也就不需要"把按钮的选中态回写对齐"
+    /// 那一步 —— 真值只有 <c>ViewModel.IsDelaySectionExpanded</c> 一个。
+    /// </remarks>
+    private void OnPresetSectionToggle(object sender, RoutedEventArgs e) => ViewModel.ToggleDelaySection();
+
+    /// <summary>「周期」节的展开 / 收起。</summary>
+    private void OnCycleSectionToggle(object sender, RoutedEventArgs e) => ViewModel.ToggleCycleSection();
 
     /// <summary>通知策略被改变。⚠️ 初始化 / 回灌事件在这里被守卫挡掉（不落盘）。</summary>
     private void OnNotifyModeChanged(object sender, SelectionChangedEventArgs e)

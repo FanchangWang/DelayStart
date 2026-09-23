@@ -16,6 +16,31 @@
             <Setter Property="FontSize" Value="14" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
+
+        <!-- 可展开一节的节头：整行都是一个按钮（点哪儿都能展开/收起）。
+             🔴 节头**本身就是那张卡片**（2026-09-23 批复 25）——
+             卡面 / 描边 / 圆角 / 内边距全都长在这个按钮上，外面**不再套 Border**。
+             原因（上一版吃过的亏）：套一层 Border 时，按钮的悬停高亮只能铺在
+             Border 的内边距以内（四周各让出 16 / 14，圆角还比卡片小一圈），
+             鼠标移上去看到的是"文字那一小块变色了"，而不是整张卡片响应。
+             卡面交给按钮后，PointerOver 会同时换掉
+             CardBackgroundFillColorDefaultBrush → ButtonBackgroundPointerOver
+             与 CardStrokeColorDefaultBrush → ButtonBorderBrushPointerOver，
+             整行连描边、圆角一起变化；Pressed 同理（视觉状态来自 DefaultButtonStyle）。
+             与外层卡片的几何完全一致：1px 描边 + 圆角 7 + 内边距 16,14。 -->
+        <Style
+            x:Key="SectionHeaderButtonStyle"
+            BasedOn="{StaticResource DefaultButtonStyle}"
+            TargetType="Button">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="16,14" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
     </Page.Resources>
 
     <!--
@@ -23,7 +48,7 @@
         ① 没有「保存」按钮 —— 所有操作立即落盘生效；
         ② 降权 / 托盘设置已移除（语义固定，不再可配）；
         ③ 新增主题设置（跟随系统 / 浅色 / 深色）；
-        ④ 预设延时为胶囊快选：胶囊选中即默认 —— 接管条目时自动填入；胶囊内的 ✕ 删除。
+        ④ 预设延时为列表：其中一项是默认值 —— 接管条目时自动填入；行内可设为默认 / 删除。
         ⑤ 卡片用 PowerToys 同款 SettingsCard（D1 批复 A）；
         ⑥ 2026-09-20 批复修订：
            - 限宽回 1000 并居中 —— 已核实 PowerToys 源码（Settings.UI/SettingsXAML/App.xaml）：
@@ -33,6 +58,17 @@
            （有变化时通知 / 从不通知）。它管的是守卫发现自启动项变化后发不发系统通知；
            「调度」分节里的同名卡片管的是调度结束后发不发系统通知（N3 批复前管弹不弹面板）
            —— 两个同名卡片触发方与载体都不同，互不相干。
+        ⑧ 2026-09-23 批复 24（「延时」「周期」两节重排）：
+           - 节头 = **一个可展开的整行**：左字 + 描述，右端一枚**纯图标**三角
+             （上一版是 ToggleButton，看起来像颗按钮 —— 用户点名改掉）；
+             「＋ 新建」不再挤在这一行里，它自己单独一行；
+           - 展开后子内容**左右各内收 16**，一眼看出是上级的子内容；
+           - 子内容第一条固定是「添加」：左侧一句描述 + 右侧添加按钮；
+             第二条起才是真正的数据行（延时值 / 周期）。
+        ⑨ 2026-09-23 批复 25（节头悬停范围）：
+           - 节头**不再套 Border**，卡面 / 描边 / 圆角 / 内边距全部长在按钮上。
+             套 Border 时按钮的悬停高亮只铺在内边距以内（四周各让出 16 / 14、
+             圆角还小一圈），看起来是"文字那一小块变色"；现在整张卡片连描边一起响应。
     -->
     <Grid RowSpacing="12">
         <Grid.RowDefinitions>
@@ -68,198 +104,268 @@
                     </stc:SettingsCard>
                 </StackPanel>
 
-        <!-- ── 预设延时 ──（2026-09-21 批复：分节描述移入下方胶囊卡片内部） -->
-        <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
+                <!-- ── 延时 ──（2026-09-23 批复 24：可展开的整行节头 + 内收的子内容。） -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="延时" />
 
-        <!-- 边框一：左描述 + 右（输入框 + 添加按钮），仿 PowerToys「颜色格式」卡片 -->
-        <Border
-            Padding="16,14"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="7">
-            <Grid ColumnSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
-                    <TextBlock Text="添加预设延时" />
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        TextWrapping="Wrap"
-                        Text="单位为秒；相同值不会重复添加。" />
-                </StackPanel>
-                        <StackPanel
-                            Grid.Column="1"
-                            Orientation="Horizontal"
-                            Spacing="8"
-                            VerticalAlignment="Center">
-                            <NumberBox
-                                Header=""
-                                Minimum="0"
-                                Width="140"
-                                SpinButtonPlacementMode="Compact"
-                                Value="{x:Bind ViewModel.NewPresetValue, Mode=TwoWay}" />
-                            <Button
-                                VerticalAlignment="Center"
-                                Click="OnPresetAdd"
-                                Content="添加" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
-
-                <!-- 边框二：胶囊一行多个（2026-09-20 批复 6：恢复横排）。
-                     🔴 不用 GridView / WrapGrid：两者按统一单元格布局，长文本被截断。
-                     单选互斥在 code-behind（OnPresetChecked）里做。 -->
-                <Border
-                    Margin="0,8,0,0"
-                    Padding="12,10"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="7">
-                    <StackPanel Spacing="8">
-                        <!-- 2026-09-21 批复：原分节描述移到卡片内部（删掉 ✕ / 右侧等纯位置描述） -->
-                        <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            TextWrapping="Wrap"
-                            Text="编辑器快选按钮使用的延时列表，高亮胶囊为默认值，接管条目时自动填入。点击垃圾桶移除，删除前会二次确认。" />
-                        <ItemsControl
-                            x:Name="PresetPills"
-                            ItemsSource="{x:Bind ViewModel.Presets, Mode=OneTime}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <!-- Round H 批复 7：超宽自动换行（自绘 WrapPanel，宽度仍按内容自适应） -->
-                                <ctl:WrapPanel Spacing="8" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:PresetRow">
-                                <ToggleButton
-                                    Checked="OnPresetChecked"
-                                    CornerRadius="14"
-                                    IsChecked="{x:Bind IsDefault, Mode=OneTime}"
-                                    Padding="10,5"
-                                    Unchecked="OnPresetUnchecked">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <TextBlock
-                                            VerticalAlignment="Center"
-                                            Text="{x:Bind Display}" />
-                                        <!-- 垃圾桶：2026-09-21 二次批复回退为嵌套 Button ——
-                                             裸 TextBlock + PointerEntered/Tapped 方案触发 XamlCompiler
-                                             pass-1 静默崩溃（无 output.json），且悬停变色难以两主题兼顾。
-                                             主题同色问题接受现状（此功能可忽略）。 -->
-                                        <Button
-                                            Background="Transparent"
-                                            BorderThickness="0"
-                                            Click="OnPresetDelete"
-                                            Content="&#xE74D;"
-                                            FontFamily="{StaticResource SymbolThemeFontFamily}"
-                                            FontSize="12"
-                                            IsEnabled="{x:Bind CanDelete, Mode=OneTime}"
-                                            Padding="4,2"
-                                            ToolTipService.ToolTip="删除这个预设" />
-                                    </StackPanel>
-                                </ToggleButton>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    </StackPanel>
-                </Border>
-
-                <!-- ── 周期 ──（FR-15，2026-09-23 批复 6：位置在「延时」与「节假日数据」之间；
-                     边框一固定是"介绍 + 新建"，之后每个自定义周期一张独立边框，
-                     内置 5 档不出现在这里 —— 它们在延时弹窗里挑，且不可改不可删。） -->
-                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="周期" />
-
-                <!-- 边框一：左介绍 + 右（新建按钮） -->
-                <Border
-                    Padding="16,14"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="7">
-                    <Grid ColumnSpacing="16">
+                <!-- 节头：整行可点；卡面/描边长在按钮上（见 SectionHeaderButtonStyle），
+                     所以这里不再套 Border —— 悬停时整张卡片连描边一起响应。
+                     右端三角是**纯图标**，不是按钮。 -->
+                <Button
+                    Click="OnPresetSectionToggle"
+                    Style="{StaticResource SectionHeaderButtonStyle}"
+                    ToolTipService.ToolTip="展开或收起预设延时列表">
+                    <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
-                            <TextBlock Text="决定条目在哪些天启动" />
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="预设延时" />
                             <TextBlock
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 TextWrapping="Wrap"
-                                Text="一个周期可被多个条目引用；改周期会同步影响所有引用它的条目。" />
+                                Text="编辑器快选按钮用的延时列表，其中一项为默认值。" />
                         </StackPanel>
-                        <Button
+
+                        <!-- 🔴 纯图标：不套 ToggleButton，没有自己的背景/边框/悬停态 ——
+                             点它就等于点整行（它落在同一个按钮的内容里）。 -->
+                        <FontIcon
                             Grid.Column="1"
                             VerticalAlignment="Center"
-                            Click="OnCycleAdd"
-                            Content="＋ 新建周期" />
+                            FontFamily="{StaticResource SymbolThemeFontFamily}"
+                            FontSize="12"
+                            Glyph="{x:Bind ViewModel.DelaySectionGlyph, Mode=OneWay}" />
                     </Grid>
-                </Border>
+                </Button>
 
-                <!-- 每个自定义周期一张独立边框（批复 6：不挤在一张卡里） -->
-                <ItemsControl Margin="0,8,0,0" ItemsSource="{x:Bind ViewModel.Cycles, Mode=OneTime}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:CycleRow">
-                            <Border
-                                Margin="0,0,0,8"
-                                Padding="16,14"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1"
-                                CornerRadius="7">
-                                <Grid ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
+                <!-- 子内容：左右各内收 16（一眼看出是上级的子内容）。
+                     第一条固定是「添加」行，之后每个预设延时一条边框。 -->
+                <StackPanel
+                    Margin="16,8,16,0"
+                    Spacing="8"
+                    Visibility="{x:Bind ViewModel.IsDelaySectionExpanded, Mode=OneWay}">
 
-                                    <TextBlock
-                                        Grid.Column="0"
-                                        VerticalAlignment="Center"
-                                        FontWeight="SemiBold"
-                                        Text="{x:Bind Name}" />
-                                    <TextBlock
-                                        Grid.Column="1"
-                                        VerticalAlignment="Center"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind DaysText}" />
-                                    <TextBlock
-                                        Grid.Column="2"
-                                        VerticalAlignment="Center"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind UsageText}" />
-                                    <StackPanel
-                                        Grid.Column="3"
-                                        Orientation="Horizontal"
-                                        Spacing="8">
+                    <Border
+                        Padding="16,12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="7">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel
+                                Grid.Column="0"
+                                Spacing="2"
+                                VerticalAlignment="Center">
+                                <TextBlock Text="新建预设延时" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    TextWrapping="Wrap"
+                                    Text="按秒填写；同一个值不会重复添加。" />
+                            </StackPanel>
+                            <Button
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Click="OnPresetAddDialog"
+                                Content="＋ 新建延时" />
+                        </Grid>
+                    </Border>
+
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Presets, Mode=OneTime}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PresetRow">
+                                <Border
+                                    Margin="0,0,0,8"
+                                    Padding="16,12"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="7">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <!-- 固定宽度：让「设为默认」按钮与「当前默认」文字占同一个格，
+                                                 两种形态下最右的「删除」始终对齐。 -->
+                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock
+                                            Grid.Column="0"
+                                            VerticalAlignment="Center"
+                                            Text="{x:Bind Display}" />
+
+                                        <!-- 默认行：不再挂一个"点了没用"的按钮，直接说明它已经是当前默认。
+                                             绿色沿用全站"状态正常"的表达（总览 / 主窗同色）。 -->
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="当前默认"
+                                            Visibility="{x:Bind IsDefault}" />
+
+                                        <!-- 非默认行：一键设为默认（原来靠点整行，形态改了就换成显式按钮）。 -->
                                         <Button
-                                            Click="OnCycleEdit"
-                                            Content="编辑"
-                                            ToolTipService.ToolTip="{x:Bind EditToolTip}" />
-                                        <!-- 🔴 被引用时置灰（FR-15.14）：x:Bind 不支持取反，
-                                             结论由 CycleRow.CanDelete 给出，XAML 不做判断。 -->
+                                            Grid.Column="1"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            Click="OnPresetSetDefault"
+                                            Content="设为默认"
+                                            ToolTipService.ToolTip="接管条目时自动填入这个延时"
+                                            Visibility="{x:Bind IsNotDefault}" />
+
                                         <Button
-                                            Click="OnCycleDelete"
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            Click="OnPresetDelete"
                                             Content="删除"
                                             IsEnabled="{x:Bind CanDelete, Mode=OneTime}"
-                                            ToolTipService.ToolTip="{x:Bind DeleteToolTip}" />
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                                            ToolTipService.ToolTip="从快选列表移除" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- ── 周期 ──（FR-15；2026-09-23 批复 24：与「延时」同一套版式 ——
+                     可展开的整行节头 + 内收的子内容，第一条为「新建」。） -->
+                <TextBlock Margin="0,28,0,2" Style="{StaticResource SectionHeaderStyle}" Text="周期" />
+
+                <!-- 与「延时」同一套版式：整行可点，卡面长在按钮上（不套 Border） -->
+                <Button
+                    Click="OnCycleSectionToggle"
+                    Style="{StaticResource SectionHeaderButtonStyle}"
+                    ToolTipService.ToolTip="展开或收起周期列表">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="调度周期" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                Text="决定条目在哪些天启动。前 5 个是内置周期，不能改也不能删。" />
+                        </StackPanel>
+
+                        <FontIcon
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource SymbolThemeFontFamily}"
+                            FontSize="12"
+                            Glyph="{x:Bind ViewModel.CycleSectionGlyph, Mode=OneWay}" />
+                    </Grid>
+                </Button>
+
+                <StackPanel
+                    Margin="16,8,16,0"
+                    Spacing="8"
+                    Visibility="{x:Bind ViewModel.IsCycleSectionExpanded, Mode=OneWay}">
+
+                    <Border
+                        Padding="16,12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="7">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel
+                                Grid.Column="0"
+                                Spacing="2"
+                                VerticalAlignment="Center">
+                                <TextBlock Text="新建周期" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    TextWrapping="Wrap"
+                                    Text="自己指定一周里的哪几天。" />
+                            </StackPanel>
+                            <Button
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Click="OnCycleAdd"
+                                Content="＋ 新建周期" />
+                        </Grid>
+                    </Border>
+
+                    <!-- 内置 5 档在前、我的周期在后，一张一行（批复 6：不挤在一张卡里） -->
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Cycles, Mode=OneTime}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:CycleRow">
+                                <Border
+                                    Margin="0,0,0,8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="7">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock
+                                            Grid.Column="0"
+                                            VerticalAlignment="Center"
+                                            FontWeight="SemiBold"
+                                            Text="{x:Bind Name}" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind DaysText}" />
+                                        <TextBlock
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind UsageText}" />
+                                        <StackPanel
+                                            Grid.Column="3"
+                                            Orientation="Horizontal"
+                                            Spacing="8">
+                                            <!-- 🔴 内置档与被引用的自定义周期都置灰（FR-15.13 / FR-15.14）：
+                                                 x:Bind 不支持取反，也**不该**在这里重算一遍判据 ——
+                                                 结论由 CycleRow.CanEdit / CanDelete 给出。 -->
+                                            <Button
+                                                Click="OnCycleEdit"
+                                                Content="编辑"
+                                                IsEnabled="{x:Bind CanEdit, Mode=OneTime}"
+                                                ToolTipService.ToolTip="{x:Bind EditToolTip}" />
+                                            <Button
+                                                Click="OnCycleDelete"
+                                                Content="删除"
+                                                IsEnabled="{x:Bind CanDelete, Mode=OneTime}"
+                                                ToolTipService.ToolTip="{x:Bind DeleteToolTip}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
 
                 <!-- 2026-09-23 批复 16：周期节底部原先有两句常驻说明（"周期是引用关系…"
                      与空状态"还没有自定义周期"），已移除 —— 该说的在编辑面板副标题

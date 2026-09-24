@@ -19,6 +19,12 @@ public sealed record GuardCorrectionOutcome(string ItemId, string Name, bool Suc
 /// </remarks>
 public sealed record GuardRunReport
 {
+    /// <summary>巡检完成时刻（D116）。归档文件名与守卫日志页组标题都取它。</summary>
+    /// <remarks>
+    /// 守卫关闭（<see cref="Disabled"/>）时不执行巡检，此值为默认值 —— 那条路径不归档。
+    /// </remarks>
+    public DateTimeOffset CompletedAt { get; init; }
+
     /// <summary>守卫在配置里是关闭状态，本次未执行任何巡检。</summary>
     public bool GuardDisabled { get; init; }
 
@@ -56,4 +62,42 @@ public sealed record GuardRunReport
     /// <summary>构造"守卫已关闭"的结果。</summary>
     /// <returns>未执行巡检的结果。</returns>
     public static GuardRunReport Disabled() => new() { GuardDisabled = true };
+}
+
+/// <summary>
+/// 一次巡检的汇总文案（D116）：计数口径的**唯一**出处。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 三处消费者共用同一份生成逻辑，文本行与归档/界面口径天然一致：
+/// </para>
+/// <list type="bullet">
+/// <item><description>守卫的 <c>guard.log</c> 巡检完成行（原文 = 前缀 + 本文案）；</description></item>
+/// <item><description>守卫日志页的分组标题；</description></item>
+/// <item><description>总览页「上次守卫巡检」卡的第一行。</description></item>
+/// </list>
+/// <para>
+/// 🔴 任何一处想改措辞都只能改这里 —— 此前 D115 的总览卡直接抄 guard.log 行的解析结果，
+/// 口径靠"解析器与写入格式一一对应"维持，归档落地后这层间接不再需要。
+/// </para>
+/// </remarks>
+public static class GuardRunSummaryText
+{
+    /// <summary>生成一次巡检的汇总文案（不带前缀）。</summary>
+    /// <param name="report">巡检结果。</param>
+    /// <returns>形如 <c>扫描 12 项 · 纠正 1（失败 0）· 新增 2 · 失效 1 · 来源失败 1（列表不完整）</c>；
+    /// 来源扫描全部成功时省略末段。</returns>
+    public static string Build(GuardRunReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        var failedSources = report.Failures.Count == 0
+            ? string.Empty
+            : $" · 来源失败 {report.Failures.Count}（列表不完整）";
+
+        return $"扫描 {report.ScannedCount} 项"
+            + $" · 纠正 {report.Corrections.Count}（失败 {report.CorrectionFailureCount}）"
+            + $" · 新增 {report.NewItems.Count}"
+            + $" · 失效 {report.StaleItems.Count}{failedSources}";
+    }
 }

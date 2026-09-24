@@ -72,7 +72,11 @@ internal static class Program
         var sources = StartupSourceFactory.Create(new ShellLinkResolver(log), clock, log);
         var scanner = new ScanService(sources, configStore, log);
         var baselineStore = new GuardBaselineStore(paths, log, clock);
-        var guard = new GuardService(scanner, configStore, baselineStore, sources, log);
+        var guard = new GuardService(scanner, configStore, baselineStore, sources, log, clock);
+
+        // 巡检归档（D116）：每次巡检完成后落一份结构化记录，守卫日志页与总览卡读它。
+        // 写入失败只记 Warn（store 内部吞掉），不阻塞巡检 —— 见 GuardInspectionStore 的 remarks。
+        var inspectionStore = new GuardInspectionStore(paths, log);
 
         GuardRunReport report;
         try
@@ -92,6 +96,10 @@ internal static class Program
         }
 
         WriteSummary(report);
+
+        // 结构化归档（D116，D1=A 批复）：汇总行之后落盘。守卫关闭的那条路径在上面
+        // 已经 return，不会走到这里；写失败不阻塞（store 内部只记 Warn）。
+        inspectionStore.Write(report);
 
         if (!report.HasNotifications)
         {
@@ -116,18 +124,11 @@ internal static class Program
     /// </summary>
     /// <remarks>
     /// 这一行是守卫**唯一的可审计痕迹** —— 没有它，"跑了但没变化"与"根本没跑"无从区分。
+    /// 计数文案与守卫日志页组标题、总览卡同源（<see cref="GuardRunSummaryText.Build"/>，D116）。
     /// </remarks>
     private static void WriteSummary(GuardRunReport report)
     {
-        var failedSources = report.Failures.Count == 0
-            ? string.Empty
-            : $" · 来源失败 {report.Failures.Count}（列表不完整）";
-
-        GuardLog.Info(
-            $"巡检完成：扫描 {report.ScannedCount} 项"
-            + $" · 纠正 {report.Corrections.Count}（失败 {report.CorrectionFailureCount}）"
-            + $" · 新增 {report.NewItems.Count}"
-            + $" · 失效 {report.StaleItems.Count}{failedSources}");
+        GuardLog.Info($"巡检完成：{GuardRunSummaryText.Build(report)}");
 
         foreach (var failure in report.Failures)
         {

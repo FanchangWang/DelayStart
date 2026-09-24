@@ -28,6 +28,7 @@ public sealed class GuardService
     private readonly GuardBaselineStore _baselineStore;
     private readonly IReadOnlyList<IStartupSource> _sources;
     private readonly ILogSink _log;
+    private readonly IClock _clock;
 
     /// <summary>构造守卫服务。</summary>
     /// <param name="scanner">全量扫描服务。</param>
@@ -35,24 +36,28 @@ public sealed class GuardService
     /// <param name="baselineStore">基线快照存储。</param>
     /// <param name="sources">全部来源实例（纠正动作要按来源定位）。</param>
     /// <param name="log">日志接收端。</param>
+    /// <param name="clock">时间源（给巡检结果打完成时间戳，D116）。</param>
     public GuardService(
         ScanService scanner,
         IAppConfigStore configStore,
         GuardBaselineStore baselineStore,
         IReadOnlyList<IStartupSource> sources,
-        ILogSink log)
+        ILogSink log,
+        IClock clock)
     {
         ArgumentNullException.ThrowIfNull(scanner);
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(baselineStore);
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(clock);
 
         _scanner = scanner;
         _configStore = configStore;
         _baselineStore = baselineStore;
         _sources = sources;
         _log = log;
+        _clock = clock;
     }
 
     /// <summary>执行一次完整巡检。</summary>
@@ -91,6 +96,7 @@ public sealed class GuardService
 
         return new GuardRunReport
         {
+            CompletedAt = _clock.Now,
             ScannedCount = scan.TotalCount,
             Corrections = corrections,
             NewItems = newItems,

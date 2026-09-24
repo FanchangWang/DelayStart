@@ -57,6 +57,18 @@ public sealed class GuardServiceTests
         Assert.Equal(1, report.ScannedCount);
     }
 
+    [Fact]
+    public void RunOnce_SetsCompletedAtFromClock()
+    {
+        var source = new FakeStartupSource { Entries = [Entry("registry:hkcu:a", "甲")] };
+        using var harness = new Harness(GuardMode.Periodic, source);
+
+        var report = harness.Service.RunOnce();
+
+        // D116：完成时间戳取自时钟 —— 巡检归档的文件名与界面组标题都依赖它。
+        Assert.Equal(harness.Clock.Now, report.CompletedAt);
+    }
+
     // ── 新增检测 ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -263,8 +275,12 @@ public sealed class GuardServiceTests
                 Store,
                 baseline,
                 sources,
-                Log);
+                Log,
+                Clock);
         }
+
+        /// <summary>时间源（D116 起 <c>GuardRunReport.CompletedAt</c> 取它）。</summary>
+        public FakeClock Clock { get; } = new();
 
         public FakeLogSink Log { get; }
 

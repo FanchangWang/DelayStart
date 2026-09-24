@@ -216,40 +216,62 @@ internal static class CliHost
     /// </remarks>
     private static int RunRestoreAll(CliServices services, string[] args)
     {
-        var outcome = services.Takeover.RestoreAll();
-
-        Console.WriteLine($"还原完成：成功 {outcome.RestoredCount} 项，失败 {outcome.FailedCount} 项。");
-        Console.WriteLine(outcome.TaskDeleted
-            ? "调度计划任务已删除。"
-            : "⚠ 调度计划任务未能删除，请手动检查。");
-
-        // 守卫计划任务（D74）：卸载时一并删除。
-        // 🔴 删除失败**不参与退出码**（与调度任务刻意不同的判据）：残留的守卫任务最多
-        // 在下次触发时报一条"找不到程序"的系统日志，不会让用户的自启动项无法还原 ——
-        // 为它中止卸载得不偿失。
+        var exitCode = ExitFailure;
         try
         {
-            services.GuardRegistrar.Delete();
-            Console.WriteLine("守卫计划任务已删除。");
+            var outcome = services.Takeover.RestoreAll();
+
+            Console.WriteLine($"还原完成：成功 {outcome.RestoredCount} 项，失败 {outcome.FailedCount} 项。");
+            Console.WriteLine(outcome.TaskDeleted
+                ? "调度计划任务已删除。"
+                : "⚠ 调度计划任务未能删除，请手动检查。");
+
+            // 守卫计划任务（D74）：卸载时一并删除。
+            // 🔴 删除失败**不参与退出码**（与调度任务刻意不同的判据）：残留的守卫任务最多
+            // 在下次触发时报一条"找不到程序"的系统日志，不会让用户的自启动项无法还原 ——
+            // 为它中止卸载得不偿得。catch 放宽到 Exception：它要是漏出去，会把"不影响退出码"
+            // 的小事升级成"整个卸载保证失效"。
+            try
+            {
+                services.GuardRegistrar.Delete();
+                Console.WriteLine("守卫计划任务已删除。");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"⚠ 守卫计划任务未能删除（不影响卸载）：{ex.Message}");
+            }
+
+            foreach (var failure in outcome.Failures)
+            {
+                Console.Error.WriteLine($"  - {failure}");
+            }
+
+            if (!outcome.Succeeded)
+            {
+                Console.Error.WriteLine("⚠ 存在未还原的条目 —— 卸载流程**必须中止**，否则这些程序将永久失去自启动且用户毫不知情。");
+            }
+
+            exitCode = outcome.ExitCode;
         }
-        catch (StartupOperationException ex)
+        catch (Exception ex)
         {
-            Console.Error.WriteLine($"⚠ 守卫计划任务未能删除（不影响卸载）：{ex.Message}");
+            // 🔴 卸载路径（D22）：本命令由 Inno 卸载器 `ShellExec('runas', ...)` 拉起，
+            // **拿不到退出码**，只能回读 `--result-file` 指定的结果文件；
+            // 文件不存在 → 卸载器轮询 60s 超时 → 走"无结果文件"分支。
+            // 也就是说"出错"绝不能表达成"没写文件"，必须表达成"写了一个非 0 的码"，
+            // 否则 D22「非 0 就中止卸载」的保证会在这条路径上悄悄失效。
+            Console.Error.WriteLine($"还原过程中发生未预期错误：{ex.Message}");
+            Console.Error.WriteLine("⚠ 还原未完成 —— 卸载流程**必须中止**，否则被接管的程序将永久失去自启动。");
+            exitCode = ExitFailure;
         }
-
-        foreach (var failure in outcome.Failures)
+        finally
         {
-            Console.Error.WriteLine($"  - {failure}");
+            // 🔴 放 finally 而不是"正常路径的最后一行的尾巴"：结果文件的写入是这条
+            // 卸载保证的**唯一交付物**，它的存在性不能依赖任何一条代码路径走到最后。
+            WriteResultFile(args, exitCode);
         }
 
-        if (!outcome.Succeeded)
-        {
-            Console.Error.WriteLine("⚠ 存在未还原的条目 —— 卸载流程**必须中止**，否则这些程序将永久失去自启动且用户毫不知情。");
-        }
-
-        WriteResultFile(args, outcome.ExitCode);
-
-        return outcome.ExitCode;
+        return exitCode;
     }
 
     /// <summary>

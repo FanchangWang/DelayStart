@@ -150,7 +150,7 @@ public sealed class SchedulePlanCycleTests
             () => SchedulePlan.Build(null!, Cycles, DateOnly.FromDateTime(DateTime.Now)));
     }
 
-    // ── FR-15.26：被周期跳过的条目要能被单列出来（调度端靠它写运行日志） ──────────────
+    // ── FR-15.26：被周期跳过的条目要能被单列出来（调度端靠它写调度日志） ──────────────
 
     private static string[] SkippedIds(ScheduleOutcome outcome)
         => [.. outcome.SkippedToday.Select(static item => item.Id)];
@@ -190,7 +190,7 @@ public sealed class SchedulePlanCycleTests
     [Fact]
     public void BuildWithSkipped_AllSkipped_ReturnsEmptyEntriesWithFullSkippedList()
     {
-        // 全部跳过 = 计划空。此时"谁被跳过了"是运行日志里唯一能回答"今天为什么没启动"的信息，
+        // 全部跳过 = 计划空。此时"谁被跳过了"是调度日志里唯一能回答"今天为什么没启动"的信息，
         // 所以它必须一条不少（这条路径以前只会静默退出）。
         var items = new[]
         {
@@ -220,7 +220,7 @@ public sealed class SchedulePlanCycleTests
     public void BuildWithSkipped_DisabledItemIsNeitherPlannedNorSkipped()
     {
         // 🔴 两层过滤的次序不变式：被用户关掉的条目**不算"今天被跳过"**。
-        // 算进去的话，运行日志会把"你自己关的"报成"周期决定今天不启动"，口径就歪了。
+        // 算进去的话，调度日志会把"你自己关的"报成"周期决定今天不启动"，口径就歪了。
         var items = new[]
         {
             new DelayedItem { Id = "off", DelaySeconds = 5, Enabled = false, ScheduleCycleId = BuiltinCycleIds.Weekdays },

@@ -46,7 +46,7 @@ public static class UiNavigationTarget
     /// </remarks>
     public const string Stale = "stale";
 
-    /// <summary>「运行日志」页（D82：通知点击经文件中转时用它表达"看日志"）。</summary>
+    /// <summary>「调度日志」页（D82：通知点击经文件中转时用它表达"看日志"）。</summary>
     /// <remarks>
     /// <para>
     /// 存在的理由：D82 起未提权的进程**只能靠请求文件**把意图交给正在运行的实例

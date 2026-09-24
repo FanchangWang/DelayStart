@@ -422,7 +422,7 @@ public sealed partial class ItemsViewModel : ObservableObject
             var names = string.Join("、", snapshot.Failures
                 .Where(failure => SourceFilter is not { } kind || failure.Source == kind)
                 .Select(static failure => failure.DisplayName));
-            FailureText = names.Length == 0 ? null : $"以下来源扫描失败，列表可能不完整：{names}。详情见运行日志。";
+            FailureText = names.Length == 0 ? null : $"以下来源扫描失败，列表可能不完整：{names}。详情见调度日志。";
         }
         else
         {

@@ -39,7 +39,7 @@ public interface INavigationTarget
 /// </list>
 /// <para>
 /// 只给"会被通知定位到"的页面实现：<c>延时启动</c>（失效条目）、
-/// 四个来源共用的 <c>自启动项</c>（新增条目）、<c>运行日志</c>（调度端通知）。
+/// 四个来源共用的 <c>自启动项</c>（新增条目）、<c>调度日志</c>（调度端通知）。
 /// </para>
 /// </remarks>
 public interface IReloadablePage

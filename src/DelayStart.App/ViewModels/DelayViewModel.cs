@@ -381,7 +381,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// 把路径残缺的项重新启用既没意义，又制造一条开机报错。</description></item>
     /// </list>
     /// <para>
-    /// 删除后调度端不再调度它，运行日志里那条"每次登录都失败"的记录也随之消失。
+    /// 删除后调度端不再调度它，调度日志里那条"每次登录都失败"的记录也随之消失。
     /// </para>
     /// </remarks>
     public void Remove(DelayRow row)

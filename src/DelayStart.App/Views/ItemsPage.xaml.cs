@@ -237,7 +237,7 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
         {
             await ShowMessageAsync(
                 "未能加入延时启动",
-                outcome.Message ?? "未给出具体原因，详情见运行日志。");
+                outcome.Message ?? "未给出具体原因，详情见调度日志。");
         }
     }
 
@@ -274,7 +274,7 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
         {
             await ShowMessageAsync(
                 "未能移出延时启动",
-                $"移除过程发生意外错误：{ex.Message}\n\n该条目仍保持接管状态 —— 可稍后重试，详情见运行日志。");
+                $"移除过程发生意外错误：{ex.Message}\n\n该条目仍保持接管状态 —— 可稍后重试，详情见调度日志。");
             return;
         }
 
@@ -282,7 +282,7 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
         {
             await ShowMessageAsync(
                 "未能移出延时启动",
-                $"{outcome.Message}\n\n该条目仍保持接管状态 —— 可以稍后重试，详情见运行日志。");
+                $"{outcome.Message}\n\n该条目仍保持接管状态 —— 可以稍后重试，详情见调度日志。");
         }
     }
 
@@ -296,7 +296,7 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
 
         if (!ViewModel.SetEntryEnabled(row, enabled: false))
         {
-            await ShowMessageAsync("未能禁用", "写入软禁用标记失败，详情见运行日志。该项不会被删除，可重试。");
+            await ShowMessageAsync("未能禁用", "写入软禁用标记失败，详情见调度日志。该项不会被删除，可重试。");
         }
     }
 
@@ -310,7 +310,7 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
 
         if (!ViewModel.SetEntryEnabled(row, enabled: true))
         {
-            await ShowMessageAsync("未能启用", "删除软禁用标记失败，详情见运行日志。可重试。");
+            await ShowMessageAsync("未能启用", "删除软禁用标记失败，详情见调度日志。可重试。");
         }
     }
 

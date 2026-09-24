@@ -102,7 +102,7 @@ public static partial class Program
         // 容器的 Dispose 会连带释放它创建的 IDisposable（含 FileLogger 的文件句柄）。
         using var provider = services.BuildServiceProvider();
 
-        // 「唤起到运行日志」（调度端通知点击，D18）。🔴 必须在 headless 分流**之前**：
+        // 「唤起到调度日志」（调度端通知点击，D18）。🔴 必须在 headless 分流**之前**：
         // 它以 -- 开头，会被 <see cref="CliHost"/> 当未知子命令吞掉，GUI 永远起不来。
         var gotoLog = args.Any(static a => string.Equals(a, AppActivation.GotoLogArgument, StringComparison.OrdinalIgnoreCase));
 
@@ -157,7 +157,7 @@ public static partial class Program
 
         if (gotoLog)
         {
-            LogGotoLog("没有运行中的管理端实例：本次启动直接落到运行日志页。");
+            LogGotoLog("没有运行中的管理端实例：本次启动直接落到调度日志页。");
         }
 
         if (gotoStartup)

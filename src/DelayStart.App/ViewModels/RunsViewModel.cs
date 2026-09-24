@@ -10,7 +10,7 @@ using DelayStart.Core.Services;
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 运行日志页 ViewModel（FR-8.1 / FR-8.2 / FR-8.3）。
+/// 调度日志页 ViewModel（FR-8.1 / FR-8.2 / FR-8.3）。
 /// </summary>
 public partial class RunsViewModel : ObservableObject
 {
@@ -20,7 +20,7 @@ public partial class RunsViewModel : ObservableObject
     /// <summary>归档全量（不过滤）。<see cref="Groups"/> 是它的级别筛选视图。</summary>
     private readonly List<RunGroupRow> _allGroups = [];
 
-    /// <summary>构造运行日志页 ViewModel。</summary>
+    /// <summary>构造调度日志页 ViewModel。</summary>
     /// <param name="runState">运行状态读取端。</param>
     /// <param name="paths">路径服务，只用来取日志目录（打开日志文件按钮）。</param>
     public RunsViewModel(IRunStateStore runState, PathService paths)

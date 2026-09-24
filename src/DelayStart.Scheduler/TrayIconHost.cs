@@ -8,8 +8,8 @@ using DelayStart.Core.Models;
 /// <remarks>
 /// <para>
 /// 隐藏消息窗口 + <c>Shell_NotifyIcon</c>。左键点击 → 打开弹出面板；右键点击 → 上下文菜单
-/// （2026-09-21 批复 D1=A：打开管理端 / 打开运行日志 / 立即启动全部剩余条目 / 立即退出(跳过剩余条目)）；
-/// 气泡通知点击 → 打开管理端运行日志（D18）。
+/// （2026-09-21 批复 D1=A：打开管理端 / 打开调度日志 / 立即启动全部剩余条目 / 立即退出(跳过剩余条目)）；
+/// 气泡通知点击 → 打开管理端调度日志（D18）。
 /// </para>
 /// <para>
 /// 🔴 tooltip 上限 127 字符且不支持换行（<c>szTip</c> 缓冲 128 字符，Vista+ 单行显示；
@@ -63,7 +63,7 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     /// <summary>构造托盘图标宿主。</summary>
     /// <param name="icons">图标资源（正常 / 告警两枚）；为 <see langword="null"/> 时只建窗口不显示图标。</param>
     /// <param name="snapshotProvider">面板数据源（引擎的即时快照）。</param>
-    /// <param name="openRunLog">「查看运行日志」动作（气泡点击与面板按钮共用）。</param>
+    /// <param name="openRunLog">「查看调度日志」动作（气泡点击与面板按钮共用）。</param>
     /// <param name="openManager">「打开管理端」动作（右键菜单）。</param>
     /// <param name="launchRemainingNow">「立即启动全部剩余条目」动作（右键菜单）。</param>
     /// <param name="skipRemaining">「跳过剩余任务并退出」动作（启动中菜单，文案不动；行为 = 跳过后不弹面板、直接退出）。</param>
@@ -320,7 +320,7 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
 
             if (finished)
             {
-                _ = NativeMethods.AppendMenuW(menu, NativeMethods.MfString, MenuOpenRunLog, "查看运行日志");
+                _ = NativeMethods.AppendMenuW(menu, NativeMethods.MfString, MenuOpenRunLog, "查看调度日志");
                 _ = NativeMethods.AppendMenuW(menu, NativeMethods.MfSeparator, 0, string.Empty);
                 _ = NativeMethods.AppendMenuW(menu, NativeMethods.MfString, MenuQuit, "退出");
             }

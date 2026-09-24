@@ -251,7 +251,7 @@ public sealed partial class DelayPage : Page, IReloadablePage
         {
             await ShowFailureAsync(
                 "未能移出延时启动",
-                $"移除过程发生意外错误：{ex.Message}\n\n该条目仍保持接管状态 —— 可稍后重试，详情见运行日志。");
+                $"移除过程发生意外错误：{ex.Message}\n\n该条目仍保持接管状态 —— 可稍后重试，详情见调度日志。");
             return;
         }
 
@@ -264,7 +264,7 @@ public sealed partial class DelayPage : Page, IReloadablePage
         {
             XamlRoot = XamlRoot,
             Title = "未能移出延时启动",
-            Content = $"{outcome.Message}\n\n该条目仍保持接管状态 —— 可以稍后重试，详情见运行日志。",
+            Content = $"{outcome.Message}\n\n该条目仍保持接管状态 —— 可以稍后重试，详情见调度日志。",
             CloseButtonText = "知道了",
             DefaultButton = ContentDialogButton.Close,
         };

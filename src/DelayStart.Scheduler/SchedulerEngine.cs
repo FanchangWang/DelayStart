@@ -35,7 +35,7 @@ internal sealed class SchedulerEngine
     private const int AutoCloseSecondsOnFailure = 60;
 
     /// <summary>
-    /// 周期跳过条目写进运行日志的原因文案（FR-15.26）。
+    /// 周期跳过条目写进调度日志的原因文案（FR-15.26）。
     /// </summary>
     /// <remarks>
     /// 🔴 三种"跳过"共用 <see cref="RunItemState.Skipped"/>，区别只剩下这一句话，
@@ -204,7 +204,7 @@ internal sealed class SchedulerEngine
             if (outcome.SkippedToday.Count > 0)
             {
                 // FR-15.26：今天一条都不启动时，"为什么"必须留下痕迹 ——
-                // 照旧走 FR-5.10 静默退出的话，运行日志里连一行都不会有，
+                // 照旧走 FR-5.10 静默退出的话，调度日志里连一行都不会有，
                 // 用户看到的是一个没动静的早晨，而答案在延时页的一条徽标上。
                 RecordAllSkippedRun(outcome.SkippedToday);
             }
@@ -263,7 +263,7 @@ internal sealed class SchedulerEngine
     }
 
     /// <summary>
-    /// 把"今天不在周期内"的条目追加进运行日志（FR-15.26）。
+    /// 把"今天不在周期内"的条目追加进调度日志（FR-15.26）。
     /// </summary>
     /// <param name="items">今天被周期跳过的启用条目。</param>
     /// <param name="target">要追加到的运行记录条目表。</param>
@@ -299,7 +299,7 @@ internal sealed class SchedulerEngine
     /// </para>
     /// <para>
     /// 实时状态（<c>current-run.json</c>）也一并写：总览页的"最近一次运行"读的是它，
-    /// 只写归档会让总览页停在上一次、与运行日志页说两套话。
+    /// 只写归档会让总览页停在上一次、与调度日志页说两套话。
     /// </para>
     /// </remarks>
     private void RecordAllSkippedRun(IReadOnlyList<DelayedItem> skipped)
@@ -321,7 +321,7 @@ internal sealed class SchedulerEngine
         {
             _runState.WriteCurrent(record);
             _runState.Archive(record);
-            _log.Info($"今天没有条目在启动周期内：{skipped.Count} 个启用条目全部跳过，已写入运行日志。");
+            _log.Info($"今天没有条目在启动周期内：{skipped.Count} 个启用条目全部跳过，已写入调度日志。");
         }
         catch (Exception ex)
         {
@@ -718,7 +718,7 @@ internal sealed class SchedulerEngine
                 // Aumid / Tag / Group 靠契约默认值（AUMID=DelayStart、Tag=schedule-done）；
                 // 🔴 Launch **必须显式给**：它决定点击能否拉起管理端 —— 曾因只靠默认值、
                 // 而契约默认值是空串导致发出去的 toast launch=""，点击无反应（2026-09-22 实锤）。
-                // 值 = delaystart://runs-log（D82：点击直达运行日志页）。
+                // 值 = delaystart://runs-log（D82：点击直达调度日志页）。
                 Launch = NotifyToastJob.ScheduleDoneLaunch,
                 Title = ScheduleToastComposer.Title,
                 Message = ScheduleToastComposer.ComposeMessage(doneCount, failedCount, skippedCount, failedNames),
@@ -947,7 +947,7 @@ internal sealed class SchedulerEngine
             : $"启动完成 · {total} 项全部启动";
     }
 
-    /// <summary>打开管理端运行日志（D18）。失败只记日志，不影响调度。</summary>
+    /// <summary>打开管理端调度日志（D18）。失败只记日志，不影响调度。</summary>
     private void OpenRunLog()
     {
         try
@@ -955,13 +955,13 @@ internal sealed class SchedulerEngine
             var manager = _paths.ManagerExecutablePath;
             if (!File.Exists(manager))
             {
-                _log.Warn($"管理端不存在，无法打开运行日志：{manager}");
+                _log.Warn($"管理端不存在，无法打开调度日志：{manager}");
                 return;
             }
 
             // 诊断日志（2026-09-20 气泡点击不唤起管理端问题）：接线正确但管理端未出现，
             // 需要留下"点没点到、启动是否抛错、起了哪个进程"的痕迹来定位真实走向。
-            _log.Info($"正在启动管理端查看运行日志：{manager}");
+            _log.Info($"正在启动管理端查看调度日志：{manager}");
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = manager,

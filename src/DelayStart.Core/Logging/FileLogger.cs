@@ -32,8 +32,13 @@ public sealed class FileLogger : ILogSink
     /// <summary>默认保留的历史文件份数（不含当前文件）。</summary>
     public const int DefaultRetainedFileCount = 2;
 
+    /// <summary>信息级别的行内标记。</summary>
     private const string InfoLevel = "INF";
+
+    /// <summary>警告级别的行内标记。</summary>
     private const string WarnLevel = "WRN";
+
+    /// <summary>错误级别的行内标记。</summary>
     private const string ErrorLevel = "ERR";
 
     private static readonly UTF8Encoding Utf8WithoutBom = new(encoderShouldEmitUTF8Identifier: false);

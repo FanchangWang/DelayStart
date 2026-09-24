@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「运行日志」页（FR-8）。
+/// 「调度日志」页（FR-8）。
 /// </summary>
 /// <remarks>
 /// 实现 <see cref="IReloadablePage"/>：调度端的通知点击（<c>--goto-log</c>）落点就是本页，

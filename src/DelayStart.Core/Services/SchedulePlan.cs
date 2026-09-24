@@ -15,13 +15,13 @@ public sealed record ScheduleEntry(DelayedItem Item, TimeSpan LaunchAt);
 /// <param name="Entries">进计划的条目，按发起顺序排列。</param>
 /// <param name="SkippedToday">
 /// 启用了、但今天不在其调度周期内的条目（FR-15.26）。它们**不启动**，
-/// 但调度端会把它们记进本次运行日志（状态 <see cref="RunItemState.Skipped"/>、原因写明"今天不在启动周期内"）。
+/// 但调度端会把它们记进本次调度日志（状态 <see cref="RunItemState.Skipped"/>、原因写明"今天不在启动周期内"）。
 /// </param>
 /// <remarks>
 /// 🔴 <paramref name="SkippedToday"/> 存在的唯一理由是**让"今天为什么什么都没启动"有个答案**。
 /// 周期过滤本身不需要它 —— 少启动几个条目不会有任何故障表现，
 /// 用户看到的只是一个安静的早晨，而原因（"这条设的是周一至周五"）藏在两次点击之外。
-/// 所以它进运行日志，但不进执行计划：不进计划 = 不建到点时刻、不参与收尾判定。
+/// 所以它进调度日志，但不进执行计划：不进计划 = 不建到点时刻、不参与收尾判定。
 /// </remarks>
 public sealed record ScheduleOutcome(
     IReadOnlyList<ScheduleEntry> Entries,
@@ -58,7 +58,7 @@ public static class SchedulePlan
     /// <exception cref="ArgumentNullException"><paramref name="items"/> 为 <see langword="null"/>。</exception>
     /// <remarks>
     /// 只要计划本身、不要"谁被跳过了"时用它（历史调用点与大多数用例都是这种）。
-    /// 想要完整判定结果（调度端写运行日志）用 <see cref="BuildWithSkipped"/>。
+    /// 想要完整判定结果（调度端写调度日志）用 <see cref="BuildWithSkipped"/>。
     /// </remarks>
     public static IReadOnlyList<ScheduleEntry> Build(
         IReadOnlyList<DelayedItem> items,
@@ -80,7 +80,7 @@ public static class SchedulePlan
     /// 🔴 **两层过滤的次序不可换**：<see cref="DelayedItem.Enabled"/> 必须排在周期判定之前（见
     /// <see cref="MatchesToday"/>）。调换次序会让被关闭的条目先被周期逻辑消费一次 ——
     /// 现在看只是多做一次无用功，但被关闭的条目会**混进"今天被跳过"的名单**，
-    /// 于是运行日志把"用户主动关掉的条目"报成"周期决定今天不启动"，口径就歪了。
+    /// 于是调度日志把"用户主动关掉的条目"报成"周期决定今天不启动"，口径就歪了。
     /// </remarks>
     public static ScheduleOutcome BuildWithSkipped(
         IReadOnlyList<DelayedItem> items,
@@ -120,7 +120,7 @@ public static class SchedulePlan
     /// 🔴 调用方必须已经过 <see cref="DelayedItem.Enabled"/> 过滤（见
     /// <see cref="BuildWithSkipped"/>）：这里**只回答"今天该不该启动"**，
     /// 不回答"用户想不想让它启动"。两个问题混在一个判据里，
-    /// 运行日志就再也分不清"被关掉"与"今天轮不到"。
+    /// 调度日志就再也分不清"被关掉"与"今天轮不到"。
     /// </remarks>
     private static bool MatchesToday(
         DelayedItem item,

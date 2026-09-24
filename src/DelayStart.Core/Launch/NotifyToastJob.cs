@@ -32,7 +32,7 @@ public sealed record NotifyToastJob
     /// <summary>调度完成通知的替换分组（与守卫同组即可 —— 替换按 Tag+Group 联合判定）。</summary>
     public const string ScheduleDoneGroup = "delaystart";
 
-    /// <summary>通知点击后经 <c>delaystart:</c> 协议落到的位置（D82：运行日志页）。</summary>
+    /// <summary>通知点击后经 <c>delaystart:</c> 协议落到的位置（D82：调度日志页）。</summary>
     public const string ScheduleDoneLaunch = "delaystart://runs-log";
 
     /// <summary>发出通知所用的 AUMID（见 <see cref="DefaultAumid"/>）。</summary>

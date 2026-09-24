@@ -18,7 +18,7 @@ namespace DelayStart.Core.Launch;
 /// </remarks>
 public static class AppActivation
 {
-    /// <summary>唤起管理端并落到「运行日志」页（调度端通知点击，D18）。</summary>
+    /// <summary>唤起管理端并落到「调度日志」页（调度端通知点击，D18）。</summary>
     public const string GotoLogArgument = "--goto-log";
 
     /// <summary>唤起管理端并落到「自启动项」某处（守卫通知点击，D74）。</summary>

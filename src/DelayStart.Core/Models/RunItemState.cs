@@ -27,7 +27,7 @@ public enum RunItemState
     /// 命中"进程已存在"（D76）；条目的调度周期今天不含此日（FR-15.26，原因写明"今天不在启动周期内"）。
     /// </summary>
     /// <remarks>
-    /// 不计入失败（<c>FailureStreakService</c> 只认 <see cref="Failed"/>），但运行日志与时间轴可见。
+    /// 不计入失败（<c>FailureStreakService</c> 只认 <see cref="Failed"/>），但调度日志与时间轴可见。
     /// 🔴 三种来源共用同一个状态、**靠 <see cref="RunItemResult.Reason"/> 区分** ——
     /// 它们的共同语义是"不是失败、也没有启动"，而这个语义正是角标与失败连击需要的那一个。
     /// </remarks>

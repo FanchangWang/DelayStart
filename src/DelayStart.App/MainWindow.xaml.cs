@@ -173,7 +173,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>唤起窗口并切到「运行日志」页（调度端气泡点击 / <c>--goto-log</c>，D18）。</summary>
+    /// <summary>唤起窗口并切到「调度日志」页（调度端气泡点击 / <c>--goto-log</c>，D18）。</summary>
     public void ShowRunsLog()
     {
         Program.LogGotoLog("ShowRunsLog：开始执行唤起。");
@@ -184,7 +184,7 @@ public sealed partial class MainWindow : Window
         // 无论"新切过去"还是"本来就在这一页"都要重载：前者页面会拿缓存/上次读到的归档
         // 直接显示，后者连导航都不会发生 —— 两种情况用户看到的都是旧数据。
         ReloadCurrentPage();
-        Program.LogGotoLog("ShowRunsLog：已激活窗口并切换到运行日志页。");
+        Program.LogGotoLog("ShowRunsLog：已激活窗口并切换到调度日志页。");
     }
 
     /// <summary>

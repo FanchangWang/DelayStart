@@ -43,7 +43,7 @@ internal sealed record PanelItemRow(RunItemState State, string Name, string Righ
 internal sealed record PanelCurrentRow(RunItemState State, string Name, string Detail, int? EtaSeconds);
 
 /// <summary>面板可触发的动作集合（UI v2，2026-09-21 批复）。</summary>
-/// <param name="OpenRunLog">「运行日志」按钮 / 菜单项。</param>
+/// <param name="OpenRunLog">「调度日志」按钮 / 菜单项。</param>
 /// <param name="OpenManager">「打开 DelayStart」按钮 / 菜单项。</param>
 /// <param name="LaunchRemainingNow">启动中主按钮「立即启动剩余 N 项」。</param>
 /// <param name="SkipRemaining">启动中「跳过剩余任务」（面板入口：跳过后留在面板看结果，不退出）。</param>
@@ -985,18 +985,18 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
     {
         if (snapshot.IsFinished)
         {
-            // 完成态：横向两枚等宽 —— 打开 DelayStart（主）+ 运行日志（次）
+            // 完成态：横向两枚等宽 —— 打开 DelayStart（主）+ 调度日志（次）
             var half = (width - ButtonGap) / 2;
             _primaryRect = ButtonRect(left, half);
             _secondaryRect = ButtonRect(left + half + ButtonGap, half);
             _skipRect = default;
 
             DrawButton(hdc, _primaryRect, palette, snapshot.PrimaryButtonText, primary: true, enabled: true, hover: _hoverTarget == HitPrimary);
-            DrawButton(hdc, _secondaryRect, palette, "运行日志", primary: false, enabled: true, hover: _hoverTarget == HitSecondary);
+            DrawButton(hdc, _secondaryRect, palette, "调度日志", primary: false, enabled: true, hover: _hoverTarget == HitSecondary);
             return;
         }
 
-        // 启动中：主按钮全宽 + 次行两枚（跳过剩余任务 / 运行日志）
+        // 启动中：主按钮全宽 + 次行两枚（跳过剩余任务 / 调度日志）
         _primaryRect = ButtonRect(left, width);
         var secondTop = _primaryRect.Bottom + ButtonGap;
         var secondaryHalf = (width - ButtonGap) / 2;
@@ -1026,7 +1026,7 @@ internal sealed unsafe partial class PanelWindow : IDisposable, NativeMethods.IM
         }
         DrawButton(hdc, _primaryRect, palette, snapshot.PrimaryButtonText, primary: true, enabled: true, hover: _hoverTarget == HitPrimary);
         DrawButton(hdc, _skipRect, palette, "跳过剩余任务", primary: false, enabled: canSkip, hover: _hoverTarget == HitSkip);
-        DrawButton(hdc, _secondaryRect, palette, "运行日志", primary: false, enabled: true, hover: _hoverTarget == HitSecondary);
+        DrawButton(hdc, _secondaryRect, palette, "调度日志", primary: false, enabled: true, hover: _hoverTarget == HitSecondary);
     }
 
     private NativeMethods.Rect ButtonRect(int left, int width)

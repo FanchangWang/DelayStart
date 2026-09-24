@@ -259,8 +259,8 @@ public sealed class ScheduledTaskSource : IStartupSource
             return null;
         }
 
-        // 自身的调度任务与普通用户代理任务不是"自启动项"，不列给用户 ——
-        // 它们的生命周期由本程序管理（FR-11 / D38）。旧版根任务一并排除（迁移过渡期）。
+        // 自身的调度任务、守卫任务与普通用户代理任务不是"自启动项"，不列给用户 ——
+        // 它们的生命周期由本程序管理（FR-11 / D38；守卫见 D74+）。旧版根任务一并排除（迁移过渡期）。
         if (IsOwnedTask(path))
         {
             return null;
@@ -321,15 +321,21 @@ public sealed class ScheduledTaskSource : IStartupSource
     }
 
     /// <summary>
-    /// 判定是否为本程序自己的计划任务（唯一一条根任务 <c>\DelayStartScheduler</c>）。
+    /// 判定是否为本程序自己的计划任务（调度根任务 <c>\DelayStartScheduler</c> 与守卫任务
+    /// <c>\DelayStartGuard</c>）。
     /// </summary>
     /// <remarks>
-    /// D41：去掉了 D38 遗留文件夹的判定分支 —— 本程序不再创建任何任务文件夹，
-    /// 用户机器上的残留也已手工清除，保留分支只是让每个任务多一次字符串比较。
+    /// <list type="bullet">
+    /// <item><description>调度任务（<see cref="TaskRegistrationService.TaskPathConstant"/>）：生命周期由管理端
+    /// 自己维护（FR-11），列给用户没有意义；D41 已去掉 D38 遗留文件夹的判定分支。</description></item>
+    /// <item><description>守卫任务（<see cref="GuardTaskRegistrar.TaskPathConstant"/>）：由守卫进程自检自愈
+    /// （D74+），同样不列给用户 —— 否则用户会看到一条"我什么时候建的任务"，且软禁用 / 接管它没有意义（B3）。</description></item>
+    /// </list>
     /// </remarks>
-    private static bool IsOwnedTask(string path)
+    internal static bool IsOwnedTask(string path)
     {
-        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase);
+        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase)
+            || path.Equals(GuardTaskRegistrar.TaskPathConstant, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

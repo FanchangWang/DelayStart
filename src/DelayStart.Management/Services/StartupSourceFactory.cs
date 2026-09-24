@@ -49,7 +49,7 @@ public static class StartupSourceFactory
             new StartupFolderSource(StartupScope.UserFolder, resolver, clock, log),
             new StartupFolderSource(StartupScope.SystemFolder, resolver, clock, log),
 
-            // 计划任务。内部会跳过 \Microsoft\* 与调度端自己的任务。
+            // 计划任务。内部会跳过 \Microsoft\*、调度端与守卫自己的任务（B3）。
             new ScheduledTaskSource(log),
 
             // UWP 应用（AppModel 的 State）。

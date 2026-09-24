@@ -1,3 +1,4 @@
+using DelayStart.Management.Services;
 using DelayStart.Management.Sources;
 
 namespace DelayStart.Core.Tests;
@@ -44,6 +45,21 @@ public sealed class ScheduledTaskFolderFilterTests
     public void IsProtectedFolderPath_NameMerelyLooksLikeMicrosoft_False(string path)
     {
         Assert.False(ScheduledTaskSource.IsProtectedFolderPath(path));
+    }
+
+    [Fact]
+    public void IsOwnedTask_GuardTask_IsFilteredOut()
+    {
+        // B3：守卫任务（\DelayStartGuard）的生命周期由守卫进程自管理（D74+），
+        // 列给用户只会造成"我什么时候建的任务"的困惑。守卫注册器里同一份常量，
+        // 过滤与登记永远指同一条任务（singleton of truth）。
+        Assert.True(ScheduledTaskSource.IsOwnedTask(GuardTaskRegistrar.TaskPathConstant));
+    }
+
+    [Fact]
+    public void IsOwnedTask_ThirdPartyTask_IsNotFiltered()
+    {
+        Assert.False(ScheduledTaskSource.IsOwnedTask(@"\SomeThirdParty\StartupTask"));
     }
 
     // ── 空白输入：读取失败的任务不能因为判据而误判为受保护 ──────────────────

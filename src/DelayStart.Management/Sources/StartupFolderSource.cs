@@ -22,10 +22,22 @@ namespace DelayStart.Management.Sources;
 /// 解析失败时**回退显示快捷方式本身**而不标失效 —— 让用户看到一个真实的 <c>.lnk</c>，
 /// 好过看到一个被误判为"已失效"的可用程序（FR-1.4 的宽容原则）。
 /// </para>
+/// <para>
+/// 只扫 <c>.lnk</c>，<c>.url</c> 一律不列（理由见 <see cref="ShortcutExtensions"/>）。
+/// </para>
 /// </remarks>
 public sealed class StartupFolderSource : IStartupSource
 {
-    private static readonly string[] ShortcutExtensions = [".lnk", ".url"];
+    /// <summary>
+    /// 启动文件夹里被视为"可接管自启动项"的快捷方式扩展名。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 **只认 <c>.lnk</c>，不认 <c>.url</c>**（2026-09-25 用户决定）。<c>.url</c> 是 Internet 快捷方式，
+    /// 不是可执行文件：调度端对它没有启动路由（<see cref="Core.Services.LaunchTargetTypes"/> 也不收），
+    /// 扫出来就是"可接管、启动必败"。而在"支持它"与"不扫它"之间选了后者 ——
+    /// 启动文件夹里放 <c>.url</c> 的人本来就极少，不值得为它引入一条新的启动路径。
+    /// </remarks>
+    private static readonly string[] ShortcutExtensions = [".lnk"];
 
     private readonly IShellLinkResolver _resolver;
     private readonly IClock _clock;

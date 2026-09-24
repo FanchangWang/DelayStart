@@ -142,7 +142,15 @@
 #endif
 
 [Setup]
-AppId={{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}
+; 🔴 AppId 必须是**合法 GUID**（D122，2026-09-25 修正）。原值
+;   `{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}` 的末段是 13 个字符且含 L/Y/S/T
+;   等非十六进制字符 —— 它不是 GUID，只能靠"首字符非数字"这个歪打正着的规则
+;   区分大小写，而 winget 侧要求 ProductCode 与实际注册表键逐字对应。
+;   ⚠️ **改 AppId 会被 Inno 当成一个全新产品**（卸载注册表键 = AppId + "_is1"），
+;   旧版的卸载器将不再被新版识别。因此本项目规定：**跨此版本必须先卸载旧版**
+;   （D122 / D121 —— 下一个版本同时是配置不兼容版本，本来就要先卸载）。
+;   外层 {} 是 Inno 转义字面量花括号，内层才是真正的 GUID。
+AppId={{48BC0E34-50D1-4D82-908C-4A5C11AC5690}
 AppName={#AppName}
 AppVersion={#AppVersion}
 ; 🔴 "设置 → 应用"（原"应用和功能"）里的**显示名**取的就是 AppVerName，不是 AppName。

@@ -1,6 +1,6 @@
 # 上架 winget（Windows 包管理器社区源）
 
-本文件是 DelayStart **手工提交到 winget 社区源的教程**：提交什么、文件怎么写、按哪几步做。  
+本文件是 DelayStart **手工提交到 winget 社区源的教程**：提交什么、文件怎么写、按哪几步做。
 决策依据见 `decisions.md` **D110 / D111**；发版流程见 `installer/README.md`。
 
 ---
@@ -76,7 +76,7 @@ Installers:
       - DisplayName: DelayStart
         Publisher: FanchangWang
         DisplayVersion: 0.3.2
-        ProductCode: '{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}_is1'
+        ProductCode: '{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1'
   - Architecture: arm64
     InstallerUrl: https://github.com/FanchangWang/DelayStart/releases/download/v0.3.2/DelayStart-Setup-0.3.2-win-arm64-slim.exe
     InstallerSha256: <发版后填>
@@ -84,7 +84,7 @@ Installers:
       - DisplayName: DelayStart
         Publisher: FanchangWang
         DisplayVersion: 0.3.2
-        ProductCode: '{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}_is1'
+        ProductCode: '{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1'
 ManifestType: installer
 ManifestVersion: 1.12.0
 ```
@@ -96,7 +96,7 @@ ManifestVersion: 1.12.0
 - `MinimumOSVersion: 10.0.19041.0` —— 与各 csproj 的 `TargetPlatformMinVersion` 一致（NFR-5.1：Windows 10 21H2+）。
 - `Dependencies` —— 见第 1 节。只写**包标识**，不要写下载地址。
 - `DisplayName` / `DisplayVersion` —— 与安装器写进注册表的值一致（显示名是裸 `DelayStart`，版本是 `0.3.2`）；写上是为了把"版本匹配"钉死，避免版本号不一致时陷入升级循环。
-- `ProductCode` —— 填 Inno 的卸载注册表键名，即 `AppId` + `_is1`，本项目为 `{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}_is1`。  
+- `ProductCode` —— 填 Inno 的卸载注册表键名，即 `AppId` + `_is1`，本项目为 `{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1`。
   ⚠️ YAML 里必须加引号：值以 `{` 开头，裸写会被当成 flow mapping。
 - 不写 `InstallerLocale` —— 安装器只有中文一种界面，声明它没有收益。
 
@@ -189,7 +189,7 @@ winget list --id FanchangWang.DelayStart       # 列得出来 = 已装检测正�
 winget uninstall --id FanchangWang.DelayStart  # 顺带验卸载
 ```
 
-> ⚠️ 试装前先卸掉或备份本机日常用的 DelayStart，避免装出两份状态。  
+> ⚠️ 试装前先卸掉或备份本机日常用的 DelayStart，避免装出两份状态。
 > 若 `winget list` 列不出来（说明 `ProductCode` / 显示名与注册表对不上），用 `reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall /s /f DelayStart` 看真实键名再改 manifest。
 
 ### 步骤 5 · 提 PR

@@ -131,7 +131,15 @@ public sealed class UwpStartupSource : IStartupSource
             // AUMID 外壳解析不了，explorer 会退回打开"文档"目录。
             var appId = UwpAppIdResolver.ResolveAppId(packageFamilyName, taskId, _log);
             var aumid = $"{packageFamilyName}!{appId}";
-            var id = ItemKeyBuilder.Build(Kind, Scope, taskId);
+
+            // 🔴 主键**必须含包名**（B8）：`TaskId` 只在**包内**唯一（`<StartupTask TaskId="…">`
+            // 是清单里某个 Application 的局部标识），不同包完全可能各有一个 `TaskId="Launch"`。
+            // 原实现只拿 `taskId` 建键，于是两个不同的应用会算出**同一个主键** ——
+            // 界面上互相覆盖，接管/还原张冠李戴。
+            // 构成：`uwp:<scope>:<PackageFamilyName>!<TaskId>`（`!` 分隔两段，Windows 注册表
+            // 路径里也是这个分隔习惯，便于肉眼辨认）。`ItemKeyBuilder` 只拼三段，所以
+            // 这里先把"包名 + TaskId"合成一个片段再交给它。
+            var id = ItemKeyBuilder.Build(Kind, Scope, $"{packageFamilyName}!{taskId}");
 
             entries.Add(new StartupEntry
             {
@@ -143,7 +151,8 @@ public sealed class UwpStartupSource : IStartupSource
                 Arguments = string.Empty,
                 Source = Kind,
                 Scope = Scope,
-                // 机制 4：source_key 是 TaskId，PackageFamilyName 走 source_detail。
+                // 机制 4：source_key 是 TaskId（**不含包名** —— 它是包内的局部标识，
+                // 单独看没有意义；要定位到具体应用必须与 source_detail 的包名合看）。
                 SourceKey = taskId,
                 SourceDetail = packageFamilyName,
                 // 只有明确等于 0 才算禁用；未知取值按启用处理，不猜。

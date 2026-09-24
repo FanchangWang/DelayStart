@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D117）
+# DelayStart — 决策记录（D1–D118）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -1053,6 +1053,24 @@
 
 ---
 
+### D118 总览来源计数合并为「启动项」分节（方案 C 基准）
+
+**日期**：2026-09-24　**状态**：已采纳（mockup 三轮评审后批复选方案 C 基准 + 5 条优化）
+
+**背景**：总览「延时启动」与「系统自启动项」两节都是按同一套来源分类的计数（注册表 / 启动文件夹 / 计划任务 / UWP Apps），前者多一个「手动添加」、后者数量更大；分列两节看不出"接管理 / 系统全部"的对应关系。
+
+**决策**：
+1. 两节合并为「**启动项**」分节，放在原「延时启动」的位置；原「系统自启动项」独立分节移除。
+2. 形态取方案 C 基准：一张白卡内五个等宽灰格（**占满卡片宽度**），每格 = 来源名 + 大号加粗的「接管数 / 系统全部数」（蓝 26px / 灰 18px Bold，底边对齐同基线，间距 10px）。
+3. **可点性**：蓝数 → 延时启动页；灰数 → 对应来源的自启动项页。**不渲染"接管 / 系统全部"图例**（评审后追加批复：连同"点击去哪"说明文字一并去掉，可点性由颜色与悬停反馈表达）。微调追加（2026-09-24）：数字悬停弹 **tooltip 提示去向**（「打开延时启动页」/「打开自启动项 · xx页」），光标换**手型**。
+4. 手动添加只存在接管理，格内只有蓝数。
+
+**落地**：`OverviewPage.xaml`（v6）：删 `CountChipStyle` / `ChipContentStyle`，新增 `TextLinkButtonStyle`（透明无边框零内边距的按钮，悬停保留浅色反馈）；五格 `Grid 5×*` + 卡内 `ColumnSpacing=10`；`OverviewViewModel` 与既有导航处理器（`OnGoDelay` / `OnGoRegistry/Folder/Task/Uwp`）零改动 —— 两组计数属性（`DelayedXxx` / `ScannedXxx`）原样复用。tooltip 用 `ToolTipService.ToolTip`；手型光标经 `PointerEntered/Exited` 在页面（悬停元素的祖先）上设 `ProtectedCursor = InputSystemCursor.Create(InputSystemCursorShape.Hand)`（对子树生效，离开置回 null；`InputSystemCursor` 静态缓存不 Dispose）。
+
+**验证**：构建 0 警告 0 错误（一把过）；测试 668/0。
+
+---
+
 ### 附表：R1–R13 技术风险与去向（已全部闭环）
 
 | # | 风险 | 怎么闭环的 |
@@ -1071,7 +1089,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D117 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D118 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

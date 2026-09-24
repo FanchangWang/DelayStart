@@ -58,7 +58,7 @@ internal sealed class ScheduledTaskGateway
     }
 
     /// <summary>判断任务路径是否存在，不检查 action 是否指向当前安装目录。</summary>
-    /// <param name="taskPath">任务根路径（如 <c>\DelayStartGuard</c>）。</param>
+    /// <param name="taskPath">任务根路径（如 <c>\DelayStart\Guard</c>）。</param>
     /// <param name="displayName">日志里的中文简称（"守卫" / "调度"）。</param>
     /// <returns>任务存在则为 <see langword="true"/>。</returns>
     public bool Exists(string taskPath, string displayName)
@@ -82,7 +82,7 @@ internal sealed class ScheduledTaskGateway
     /// 这是旧 <c>IsRegistered</c> 的兼容语义，不等于完整定义匹配；完整定义由
     /// <see cref="IsDefinitionUpToDate"/> 判定。
     /// </remarks>
-    /// <param name="taskPath">任务根路径（如 <c>\DelayStartGuard</c>）。</param>
+    /// <param name="taskPath">任务根路径（如 <c>\DelayStart\Guard</c>）。</param>
     /// <param name="executablePath">期望的动作 exe 路径。</param>
     /// <param name="displayName">日志里的中文简称（"守卫" / "调度"）。</param>
     /// <returns>存在且 action 路径匹配则为 <see langword="true"/>。</returns>
@@ -132,7 +132,8 @@ internal sealed class ScheduledTaskGateway
         try
         {
             using var service = new TaskService();
-            var wrote = RegisterTask(service, spec, userId);
+            var folder = EnsureFolder(service, spec.TaskPath);
+            var wrote = RegisterTask(service, folder, spec, userId);
 
             _log.Info(wrote
                 ? $"已注册{spec.DisplayName}计划任务：{spec.TaskPath}（{spec.ScheduleDescription}，身份 {userId}）"
@@ -155,7 +156,7 @@ internal sealed class ScheduledTaskGateway
     }
 
     /// <summary>删除任务。任务不存在时静默返回，不抛异常（守卫关闭与卸载路径都要能重复执行）。</summary>
-    /// <param name="taskPath">任务根路径。</param>
+    /// <param name="taskPath">任务完整路径（如 <c>\DelayStart\Guard</c>）。</param>
     /// <param name="taskName">注册到任务库的任务名。</param>
     /// <param name="displayName">日志与异常消息里的中文简称。</param>
     /// <exception cref="StartupOperationException">删除失败时抛出。</exception>
@@ -165,11 +166,17 @@ internal sealed class ScheduledTaskGateway
         {
             using var service = new TaskService();
 
-            if (service.GetTask(taskPath) is not null)
+            if (service.GetTask(taskPath) is null)
             {
-                service.RootFolder.DeleteTask(taskName, exceptionOnNotExists: false);
-                _log.Info($"已删除{displayName}计划任务：{taskPath}");
+                return;
             }
+
+            var (folderPath, name) = SplitTaskPath(taskPath, taskName);
+            var folder = folderPath is null ? service.RootFolder : service.GetFolder(folderPath);
+            folder.DeleteTask(name, exceptionOnNotExists: false);
+            _log.Info($"已删除{displayName}计划任务：{taskPath}");
+
+            TryDeleteFolderIfEmpty(service, folderPath);
         }
         catch (Exception ex)
         {
@@ -237,7 +244,7 @@ internal sealed class ScheduledTaskGateway
     /// <see langword="true"/> 表示真正写入了定义；<see langword="false"/> 表示现有定义与期望完全一致，
     /// 已跳过写入以保留触发器状态（F1 / D112 / D113）。
     /// </returns>
-    private static bool RegisterTask(TaskService service, ScheduledTaskSpec spec, string userId)
+    private static bool RegisterTask(TaskService service, TaskFolder folder, ScheduledTaskSpec spec, string userId)
     {
         // F1（D112 / D113）：先比对现有任务，完全一致则跳过写入，保留已武装的登录触发器
         // 与「上次运行时间」等统计。只有定义确实变了才真正写入。
@@ -293,7 +300,10 @@ internal sealed class ScheduledTaskGateway
         settings.RunOnlyIfIdle = false;
         settings.RunOnlyIfNetworkAvailable = false;
 
-        _ = service.RootFolder.RegisterTaskDefinition(
+        // 🔴 注册到**任务自己的文件夹**而不是根目录：2026-09-25 起两个自有任务都收在
+        // \DelayStart 下（\DelayStart\Guard 与 \DelayStart\Scheduler），任务计划程序里
+        // 归在一处，不会被根目录上百个第三方任务淹没。
+        _ = folder.RegisterTaskDefinition(
             spec.TaskName,
             definition,
             TaskCreation.CreateOrUpdate,
@@ -302,6 +312,86 @@ internal sealed class ScheduledTaskGateway
             logonType: TaskLogonType.InteractiveToken);
 
         return true;
+    }
+
+    /// <summary>
+    /// 把任务完整路径拆成"所在文件夹"与"任务名"。
+    /// </summary>
+    /// <param name="taskPath">形如 <c>\Folder\Sub\Task</c> 的完整路径。</param>
+    /// <param name="taskName">显式给出的任务名；为空时从 <paramref name="taskPath"/> 末段取。</param>
+    /// <returns>文件夹路径（<see langword="null"/> = 根目录）与任务名。</returns>
+    private static (string? FolderPath, string Name) SplitTaskPath(string taskPath, string? taskName)
+    {
+        var separator = taskPath.LastIndexOf('\\');
+        if (separator <= 0)
+        {
+            return (null, string.IsNullOrEmpty(taskName) ? taskPath : taskName);
+        }
+
+        return (taskPath[..separator], string.IsNullOrEmpty(taskName) ? taskPath[(separator + 1)..] : taskName);
+    }
+
+    /// <summary>
+    /// 取任务所在文件夹，不存在则创建。
+    /// </summary>
+    /// <param name="service">任务服务。</param>
+    /// <param name="taskPath">任务完整路径。</param>
+    /// <returns>可写入的文件夹对象；路径在根目录时返回根文件夹。</returns>
+    /// <remarks>
+    /// 🔴 中间层文件夹逐级创建：<c>\DelayStart</c> 若被用户手动删过，需要从根一路建回来。
+    /// <c>CreateFolder</c> 对已存在的文件夹返回既有对象（幂等），所以不先查在不在。
+    /// </remarks>
+    private static TaskFolder EnsureFolder(TaskService service, string taskPath)
+    {
+        var (folderPath, _) = SplitTaskPath(taskPath, taskName: null);
+        if (folderPath is null)
+        {
+            return service.RootFolder;
+        }
+
+        var folder = service.RootFolder;
+        foreach (var segment in folderPath.Split('\\', StringSplitOptions.RemoveEmptyEntries))
+        {
+            folder = folder.CreateFolder(segment, exceptionOnExists: false);
+        }
+
+        return folder;
+    }
+
+    /// <summary>
+    /// 文件夹里已经没有任务时把它删掉（守卫关闭 / 卸载后不留空壳）。
+    /// </summary>
+    /// <param name="service">任务服务。</param>
+    /// <param name="folderPath">文件夹路径；<see langword="null"/> 表示根目录（不处理）。</param>
+    /// <remarks>
+    /// 删不掉不影响任何事 —— 残留一个空文件夹只是观感问题，绝不能因此让"删除任务"报失败。
+    /// </remarks>
+    private void TryDeleteFolderIfEmpty(TaskService service, string? folderPath)
+    {
+        if (folderPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var folder = service.GetFolder(folderPath);
+            if (folder.GetTasks().Count > 0)
+            {
+                return;
+            }
+
+            var separator = folderPath.LastIndexOf('\\');
+            var parentPath = separator <= 0 ? string.Empty : folderPath[..separator];
+            var name = folderPath[(separator + 1)..];
+            var parent = parentPath.Length == 0 ? service.RootFolder : service.GetFolder(parentPath);
+            parent.DeleteFolder(name, exceptionOnNotExists: false);
+        }
+        catch (Exception ex)
+        {
+            // 纯清理动作，记 Warn 即可 —— 不能让它把"删除任务"这个已经成功的操作报成失败。
+            _log.Warn(ex, $"清理空任务文件夹失败（不影响本次操作）：{folderPath}");
+        }
     }
 
     /// <summary>判断现有任务定义是否与期望完全一致（F1 / D112 / D113，全项目唯一一份）。</summary>

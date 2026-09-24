@@ -3,7 +3,7 @@ using DelayStart.Core.Models;
 namespace DelayStart.Management.Abstractions;
 
 /// <summary>
-/// 守卫计划任务（<c>\DelayStartGuard</c>）的注册 / 更新 / 删除（D74）。
+/// 守卫计划任务（<c>\DelayStart\Guard</c>）的注册 / 更新 / 删除（D74）。
 /// </summary>
 /// <remarks>
 /// <para>

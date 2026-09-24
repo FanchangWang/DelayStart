@@ -2,6 +2,7 @@ using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Management.Abstractions;
+using DelayStart.Management.Models;
 using DelayStart.Management.Services;
 
 using Microsoft.Win32.TaskScheduler;
@@ -260,7 +261,7 @@ public sealed class ScheduledTaskSource : IStartupSource
         }
 
         // 自身的调度任务、守卫任务与普通用户代理任务不是"自启动项"，不列给用户 ——
-        // 它们的生命周期由本程序管理（FR-11 / D38；守卫见 D74+）。旧版根任务一并排除（迁移过渡期）。
+        // 它们的生命周期由本程序管理（FR-11 / D38；守卫见 D74+）。
         if (IsOwnedTask(path))
         {
             return null;
@@ -321,21 +322,28 @@ public sealed class ScheduledTaskSource : IStartupSource
     }
 
     /// <summary>
-    /// 判定是否为本程序自己的计划任务（调度根任务 <c>\DelayStartScheduler</c> 与守卫任务
-    /// <c>\DelayStartGuard</c>）。
+    /// 判定是否落在本程序**独占**的计划任务文件夹里（<c>\DelayStart\</c>）。
     /// </summary>
     /// <remarks>
-    /// <list type="bullet">
-    /// <item><description>调度任务（<see cref="TaskRegistrationService.TaskPathConstant"/>）：生命周期由管理端
-    /// 自己维护（FR-11），列给用户没有意义；D41 已去掉 D38 遗留文件夹的判定分支。</description></item>
-    /// <item><description>守卫任务（<see cref="GuardTaskRegistrar.TaskPathConstant"/>）：由守卫进程自检自愈
-    /// （D74+），同样不列给用户 —— 否则用户会看到一条"我什么时候建的任务"，且软禁用 / 接管它没有意义（B3）。</description></item>
-    /// </list>
+    /// <para>
+    /// 🔴 判据是**文件夹归属**，不是"列举我有哪几条任务"。程序自己创建这个文件夹
+    /// （<c>EnsureFolder</c>）、空时自己删掉（<c>TryDeleteFolderIfEmpty</c>），
+    /// 里面的任何任务都是本程序的 —— 列举式的白名单会在"将来加了第三条任务却忘了改这里"
+    /// 时漏掉一条，让它混进用户的自启动项列表，那正是 B3 要防的问题复发（D123）。
+    /// </para>
+    /// <para>
+    /// 🔴 前缀带尾部分隔符，少了它 <c>\DelayStartExtra\Foo</c> 也会被误判成自有任务 ——
+    /// 与 <see cref="IsProtectedFolderPath"/> 踩过的同一个坑（<c>pitfalls.md</c> 二：
+    /// 根级名字以 Microsoft 开头的 Edge 更新任务曾被整体误过滤）。
+    /// </para>
+    /// <para>
+    /// 根级旧路径（<c>\DelayStartScheduler</c> / <c>\DelayStartGuard</c>）**不**在此判据内 ——
+    /// 本项目不做兼容清理，它们由旧版卸载器负责（D121 / D122 要求先卸载旧版）。
+    /// </para>
     /// </remarks>
     internal static bool IsOwnedTask(string path)
     {
-        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase)
-            || path.Equals(GuardTaskRegistrar.TaskPathConstant, StringComparison.OrdinalIgnoreCase);
+        return path.StartsWith(OwnedTaskFolder.Prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

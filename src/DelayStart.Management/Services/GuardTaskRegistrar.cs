@@ -7,7 +7,7 @@ using DelayStart.Management.Models;
 namespace DelayStart.Management.Services;
 
 /// <summary>
-/// 计划任务 <c>\DelayStartGuard</c> 的注册 / 更新 / 删除（D74，2026-09-22 批复）。
+/// 计划任务 <c>\DelayStart\Guard</c> 的注册 / 更新 / 删除（D74，2026-09-22 批复）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,17 +23,18 @@ namespace DelayStart.Management.Services;
 /// （D79）并改写 HKLM 下的 Run 项——这条共性约束统一由 Gateway 落实，此处不再重复。
 /// </para>
 /// <para>
-/// 任务名用 <c>DelayStartGuard</c>（无空格）而不是界面上的「DelayStart 守卫」：
-/// 与 <c>DelayStartScheduler</c> 的命名保持一致，且省掉脚本 / CLI 引用时的引号问题。
+/// 2026-09-25：任务从根级 <c>\DelayStart\Guard</c> 迁到 <c>\DelayStart\Guard</c>
+/// （与调度任务一起收进同一个 <c>DelayStart</c> 文件夹），任务计划程序里两个自有任务
+/// 因此归在一处、不会被第三方任务淹没。
 /// </para>
 /// </remarks>
 public sealed class GuardTaskRegistrar : IGuardTaskRegistrar
 {
-    /// <summary>守卫端任务的根路径，作为唯一标识。</summary>
-    public const string TaskPathConstant = @"\DelayStartGuard";
+    /// <summary>守卫端任务的完整路径（<c>\DelayStart\Guard</c>），作为唯一标识。</summary>
+    public const string TaskPathConstant = OwnedTaskFolder.Prefix + "Guard";
 
-    /// <summary>注册到任务库时使用的任务名。</summary>
-    public const string TaskName = "DelayStartGuard";
+    /// <summary>注册到任务库时使用的任务名（不含文件夹前缀）。</summary>
+    public const string TaskName = "Guard";
 
     /// <summary>任务描述（构建定义与"定义是否已最新"比对时共用，避免两处串不一致）。</summary>
     private const string TaskDescription =

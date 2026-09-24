@@ -11,7 +11,7 @@ using DelayStart.Management.Sources;
 namespace DelayStart.Guard;
 
 /// <summary>
-/// 守卫入口（D74）。由计划任务 <c>\DelayStartGuard</c> 拉起，跑完一次巡检即退出。
+/// 守卫入口（D74）。由计划任务 <c>\DelayStart\Guard</c> 拉起，跑完一次巡检即退出。
 /// </summary>
 /// <remarks>
 /// <para>

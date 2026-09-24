@@ -12,7 +12,7 @@ namespace DelayStart.Core.Tests.Fakes;
 internal sealed class FakeSchedulerTaskRegistrar : ISchedulerTaskRegistrar
 {
     /// <inheritdoc />
-    public string TaskPath => @"\DelayStartScheduler";
+    public string TaskPath => @"\DelayStart\Scheduler";
 
     /// <summary>当前是否处于"已注册"状态。</summary>
     public bool Registered { get; private set; }

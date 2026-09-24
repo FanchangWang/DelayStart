@@ -20,7 +20,7 @@ namespace DelayStart.Core.Tests.Fakes;
 internal sealed class FakeGuardTaskRegistrar : IGuardTaskRegistrar
 {
     /// <inheritdoc />
-    public string TaskPath => @"\DelayStartGuard";
+    public string TaskPath => @"\DelayStart\Guard";
 
     /// <summary>当前是否处于"已注册"状态。</summary>
     public bool Registered { get; private set; }

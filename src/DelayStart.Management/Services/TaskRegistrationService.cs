@@ -7,7 +7,7 @@ using DelayStart.Management.Models;
 namespace DelayStart.Management.Services;
 
 /// <summary>
-/// 计划任务 <c>\DelayStartScheduler</c> 的注册 / 更新 / 删除
+/// 计划任务 <c>\DelayStart\Scheduler</c> 的注册 / 更新 / 删除
 /// （FR-11 / D39 单任务方案 / <c>pitfalls.md</c> 二）。
 /// </summary>
 /// <remarks>
@@ -19,14 +19,14 @@ namespace DelayStart.Management.Services;
 /// <c>Microsoft.Win32.TaskScheduler</c> 调用。
 /// </para>
 /// <para>
-/// 🔴 **只有一条任务，且是根任务**（D39，2026-09-20 用户批复：Agent 由调度端按需经
+/// 🔴 **只有一条任务**（D39，2026-09-20 用户批复：Agent 由调度端按需经
 /// explorer 委托预热拉起，不再单独注册计划任务）。D40 起连普通用户代理进程都不再需要
-/// （调度端亲自降权），因此本程序**从不创建任何任务文件夹** —— 也就没有遗留清理这一说。
+/// （调度端亲自降权），因此本程序**只创建自己的那一个任务文件夹**（2026-09-25 起
+/// <c>\DelayStart</c>，守卫与调度两条任务都在里面），不涉及任何第三方目录。
 /// </para>
 /// <para>
-/// 🔴 **不再保留 D38 遗留文件夹的清理代码**（D41，2026-09-20 用户批复）：用户已手工删除
-/// 残留任务，且现行代码不再产生文件夹结构。留着会在每次注册 / 删除时白跑一次枚举，
-/// 且那套"删不干净就记告警"的兜底逻辑已经没有对象。
+/// 任务从根级 <c>\DelayStart\Scheduler</c> 迁到 <c>\DelayStart\Scheduler</c>（2026-09-25）——
+/// 任务计划程序里两个自有任务因此归在一处，不会被根目录下上百个第三方任务淹没。
 /// </para>
 /// <para>
 /// 🔴 身份必须是当前交互用户（<c>Interactive</c>）+ <c>RunLevel = Highest</c>，绝不使用
@@ -40,14 +40,14 @@ namespace DelayStart.Management.Services;
 /// </remarks>
 public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
 {
-    /// <summary>调度端任务的根路径，作为唯一标识（<c>ScheduledTaskSource</c> 等处引用）。</summary>
-    public const string TaskPathConstant = @"\DelayStartScheduler";
+    /// <summary>调度端任务的完整路径（<c>\DelayStart\Scheduler</c>），作为唯一标识（<c>ScheduledTaskSource</c> 等处引用）。</summary>
+    public const string TaskPathConstant = OwnedTaskFolder.Prefix + "Scheduler";
 
     /// <summary>登录后延迟多少秒启动调度端（FR-11.1）。留给桌面与资源管理器加载的时间。</summary>
     public const int LogonDelaySeconds = 3;
 
-    /// <summary>注册到任务库时使用的任务名。</summary>
-    public const string TaskName = "DelayStartScheduler";
+    /// <summary>注册到任务库时使用的任务名（不含文件夹前缀）。</summary>
+    public const string TaskName = "Scheduler";
 
     /// <summary>任务描述（构建定义与"定义是否已最新"比对时共用，避免两处串不一致）。</summary>
     private const string TaskDescription =

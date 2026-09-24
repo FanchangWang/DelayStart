@@ -23,7 +23,7 @@ namespace DelayStart.Core.Tests;
 /// <para>
 /// 🔴 另一个必须钉死的是**向后兼容两代格式**：更早的机器上留着的是单行 ISO 时间戳
 /// （没有结局行），它必须被当成"失败"处理；中间那代写的是 <c>ok</c> / <c>fail</c>，
-/// 其中 <c>ok</c> 按"已获取"读（最坏只是多查一次，见 <see cref="LegacyOkFlag_IsReadAsUpdated"/>）。
+/// 其中 <c>ok</c> 按"已获取"读（最坏只是多查一次，见 <see cref="LegacyOkFlag_IsNoLongerRecognized"/>）。
 /// </para>
 /// </remarks>
 public sealed class HolidayCheckThrottleTests
@@ -117,16 +117,16 @@ public sealed class HolidayCheckThrottleTests
     }
 
     [Fact]
-    public void LegacyOkFlag_IsReadAsUpdated()
+    public void LegacyOkFlag_IsNoLongerRecognized()
     {
-        // 中间那代的结局行：ok 把「已获取」与「未公布」混在一起。
-        // 按"已获取"读 —— 数据真在本地时调用方根本问不到节流，最坏只是多查一次。
+        // D121：中间那代把「已获取」与「未公布」混写成 `ok` 的历史格式已不再兼容。
+        // 读到不认识的值按「失败」处理 —— 下一次检查会重试。对本项目而言这没有代价：
+        // 下一个版本要求先卸载旧版，记录文件不可能来自旧版本。
         const string Legacy = "2026-09-23T14:16:55.6005424+00:00\nok\n已获取 2026 年数据。";
 
         Assert.True(HolidayCheckRecord.TryParse(Legacy, out var parsed));
 
-        Assert.Equal(HolidayCheckOutcome.Updated, parsed.Outcome);
-        Assert.Equal("已获取 2026 年数据。", parsed.Message);
+        Assert.Equal(HolidayCheckOutcome.Failed, parsed.Outcome);
     }
 
     [Theory]

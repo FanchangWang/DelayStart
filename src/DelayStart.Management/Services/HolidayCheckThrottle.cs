@@ -62,9 +62,6 @@ public readonly record struct HolidayCheckRecord(DateTimeOffset At, HolidayCheck
 
     private const string FailedFlag = "fail";
 
-    /// <summary>中间那一代的"成功"标记（含「未公布」）。</summary>
-    private const string LegacySucceededFlag = "ok";
-
     /// <summary>序列化成三行文本。</summary>
     /// <returns>可写入文件的文本。</returns>
     /// <remarks>文案里的换行压成空格：文件格式是"一行一个字段"，多行文案会把解析带偏。</remarks>
@@ -108,14 +105,8 @@ public readonly record struct HolidayCheckRecord(DateTimeOffset At, HolidayCheck
         if (lines.Length > 1)
         {
             var flag = lines[1].Trim();
-            if (flag.Equals(UpdatedFlag, StringComparison.OrdinalIgnoreCase)
-                || flag.Equals(LegacySucceededFlag, StringComparison.OrdinalIgnoreCase))
+            if (flag.Equals(UpdatedFlag, StringComparison.OrdinalIgnoreCase))
             {
-                // 🔴 旧版的 ok 一律按「已获取」读。这一条映射的最坏后果只是"下一次启动多查一次"：
-                //    数据真在本地时，调用方在 HasUsableData 那一步就返回了，根本问不到节流；
-                //    而当初那条 ok 若其实是「尚未公布」，多查那一次正好把它纠正成 NotPublished。
-                //    反过来（旧 ok 按「未公布」读）会让"数据被删/被改名"的机器继续静默 7 天 ——
-                //    那正是这次要修掉的故障。
                 outcome = HolidayCheckOutcome.Updated;
                 messageStart = 2;
             }

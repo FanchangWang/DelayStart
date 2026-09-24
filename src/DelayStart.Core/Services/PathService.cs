@@ -69,8 +69,7 @@ public sealed class PathService
     /// 调度端的运行时数据目录（D116）：<c>{LocalRoot}\scheduler</c>。
     /// </summary>
     /// <remarks>
-    /// 🔴 D116 起运行时数据**按进程归堆**：调度端的实时状态与归档都收进这里
-    /// （原先平铺的 <c>state\</c> 与 <c>runs\</c> 由 <see cref="RuntimeDataMigrator"/> 迁入），
+    /// 🔴 D116 起运行时数据**按进程归堆**：调度端的实时状态与归档都收进这里，
     /// 守卫的数据留在 <see cref="GuardRoot"/> —— 目录名即进程名，与 logs\ 下的文件名对得上。
     /// </remarks>
     public string SchedulerRoot => Path.Combine(LocalRoot, "scheduler");

@@ -80,11 +80,6 @@ public partial class App : Application, IDisposable
     /// </remarks>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        // 旧目录一次性迁移（D116）：state\ / runs\ → scheduler\。
-        // 🔴 放在**最前面** —— 之后的调度任务保障、页面加载都会读 current-run.json 与归档，
-        //    必须让它们读到的已经是新结构。幂等、失败只记日志不阻塞启动。
-        _services.GetRequiredService<RuntimeDataMigrator>().MigrateIfNeeded();
-
         // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测一次，缺失即自动补建。
         // 🔴 放在解析主窗口**之前** —— 总览页进入时也会检测补建（状态卡），
         //    这里先跑一轮可以把最常见的"任务被删"在页面显示前就修掉。

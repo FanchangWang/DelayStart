@@ -86,8 +86,12 @@ public sealed class ConfigService : IAppConfigStore
 
         if (string.IsNullOrWhiteSpace(json))
         {
-            // 文件不存在 = 首次运行，合法状态。
-            return new AppConfig();
+            // 文件不存在 = 首次运行，合法状态。走一遍 Normalize 让 Version 等字段
+            // 与"本程序写出去的形状"完全一致（AppConfig.Version 的默认是 0，
+            // 只有 Normalize 之后才是当前版本 —— 见该属性的说明）。
+            var fresh = new AppConfig();
+            Normalize(fresh);
+            return fresh;
         }
 
         try
@@ -139,9 +143,11 @@ public sealed class ConfigService : IAppConfigStore
     /// 解析配置 JSON。只有一种受支持格式（v<see cref="AppConfig.CurrentVersion"/>，由本程序写出）。
     /// </summary>
     /// <remarks>
-    /// 不做任何旧格式迁移：本项目没有需要兼容的历史配置，配置损坏或形状不符时由调用方
-    /// 按损坏处理（保留原文件、不覆盖）。唯一保留的前向保护是：版本高于当前程序的配置
-    /// **拒绝加载**，避免旧程序把新字段写丢。
+    /// 不做任何旧格式迁移：本项目没有需要兼容的历史配置。因此版本**不等于**当前值就是"不认识" ——
+    /// 高于当前值是前向保护（旧程序遇到新配置，拒绝加载以免写丢新字段，D119）；
+    /// 低于当前值（含**缺这个字段**，此时 <c>AppConfig.Version</c> 落到默认的 0）
+    /// 则一律按损坏处理：没有迁移逻辑去补它，硬解析出来的多半是字段名对不上的半截数据，
+    /// 写回去就是把用户配置毁掉。
     /// </remarks>
     private static AppConfig Parse(string json)
     {
@@ -155,6 +161,15 @@ public sealed class ConfigService : IAppConfigStore
                 entryId: string.Empty,
                 message: $"配置版本 v{config.Version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
                     + "为避免写坏配置已拒绝加载。请升级程序后再试。");
+        }
+
+        if (config.Version < AppConfig.CurrentVersion)
+        {
+            // 抛 FormatException —— 由 Load 的 catch 统一转成 ConfigCorrupted + 留副本，
+            // 与其它"这份文件我读不懂"的形态走同一条路。
+            throw new FormatException(
+                $"配置版本为 v{config.Version}，本程序只支持 v{AppConfig.CurrentVersion}"
+                + "（本项目不做旧格式迁移，配置可删除后重建）。");
         }
 
         return config;

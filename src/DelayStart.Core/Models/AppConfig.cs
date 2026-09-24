@@ -12,11 +12,16 @@ namespace DelayStart.Core.Models;
 /// </remarks>
 public sealed class AppConfig
 {
-    /// <summary>当前程序支持的配置版本。v1 是 demo 格式，v2 是引入 <c>scope</c> 之后的格式。</summary>
+    /// <summary>当前程序支持的配置版本。</summary>
     public const int CurrentVersion = 2;
 
-    /// <summary>配置格式版本。</summary>
-    public int Version { get; set; } = CurrentVersion;
+    /// <summary>
+    /// 配置格式版本。默认值刻意是 <c>0</c> 而不是 <see cref="CurrentVersion"/>：
+    /// 只有"本程序自己写出去"或"经 <c>Normalize</c> 补齐"的值才等于当前版本，
+    /// 从磁盘读到的配置若**缺这个字段**就会落到 0，从而被识别为"不是本程序的格式"
+    /// 而拒绝加载（默认给 2 等于替一份来路不明的文件背书）。
+    /// </summary>
+    public int Version { get; set; }
 
     /// <summary>全部延时条目。</summary>
     public List<DelayedItem> Items { get; set; } = [];

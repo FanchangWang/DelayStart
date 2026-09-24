@@ -65,11 +65,6 @@ internal static class ServiceRegistration
         // 状态文件是全局共享的，GUI 与 headless CLI 必须看到同一份 —— 单例。
         services.AddSingleton<IRunStateStore, RunStateService>();
 
-        // 旧目录一次性迁移（D116）：state\ / runs\ → scheduler\。单例只为少 new 一个对象，
-        // 它无状态；调用点在两个宿主入口（App.OnLaunched / CliHost.TryExecute），
-        // 必须发生在任何读写 current-run.json 与归档之前 —— 见 RuntimeDataMigrator 的 remarks。
-        services.AddSingleton<RuntimeDataMigrator>();
-
         // ── 快捷方式解析（启动文件夹的两个来源要用）──────────────────────────
         services.AddSingleton<IShellLinkResolver, ShellLinkResolver>();
 

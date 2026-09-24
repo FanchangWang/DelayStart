@@ -90,7 +90,7 @@ public sealed class PathServiceTests : IDisposable
     [Fact]
     public void GetRunFilePath_PlacesArchiveUnderSchedulerArchiveRoot()
     {
-        // D116：运行归档收进 scheduler\archive\（原 runs\ 由 RuntimeDataMigrator 迁移）。
+        // D116：运行归档收进 scheduler\archive\。
         var paths = new PathService(_temp.Combine("local"), _temp.Combine("config"), _temp.Path);
 
         var runFilePath = paths.GetRunFilePath("20260919-084112");

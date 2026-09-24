@@ -75,6 +75,31 @@ public sealed class ConfigServiceTests : IDisposable
     }
 
     [Fact]
+    public void Load_ConfigWithoutVersionField_IsTreatedAsCorrupt()
+    {
+        // 🔴 D121：缺 `version` 字段不再"视为当前版本"。那等于替一份来路不明的文件背书 ——
+        // 而本项目没有迁移逻辑，真正该做的是明确拒绝，让人删掉重建。
+        // AppConfig.Version 的默认值是 0，所以缺字段会落到"低于当前版本"这一支。
+        WriteConfigFile("""{ "items": [], "settings": {} }""");
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+    }
+
+    [Fact]
+    public void Load_ConfigFromOlderVersion_IsTreatedAsCorrupt()
+    {
+        // 低于当前版本 = 不认识的格式。硬解析出来的多半是字段名对不上的半截数据，
+        // 写回去就是毁掉用户配置 —— 没有迁移逻辑就不该"尽力解析"。
+        WriteConfigFile("""{ "version": 1, "Items": [ { "Id": "legacy", "Name": "旧条目" } ] }""");
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+    }
+
+    [Fact]
     public void Load_MissingFile_ReturnsEmptyConfig()
     {
         // 文件不存在 = 合法的空配置，允许写入

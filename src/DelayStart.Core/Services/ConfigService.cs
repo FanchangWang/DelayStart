@@ -23,6 +23,7 @@ namespace DelayStart.Core.Services;
 /// </description>
 /// </item>
 /// <item><description>读取失败（权限、锁定或其他 I/O 故障）→ 返回 <c>AccessDenied</c> 状态，禁止基于空快照做变更。</description></item>
+/// <item><description>v2 版本 / 条目结构无法安全恢复 → 返回 <c>Corrupt</c>，在 <c>Normalize</c> 前拒绝补默认值。</description></item>
 /// <item><description>版本高于本程序 → **拒绝加载**并抛异常。硬解析未知结构会把配置写坏，
 /// 而写坏之后连还原路径都没了。</description></item>
 /// </list>
@@ -164,51 +165,27 @@ public sealed class ConfigService : IAppConfigStore
 
     private AppConfig Parse(string json)
     {
-        var version = ReadVersion(json);
+        using var document = JsonDocument.Parse(json);
+        var format = ConfigDocumentValidator.Detect(document.RootElement);
 
-        if (version > AppConfig.CurrentVersion)
+        if (format.Format is ConfigDocumentFormat.Future)
         {
             throw new StartupOperationException(
                 StartupFailureReason.ConfigVersionUnsupported,
                 entryId: string.Empty,
-                message: $"配置版本 v{version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
+                message: $"配置版本 v{format.Version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
                     + "为避免写坏配置已拒绝加载。请升级程序后再试。");
         }
 
-        if (version < AppConfig.CurrentVersion)
+        if (format.Format is ConfigDocumentFormat.LegacyV1)
         {
             return MigrateFromV1(json);
         }
 
+        // 必须在 Normalize 之前校验：Normalize 会把缺失的 source / originalState
+        // 补成看似合法的默认值，掩盖掉无法安全释放的配置。
+        ConfigDocumentValidator.ValidateCurrentV2(document.RootElement);
         return JsonSerializer.Deserialize(json, JsonContext.Default.AppConfig) ?? new AppConfig();
-    }
-
-    /// <summary>
-    /// 读取配置版本号。
-    /// </summary>
-    /// <remarks>
-    /// 找不到 <c>version</c> 字段时返回 1：demo 时代的 v1 配置没有稳定写版本号，
-    /// 而 v2 由本程序写出、**必然**带 version。因此"没有版本号"等价于 v1。
-    /// </remarks>
-    private static int ReadVersion(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-
-        if (document.RootElement.ValueKind is not JsonValueKind.Object)
-        {
-            throw new FormatException("配置文件根节点不是 JSON 对象。");
-        }
-
-        foreach (var property in document.RootElement.EnumerateObject())
-        {
-            if (property.Name.Equals("version", StringComparison.OrdinalIgnoreCase)
-                && property.Value.TryGetInt32(out var version))
-            {
-                return version;
-            }
-        }
-
-        return 1;
     }
 
     /// <summary>
@@ -230,12 +207,21 @@ public sealed class ConfigService : IAppConfigStore
             ?? new LegacyConfigV1();
 
         var config = new AppConfig { Version = AppConfig.CurrentVersion };
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var legacyItem in legacy.Items ?? [])
         {
-            if (legacyItem is not null)
+            if (legacyItem is null)
             {
-                config.Items.Add(ConvertLegacyItem(legacyItem));
+                continue;
             }
+
+            var item = ConvertLegacyItem(legacyItem);
+            if (string.IsNullOrWhiteSpace(item.Id) || !ids.Add(item.Id))
+            {
+                throw new FormatException($"v1 配置条目 id 为空或重复：{item.Id}。");
+            }
+
+            config.Items.Add(item);
         }
 
         _log.Info($"配置已从 v1 迁移到 v{AppConfig.CurrentVersion}，共 {config.Items.Count} 个条目（FR-12.1）");
@@ -245,6 +231,7 @@ public sealed class ConfigService : IAppConfigStore
     private static DelayedItem ConvertLegacyItem(LegacyItemV1 legacy)
     {
         var source = ParseLegacySource(legacy.Source ?? string.Empty);
+        var isManual = source is StartupSource.Manual;
 
         return new DelayedItem
         {
@@ -258,8 +245,10 @@ public sealed class ConfigService : IAppConfigStore
             Enabled = true,
             Source = source,
             Scope = InferLegacyScope(source, legacy.SourceDetail ?? string.Empty),
-            SourceKey = legacy.SourceKeyName,
-            SourceDetail = legacy.SourceDetail ?? string.Empty,
+            // 未知 v1 来源会按历史兼容规则落为 Manual；手动条目不能再携带
+            // 旧的来源定位分量，否则下一次 Save 写成 v2 后会被自身校验拒绝。
+            SourceKey = isManual ? string.Empty : legacy.SourceKeyName ?? string.Empty,
+            SourceDetail = isManual ? string.Empty : legacy.SourceDetail ?? string.Empty,
             // v1 条目记不下接管前的状态。按"原本会自启动"处理 —— 取 false 会让这些历史条目
             // 在「移出延时启动」后仍然不启动，而用户无从知道原因。
             OriginalState = new OriginalState { WasEnabled = true },

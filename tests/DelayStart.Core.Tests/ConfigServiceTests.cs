@@ -94,20 +94,151 @@ public sealed class ConfigServiceTests : IDisposable
     }
 
     [Fact]
-    public void LoadResult_NullCollectionElements_AreRemoved()
+    public void LoadResult_NullItemElement_IsCorrupt()
     {
-        WriteConfigFile("""{ "version": 2, "items": [null], "cycles": [null], "settings": {} }""");
+        const string original = """{ "version": 2, "items": [null], "cycles": [null], "settings": {} }""";
+        WriteConfigFile(original);
 
-        var config = _service.Load();
+        var result = _service.LoadResult();
 
-        Assert.Empty(config.Items);
-        Assert.Empty(config.Cycles);
+        Assert.Equal(ConfigLoadStatus.Corrupt, result.Status);
+        Assert.False(result.IsSafeForMutation);
+        Assert.Equal(original, File.ReadAllText(_service.ConfigFilePath));
+    }
+
+    [Fact]
+    public void LoadResult_V2MissingSource_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "scope": "none", "sourceKey": "x",
+                "originalState": { "wasEnabled": true }
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadForMutation_StructurallyInvalidV2_ThrowsConfigCorrupted()
+    {
+        WriteConfigFile("""
+            { "version": 2, "items": [{ "id": "x", "scope": "none" }] }
+            """);
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.LoadForMutation());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+    }
+
+    [Fact]
+    public void LoadResult_V2InvalidSource_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "source": "future-source", "scope": "none",
+                "sourceKey": "x", "originalState": { "wasEnabled": true }
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_V2UnknownNumericSource_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "source": 99, "scope": "none",
+                "sourceKey": "x", "originalState": { "wasEnabled": true }
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_V2ValidNumericEnums_AreLoaded()
+    {
+        WriteConfigFile("""
+            { "version": 2, "items": [{
+                "id": "x", "source": 0, "scope": 1,
+                "sourceKey": "x", "originalState": { "wasEnabled": true }
+            }] }
+            """);
+
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.Loaded, result.Status);
+    }
+
+    [Fact]
+    public void LoadResult_V2InvalidSourceScopeCombination_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "source": "registry", "scope": "none",
+                "sourceKey": "x", "originalState": { "wasEnabled": true }
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_V2MissingSourceKey_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "source": "registry", "scope": "hkcu",
+                "originalState": { "wasEnabled": true }
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_V2MissingOriginalState_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "source": "registry", "scope": "hkcu", "sourceKey": "x"
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_V2MissingWasEnabled_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [{
+                "id": "x", "source": "registry", "scope": "hkcu",
+                "sourceKey": "x", "originalState": { "extra": "Highest" }
+            }] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_V2DuplicateItemId_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "version": 2, "items": [
+                { "id": "same", "source": "manual", "scope": "none" },
+                { "id": "SAME", "source": "manual", "scope": "none" }
+            ] }
+            """);
+    }
+
+    [Fact]
+    public void LoadResult_ManualItemWithoutOriginalState_IsLoaded()
+    {
+        WriteConfigFile("""
+            { "version": 2, "items": [
+                { "id": "manual:none:x", "source": "manual", "scope": "none" }
+            ] }
+            """);
+
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.Loaded, result.Status);
+        Assert.True(result.IsSafeForMutation);
     }
 
     [Fact]
     public void Load_LegacyNullFields_FallBackInsteadOfCrashing()
     {
-        WriteConfigFile("""{ "items": [ { "source": null, "sourceDetail": null } ] }""");
+        WriteConfigFile("""{ "items": [ { "id": "legacy-item", "args": null, "sourceKeyName": null, "source": null, "sourceDetail": null } ] }""");
 
         var config = _service.Load();
 
@@ -192,6 +323,47 @@ public sealed class ConfigServiceTests : IDisposable
         Assert.Equal(StartupFailureReason.ConfigVersionUnsupported, exception.Reason);
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"2\"")]
+    [InlineData("2.5")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    public void LoadResult_InvalidVersion_IsCorrupt(string versionJson)
+    {
+        AssertCorrupt($$"""{"version": {{versionJson}}, "items": []}""");
+    }
+
+    [Fact]
+    public void LoadResult_DuplicateVersion_IsCorrupt()
+    {
+        AssertCorrupt("""{ "version": 1, "version": 2, "items": [] }""");
+    }
+
+    [Fact]
+    public void LoadResult_V2WithoutVersion_IsCorrupt()
+    {
+        AssertCorrupt("""{ "items": [{ "id": "x", "source": "manual", "scope": "none" }] }""");
+    }
+
+    [Fact]
+    public void LoadResult_V1WithV2Marker_IsCorrupt()
+    {
+        AssertCorrupt("""{ "version": 1, "items": [{ "id": "x", "scope": "none" }] }""");
+    }
+
+    [Fact]
+    public void LoadResult_V2WithoutItems_IsCorrupt()
+    {
+        AssertCorrupt("""{ "version": 2, "settings": {} }""");
+    }
+
+    [Fact]
+    public void LoadResult_V2WithLegacyMarker_IsCorrupt()
+    {
+        AssertCorrupt("""{ "version": 2, "items": [{ "id": "x", "args": "-silent" }] }""");
+    }
+
     [Fact]
     public void Load_LegacyV1_MigratesScopeEnabledAndOriginalState()
     {
@@ -233,6 +405,31 @@ public sealed class ConfigServiceTests : IDisposable
         _ = _service.Load();
 
         Assert.True(_log.Contains(LogLevel.Info, "迁移"));
+    }
+
+    [Fact]
+    public void LoadResult_LegacyV1DuplicateId_IsCorrupt()
+    {
+        AssertCorrupt(LegacyV1Json.Replace("legacy-folder", "legacy-hkcu", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Load_LegacyV1WithoutVersion_UsesPositiveLegacyEvidence()
+    {
+        WriteConfigFile(LegacyV1Json.Replace("\"Version\": 1,", string.Empty, StringComparison.Ordinal));
+
+        var config = _service.Load();
+
+        Assert.Equal(AppConfig.CurrentVersion, config.Version);
+        Assert.Equal(2, config.Items.Count);
+    }
+
+    [Fact]
+    public void LoadResult_AmbiguousConfigWithoutVersion_IsCorrupt()
+    {
+        AssertCorrupt("""
+            { "items": [{ "id": "x", "name": "x", "path": "x", "source": "Manual" }] }
+            """);
     }
 
     [Theory]
@@ -277,6 +474,27 @@ public sealed class ConfigServiceTests : IDisposable
         Assert.Single(config.Items);
         Assert.Equal(expected, config.Items[0].Source);
         Assert.Equal(StartupScope.None, config.Items[0].Scope);
+    }
+
+    [Fact]
+    public void Load_LegacyV1UnknownSource_AfterSaveRoundTrip_IsLoaded()
+    {
+        WriteConfigFile(BuildLegacyJson("完全不认识的来源", "任意位置"));
+
+        var migrated = _service.Load();
+        var migratedItem = Assert.Single(migrated.Items);
+        Assert.Equal(StartupSource.Manual, migratedItem.Source);
+        Assert.Equal(string.Empty, migratedItem.SourceKey);
+        Assert.Equal(string.Empty, migratedItem.SourceDetail);
+
+        _service.Save(migrated);
+
+        var result = _service.LoadResult();
+        Assert.Equal(ConfigLoadStatus.Loaded, result.Status);
+        var reloaded = Assert.Single(result.Config.Items);
+        Assert.Equal(StartupSource.Manual, reloaded.Source);
+        Assert.Equal(string.Empty, reloaded.SourceKey);
+        Assert.Equal(string.Empty, reloaded.SourceDetail);
     }
 
     [Fact]
@@ -532,6 +750,17 @@ public sealed class ConfigServiceTests : IDisposable
 
     private static string EscapeForJson(string value)
         => value.Replace(@"\", @"\\", StringComparison.Ordinal);
+
+    private void AssertCorrupt(string json)
+    {
+        WriteConfigFile(json);
+
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.Corrupt, result.Status);
+        Assert.False(result.IsSafeForMutation);
+        Assert.Equal(json, File.ReadAllText(_service.ConfigFilePath));
+    }
 
     private void WriteConfigFile(string json)
     {

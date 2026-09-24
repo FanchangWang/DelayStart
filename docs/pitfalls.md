@@ -371,6 +371,16 @@ error CA1822: 成员"Summary"不访问实例数据，可标记为 static
 
 ---
 
+## 二十六、配置结构校验必须早于 `Normalize`
+
+**症状**：`Normalize` 会把缺失的 `source` 补成 `Manual`、把缺失的 `OriginalState` 补成 `WasEnabled = true`、把空字段补成空字符串。若先规范化再判断配置是否安全，损坏的恢复依据会被伪装成合法配置，释放时可能跳过系统恢复或错误启用原本禁用的启动项。
+
+**做**：版本判定和 v2 恢复元数据校验必须直接针对原始 `JsonDocument`，并在 `Normalize` 之前完成。`version` 缺失 / 非法、条目 ID 重复、非手动条目的来源 / 作用域 / `sourceKey` 不完整、或缺少 `originalState.wasEnabled`，统一按 `Corrupt` 处理；只有有明确正向证据的旧 v1 形状才允许迁移。
+
+**验证**：B1.1a 增加缺失字段、非法版本、重复 ID 和 v1 / v2 形状判别用例，确认损坏原文件不被覆盖且 `LoadForMutation()` 拒绝变更。
+
+---
+
 ## 教训方法论
 
 1. **先取证再改**：报错框是证据不是结论——"读到 A 要求 B、本机只有 C"要直接调一次探针验证（D64 的 DDLM 假铁证）。

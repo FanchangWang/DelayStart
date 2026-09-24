@@ -358,6 +358,8 @@ Tests ──> Core (+ Management)
 
 🔴 配置读取状态由 `ConfigService.LoadResult` 明确返回 `Missing` / `Loaded` / `Corrupt` / `AccessDenied`：只有前两种可作为变更快照；后两种禁止接管、释放、编辑、删除、还原和覆盖。损坏文件只保留副本，不以默认配置覆盖原文件。
 
+🔴 `ConfigDocumentValidator` 在 `Normalize` 之前判定版本并校验 v2 的恢复元数据：`version` 缺失 / 非法、条目 ID 重复、非手动条目的来源 / 作用域 / `sourceKey` 不完整、或缺少 `originalState.wasEnabled`，均按 `Corrupt` 处理；只有明确的 v1 形状才允许迁移。这样规范化补出的 `Manual` / 默认 `true` 不会被误当成用户真实配置。
+
 `maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；连续失败次数不落盘，由 `FailureStreakService` 扫 `scheduler/archive/` 现算（两端共用，调度端无状态；D116 起新路径）。
 
 ### 7.5 管理端（App）设计

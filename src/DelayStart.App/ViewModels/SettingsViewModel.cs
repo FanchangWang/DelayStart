@@ -460,7 +460,14 @@ public partial class SettingsViewModel : ObservableObject
         _loading = true;
         try
         {
-            var settings = _configStore.Load().Settings;
+            var loaded = _configStore.LoadResult();
+            if (!loaded.IsSafeForMutation)
+            {
+                Fail(loaded.Message ?? "配置文件当前不可用，未执行任何设置变更。");
+                return;
+            }
+
+            var settings = loaded.Config.Settings;
 
             RebuildPresets(settings);
             RetryCount = Math.Clamp(settings.RetryCount, 0, 5);
@@ -478,6 +485,10 @@ public partial class SettingsViewModel : ObservableObject
             RefreshHolidayStatus();
 
             StatusText = string.Empty;
+        }
+        catch (StartupOperationException ex)
+        {
+            Fail(ex.Message);
         }
         finally
         {
@@ -576,7 +587,17 @@ public partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        var settings = _configStore.Load().Settings;
+        Settings settings;
+        try
+        {
+            settings = _configStore.LoadForMutation().Settings;
+        }
+        catch (StartupOperationException ex)
+        {
+            Fail(ex.Message);
+            return;
+        }
+
         var list = settings.DelayPresets.ToList();
         if (list.Count <= 1 || !list.Contains(row.Seconds))
         {
@@ -613,7 +634,15 @@ public partial class SettingsViewModel : ObservableObject
             return null;
         }
 
-        var settings = _configStore.Load().Settings;
+        Settings settings;
+        try
+        {
+            settings = _configStore.LoadForMutation().Settings;
+        }
+        catch (StartupOperationException ex)
+        {
+            return $"读取配置失败：{ex.Message}";
+        }
 
         if (seconds < 0)
         {
@@ -1078,18 +1107,24 @@ public partial class SettingsViewModel : ObservableObject
     /// <param name="mutate">对 <c>settings</c> 节点的局部修改。</param>
     private void Persist(Action<Settings> mutate)
     {
-        var config = _configStore.Load();
-        mutate(config.Settings);
-        SaveOrReport(config.Settings);
+        try
+        {
+            var config = _configStore.LoadForMutation();
+            mutate(config.Settings);
+            SaveOrReport(config.Settings);
+        }
+        catch (StartupOperationException ex)
+        {
+            Fail(ex.Message);
+        }
     }
 
     private void SaveOrReport(Settings settings)
     {
-        var config = _configStore.Load();
-        config.Settings = settings;
-
         try
         {
+            var config = _configStore.LoadForMutation();
+            config.Settings = settings;
             _configStore.Save(config);
             StatusText = string.Empty;
         }
@@ -1100,7 +1135,14 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>按配置现状重建预设行（整表快照，见 <see cref="PresetRow"/>）。</summary>
-    private void ReloadPresetsFromConfig() => RebuildPresets(_configStore.Load().Settings);
+    private void ReloadPresetsFromConfig()
+    {
+        var loaded = _configStore.LoadResult();
+        if (loaded.IsSafeForMutation)
+        {
+            RebuildPresets(loaded.Config.Settings);
+        }
+    }
 
     private void RebuildPresets(Settings settings)
     {

@@ -125,6 +125,14 @@ public partial class OverviewViewModel : ObservableObject
     [ObservableProperty]
     public partial bool IsWorkingOnTask { get; set; }
 
+    /// <summary>配置不可用时的页面级错误提示；空字符串表示正常。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLoadError))]
+    public partial string LoadError { get; set; } = string.Empty;
+
+    /// <summary>是否显示配置读取错误。</summary>
+    public bool HasLoadError => LoadError.Length > 0;
+
     // ── 守卫设置（D74，2026-09-22 用户批复）───────────────────────────────
 
     /// <summary>守卫档位下拉的选项文案，顺序与 <see cref="GuardPresets.Options"/> 一一对应。</summary>
@@ -220,7 +228,17 @@ public partial class OverviewViewModel : ObservableObject
     /// <returns>异步任务。</returns>
     public async Task LoadAsync()
     {
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.LoadForMutation();
+            LoadError = string.Empty;
+        }
+        catch (StartupOperationException ex)
+        {
+            LoadError = $"配置读取失败：{ex.Message}";
+            return;
+        }
 
         // ── 延时列表来源计数 ─────────────────────────────────────────────
         DelayedRegistry = config.Items.Count(static item => item.Source == StartupSource.Registry);
@@ -230,7 +248,17 @@ public partial class OverviewViewModel : ObservableObject
         DelayedManual = config.Items.Count(static item => item.Source == StartupSource.Manual);
 
         // ── 扫描来源计数（读缓存：启动后已扫过一次，bug#7）────────────────
-        var snapshot = await _scanCache.EnsureLoadedAsync().ConfigureAwait(true);
+        ScanSnapshot snapshot;
+        try
+        {
+            snapshot = await _scanCache.EnsureLoadedAsync().ConfigureAwait(true);
+        }
+        catch (StartupOperationException ex)
+        {
+            LoadError = $"配置读取失败：{ex.Message}";
+            return;
+        }
+
         ScannedRegistry = snapshot.Entries.Count(static entry => entry.Source == StartupSource.Registry);
         ScannedFolder = snapshot.Entries.Count(static entry => entry.Source == StartupSource.StartupFolder);
         ScannedTask = snapshot.Entries.Count(static entry => entry.Source == StartupSource.ScheduledTask);
@@ -339,7 +367,7 @@ public partial class OverviewViewModel : ObservableObject
 
             try
             {
-                var config = _configStore.Load();
+                var config = _configStore.LoadForMutation();
                 config.Settings.GuardMode = preset.Mode;
                 config.Settings.GuardMinutes = preset.Minutes;
                 _configStore.Save(config);

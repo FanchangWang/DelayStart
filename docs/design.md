@@ -100,7 +100,7 @@
 
 ### FR-12 配置迁移与备份
 
-v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出；损坏时保留坏文件副本并重建默认配置。
+v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出；损坏时保留坏文件副本但**不覆盖原文件**，配置写入 / 删除 / 还原必须等待用户恢复损坏配置。
 
 ### FR-13 自启动项守卫
 
@@ -251,7 +251,7 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 | E7 | 延时已过期（remaining ≤ 0） | 立即启动 |
 | E8 | 调度端被重复拉起 | Mutex 拦截，立即退出零副作用 |
 | E9 | 调度端被强杀 | `current-run.json` 留现场，管理端识别"未正常完成" |
-| E10 | `config.json` 损坏 | 保留坏副本 + 重建默认 + 提示 |
+| E10 | `config.json` 损坏 | 保留坏副本 + **不覆盖原文件** + 阻止写入 / 删除 / 还原并提示 |
 | E11 | 用户手动改回注册表 | 以用户改动为准并解除接管 |
 | E12 | 计划任务被外部删除 | 检测到即重建（D68 自检自愈） |
 | E13 | 连续 3 次登录失败 | 保持接管；角标常驻 + 告警条 + `[移出延时启动]` |
@@ -324,7 +324,7 @@ Tests ──> Core (+ Management)
 
 ### 7.2 Core 层
 
-`Abstractions/`（IAppConfigStore / IRunStateStore / IProcessLauncher / IClock / ILogSink——只有 `Write` 两个方法，Info/Warn/Error 走扩展方法以规避 CA1716）、`Models/`（含 `ProcessSnapshot`、`StartupFailureReason`，异常消息强制带 EntryId 的 `StartupOperationException`）、`Services/`（PathService / AtomicFileWriter / ConfigService / RunStateService / CommandLineService / LaunchTargetTypes / PowerShellHost / DelayCalculator / ItemKeyBuilder / StartupSortComparer / LaunchResultEvaluator / FailureStreakService / UwpParsingName）、`Serialization/`（JsonContext 源生成 + v1 迁移 DTO）、`Logging/`。
+`Abstractions/`（IAppConfigStore / IRunStateStore / IProcessLauncher / IClock / ILogSink——只有 `Write` 两个方法，Info/Warn/Error 走扩展方法以规避 CA1716）、`Models/`（含 `ProcessSnapshot`、`StartupFailureReason`、`ConfigLoadResult`，异常消息强制带 EntryId 的 `StartupOperationException`）、`Services/`（PathService / AtomicFileWriter / ConfigService / RunStateService / CommandLineService / LaunchTargetTypes / PowerShellHost / DelayCalculator / ItemKeyBuilder / StartupSortComparer / LaunchResultEvaluator / FailureStreakService / UwpParsingName）、`Serialization/`（JsonContext 源生成 + v1 迁移 DTO）、`Logging/`。
 
 ### 7.3 关键机制（编码必须照做）
 
@@ -355,6 +355,8 @@ Tests ──> Core (+ Management)
 ```
 
 `guardMode` / `guardMinutes` = 守卫档位（D74，默认 `onceAfterLogin` + 30）；`guardNotifyMode` = 守卫通知策略（D80，默认 `onChange`）。三个字段都是**枚举 / 白名单值一律字符串或数字落盘**（与 `notifyMode` / `theme` / `source` 一致）。`guardMode` 是**唯一**的"守卫该不该跑"的事实来源 —— 入口自检、`GuardService.RunOnce()`、`GuardTaskBootstrap` 三处都读它，不另存状态；`guardNotifyMode` 只决定"有变化时要不要发通知"（见 11.6），与"跑不跑"无关。
+
+🔴 配置读取状态由 `ConfigService.LoadResult` 明确返回 `Missing` / `Loaded` / `Corrupt` / `AccessDenied`：只有前两种可作为变更快照；后两种禁止接管、释放、编辑、删除、还原和覆盖。损坏文件只保留副本，不以默认配置覆盖原文件。
 
 `maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；连续失败次数不落盘，由 `FailureStreakService` 扫 `scheduler/archive/` 现算（两端共用，调度端无状态；D116 起新路径）。
 

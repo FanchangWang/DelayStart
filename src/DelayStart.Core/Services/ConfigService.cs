@@ -12,12 +12,17 @@ namespace DelayStart.Core.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 三条容错策略，按"用户损失最小"排序：
+/// 配置加载的容错策略，按"用户损失最小"排序：
 /// </para>
 /// <list type="number">
 /// <item><description>文件不存在 → 用默认配置，不报错（首次运行的正常路径）。</description></item>
-/// <item><description>解析失败 → **保留坏文件副本**再重建默认配置（E10 / FR-12.3）。
-/// 直接删掉用户的配置是不能接受的：里面存着"哪些系统项被接管了"。</description></item>
+/// <item>
+/// <description>
+/// 解析失败 → **保留坏文件副本**，返回不可用于变更的状态；不覆盖原文件，等待用户恢复（E10 / FR-12.3）。
+/// 直接删掉或覆盖用户的配置是不能接受的：里面存着"哪些系统项被接管了"。
+/// </description>
+/// </item>
+/// <item><description>读取失败（权限、锁定或其他 I/O 故障）→ 返回 <c>AccessDenied</c> 状态，禁止基于空快照做变更。</description></item>
 /// <item><description>版本高于本程序 → **拒绝加载**并抛异常。硬解析未知结构会把配置写坏，
 /// 而写坏之后连还原路径都没了。</description></item>
 /// </list>
@@ -49,24 +54,46 @@ public sealed class ConfigService : IAppConfigStore
     public string ConfigFilePath => _paths.ConfigFilePath;
 
     /// <inheritdoc />
-    public AppConfig Load()
+    public ConfigLoadResult LoadResult()
     {
-        _paths.EnsureCreated();
+        try
+        {
+            _paths.EnsureCreated();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _log.Error(ex, $"准备配置目录失败，本次配置不可用：{ConfigFilePath}");
+            return new ConfigLoadResult(
+                new AppConfig(),
+                ConfigLoadStatus.AccessDenied,
+                $"配置目录不可用：{ex.Message}");
+        }
 
         string? json;
         try
         {
             json = AtomicFileWriter.ReadAllTextOrNull(ConfigFilePath);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            _log.Error(ex, $"读取配置文件失败，本次使用默认配置：{ConfigFilePath}");
-            return new AppConfig();
+            _log.Error(ex, $"读取配置文件失败，本次配置不可用：{ConfigFilePath}");
+            return new ConfigLoadResult(
+                new AppConfig(),
+                ConfigLoadStatus.AccessDenied,
+                $"配置文件暂时不可读：{ex.Message}");
+        }
+
+        if (json is null)
+        {
+            return new ConfigLoadResult(new AppConfig(), ConfigLoadStatus.Missing, null);
         }
 
         if (string.IsNullOrWhiteSpace(json))
         {
-            return new AppConfig();
+            const string message = "配置文件存在但为空，已保留原文件，未执行覆盖。";
+            _log.Error(message);
+            PreserveCorruptFile();
+            return new ConfigLoadResult(new AppConfig(), ConfigLoadStatus.Corrupt, message);
         }
 
         AppConfig config;
@@ -76,13 +103,37 @@ public sealed class ConfigService : IAppConfigStore
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or FormatException)
         {
-            _log.Error(ex, $"配置文件解析失败，已保留副本并重建默认配置（E10）：{ConfigFilePath}");
+            _log.Error(ex, $"配置文件解析失败，已保留副本但未覆盖原文件（E10）：{ConfigFilePath}");
             PreserveCorruptFile();
-            return new AppConfig();
+            return new ConfigLoadResult(
+                new AppConfig(),
+                ConfigLoadStatus.Corrupt,
+                $"配置文件损坏：{ex.Message}。原文件未覆盖，请从保留的副本恢复。");
         }
 
         Normalize(config);
-        return config;
+        return new ConfigLoadResult(config, ConfigLoadStatus.Loaded, null);
+    }
+
+    /// <inheritdoc />
+    public AppConfig Load() => LoadResult().Config;
+
+    /// <inheritdoc />
+    public AppConfig LoadForMutation()
+    {
+        var result = LoadResult();
+        if (result.IsSafeForMutation)
+        {
+            return result.Config;
+        }
+
+        var reason = result.Status is ConfigLoadStatus.Corrupt
+            ? StartupFailureReason.ConfigCorrupted
+            : StartupFailureReason.AccessDenied;
+        throw new StartupOperationException(
+            reason,
+            entryId: string.Empty,
+            result.Message ?? "配置文件当前不可用，未执行任何配置变更。");
     }
 
     /// <inheritdoc />
@@ -91,10 +142,24 @@ public sealed class ConfigService : IAppConfigStore
         ArgumentNullException.ThrowIfNull(config);
 
         Normalize(config);
-        _paths.EnsureCreated();
 
-        var json = JsonSerializer.Serialize(config, JsonContext.Default.AppConfig);
-        AtomicFileWriter.WriteAllText(ConfigFilePath, json);
+        try
+        {
+            _paths.EnsureCreated();
+            var json = JsonSerializer.Serialize(config, JsonContext.Default.AppConfig);
+            AtomicFileWriter.WriteAllText(ConfigFilePath, json);
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException
+            or NotSupportedException)
+        {
+            throw new StartupOperationException(
+                StartupFailureReason.Unknown,
+                entryId: string.Empty,
+                message: $"保存配置文件失败：{ConfigFilePath}（{ex.Message}）",
+                innerException: ex);
+        }
     }
 
     private AppConfig Parse(string json)
@@ -165,9 +230,12 @@ public sealed class ConfigService : IAppConfigStore
             ?? new LegacyConfigV1();
 
         var config = new AppConfig { Version = AppConfig.CurrentVersion };
-        foreach (var legacyItem in legacy.Items)
+        foreach (var legacyItem in legacy.Items ?? [])
         {
-            config.Items.Add(ConvertLegacyItem(legacyItem));
+            if (legacyItem is not null)
+            {
+                config.Items.Add(ConvertLegacyItem(legacyItem));
+            }
         }
 
         _log.Info($"配置已从 v1 迁移到 v{AppConfig.CurrentVersion}，共 {config.Items.Count} 个条目（FR-12.1）");
@@ -176,7 +244,7 @@ public sealed class ConfigService : IAppConfigStore
 
     private static DelayedItem ConvertLegacyItem(LegacyItemV1 legacy)
     {
-        var source = ParseLegacySource(legacy.Source);
+        var source = ParseLegacySource(legacy.Source ?? string.Empty);
 
         return new DelayedItem
         {
@@ -189,9 +257,9 @@ public sealed class ConfigService : IAppConfigStore
             RunAsAdmin = legacy.RunAsAdmin,
             Enabled = true,
             Source = source,
-            Scope = InferLegacyScope(source, legacy.SourceDetail),
+            Scope = InferLegacyScope(source, legacy.SourceDetail ?? string.Empty),
             SourceKey = legacy.SourceKeyName,
-            SourceDetail = legacy.SourceDetail,
+            SourceDetail = legacy.SourceDetail ?? string.Empty,
             // v1 条目记不下接管前的状态。按"原本会自启动"处理 —— 取 false 会让这些历史条目
             // 在「移出延时启动」后仍然不启动，而用户无从知道原因。
             OriginalState = new OriginalState { WasEnabled = true },
@@ -199,7 +267,7 @@ public sealed class ConfigService : IAppConfigStore
     }
 
     private static StartupSource ParseLegacySource(string value)
-        => value.Trim().ToLowerInvariant() switch
+        => (value ?? string.Empty).Trim().ToLowerInvariant() switch
         {
             "registry" => StartupSource.Registry,
             "startup_folder" => StartupSource.StartupFolder,
@@ -219,6 +287,7 @@ public sealed class ConfigService : IAppConfigStore
     /// </remarks>
     private static StartupScope InferLegacyScope(StartupSource source, string sourceDetail)
     {
+        sourceDetail ??= string.Empty;
         if (string.IsNullOrWhiteSpace(sourceDetail))
         {
             return StartupScope.None;
@@ -275,6 +344,10 @@ public sealed class ConfigService : IAppConfigStore
             config.Items = [];
         }
 
+        // 集合元素本身也可能是 null。保留它只会让后续按 ID / 来源处理配置时在随机位置崩溃；
+        // null 不是可恢复的业务对象，直接移除并让其余有效配置继续可用。
+        _ = config.Items.RemoveAll(static item => item is null);
+
         if (config.Settings is null)
         {
             config.Settings = new Settings();
@@ -304,7 +377,7 @@ public sealed class ConfigService : IAppConfigStore
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 刻意**不删除**任何一条周期定义，哪怕它已经过期或 <c>Days</c> 被手改成 0：
+    /// 刻意**不删除**任何一条有效的周期定义，哪怕它已经过期或 <c>Days</c> 被手改成 0：
     /// 删掉等于替用户做决定，而且会连带让引用它的条目失去本来还保留着的意图。
     /// 无效定义的处理交给 <see cref="ScheduleCycleResolver"/>（按引用失效兜底为「每天」）。
     /// </para>
@@ -316,6 +389,8 @@ public sealed class ConfigService : IAppConfigStore
             config.Cycles = [];
             return;
         }
+
+        _ = config.Cycles.RemoveAll(static cycle => cycle is null);
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var cycle in config.Cycles)

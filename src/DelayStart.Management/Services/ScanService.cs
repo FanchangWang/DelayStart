@@ -99,24 +99,24 @@ public sealed class ScanService
     /// 从配置里读出全部已接管条目的稳定主键。
     /// </summary>
     /// <remarks>
-    /// 配置损坏时 <c>ConfigService.Load</c> 会重建默认配置并返回空集合 —— 此时扫描结果里
-    /// 所有条目都会显示为"未接管"。这是**安全的降级方向**：宁可显示"没接管过"，
-    /// 也不能把没接管过的项显示成"已接管"而让用户失去操作入口。
+    /// 配置损坏或暂不可读时不能把“不知道”伪装成“没有接管项”：否则 UI 可能让用户重复接管，
+    /// 后续保存还可能覆盖唯一的还原依据。只有“配置版本高于当前程序”保留原有的只读降级，
+    /// 因为那不是当前配置内容损坏，而是明确拒绝解释未来格式。
     /// </remarks>
     private HashSet<string> LoadTakenOverKeys()
     {
         try
         {
-            var config = _configStore.Load();
+            var config = _configStore.LoadForMutation();
             return new HashSet<string>(
                 config.Items.Select(static item => item.Id),
                 StringComparer.Ordinal);
         }
-        catch (StartupOperationException ex)
+        catch (StartupOperationException ex) when (ex.Reason == StartupFailureReason.ConfigVersionUnsupported)
         {
             // 配置版本高于本程序（前向兼容保护）—— 拒绝加载是正确行为，
             // 但扫描本身不该因此不可用。
-            _log.Warn(ex, "配置无法加载，本次扫描按「没有任何条目被接管」处理");
+            _log.Warn(ex, "配置版本不受支持，本次扫描按「没有任何条目被接管」处理");
             return new HashSet<string>(StringComparer.Ordinal);
         }
     }

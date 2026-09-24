@@ -68,6 +68,14 @@
                     Text="延时启动的整体状态：条目分布、后台任务与最近一次调度、巡检的结果。" />
             </StackPanel>
 
+            <InfoBar
+                Margin="0,16,0,0"
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasLoadError, Mode=OneWay}"
+                Message="{x:Bind ViewModel.LoadError, Mode=OneWay}"
+                Severity="Error"
+                Title="配置不可用" />
+
             <!-- ── 启动项（D118：原「延时启动」+「系统自启动项」两节合并，方案 C 基准）──
                  每个来源一格：蓝 = 被接管的延时条目数（点击 → 延时启动页），
                  灰 = 系统实际存在的全部条目数（点击 → 对应来源的自启动项页）。

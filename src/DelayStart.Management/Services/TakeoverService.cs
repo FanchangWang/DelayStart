@@ -106,7 +106,20 @@ public sealed class TakeoverService
                 $"找不到『{entry.Name}』所属的来源（{entry.Source} / {entry.Scope}），无法接管。");
         }
 
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.LoadForMutation();
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, $"接管『{entry.Name}』失败：配置当前不可用，系统未被改动");
+            return TakeoverOutcome.Failure(
+                entry.Id,
+                ex.Reason,
+                $"配置当前不可用，未执行接管：{ex.Message}");
+        }
+
         if (config.Items.Exists(item => string.Equals(item.Id, entry.Id, StringComparison.Ordinal)))
         {
             return TakeoverOutcome.Failure(entry.Id, StartupFailureReason.Unknown, "该项已被接管，无需重复操作。");
@@ -186,30 +199,60 @@ public sealed class TakeoverService
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        // 找不到来源不算错误：手动条目本就没有来源，其余情况也只需跳过系统动作。
-        _ = TryResolveSource(item.Source, item.Scope, out var source);
+        AppConfig config;
+        try
+        {
+            // 先拿到一份可安全变更的完整快照；配置未知时绝不能先改系统再删配置。
+            config = _configStore.LoadForMutation();
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, $"释放『{item.Name}』失败：配置当前不可用，未执行任何系统恢复");
+            return TakeoverOutcome.Failure(
+                item.Id,
+                ex.Reason,
+                $"配置当前不可用，未执行释放：{ex.Message}");
+        }
+
+        var stored = config.Items.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, item.Id, StringComparison.Ordinal));
+        if (stored is null)
+        {
+            return TakeoverOutcome.Failure(
+                item.Id,
+                StartupFailureReason.Unknown,
+                "配置中找不到该条目，未执行系统恢复；请刷新列表后重试。");
+        }
+
+        IStartupSource? source = null;
+        if (!stored.IsManual && !TryResolveSource(stored.Source, stored.Scope, out source))
+        {
+            return TakeoverOutcome.Failure(
+                stored.Id,
+                StartupFailureReason.Unknown,
+                $"无法识别『{stored.Name}』的来源（{stored.Source} / {stored.Scope}），已保留配置，未执行系统恢复。");
+        }
 
         // ── 步骤 1：恢复系统启动项 ────────────────────────────────────────────
         // 手动条目在系统里没有任何对应物，直接跳过（FR-3.4）。
-        if (!item.IsManual && source is not null)
+        if (source is not null)
         {
             try
             {
-                RestoreToOriginalState(item, source);
+                RestoreToOriginalState(stored, source);
             }
             catch (StartupOperationException ex)
             {
-                _log.Error(ex, $"释放『{item.Name}』失败：无法恢复系统启动项，已保留延时配置");
+                _log.Error(ex, $"释放『{stored.Name}』失败：无法恢复系统启动项，已保留延时配置");
                 return TakeoverOutcome.Failure(
-                    item.Id,
+                    stored.Id,
                     ex.Reason,
                     $"恢复系统启动项失败，已保留延时配置以免丢失还原依据，可稍后重试：{ex.Message}");
             }
         }
 
-        // ── 步骤 2：从配置中删除 ──────────────────────────────────────────────
-        var config = _configStore.Load();
-        if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, item.Id, StringComparison.Ordinal)) > 0)
+        // ── 步骤 2：从刚才确认过的配置快照中删除 ───────────────────────────────
+        if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, stored.Id, StringComparison.Ordinal)) > 0)
         {
             try
             {
@@ -219,9 +262,9 @@ public sealed class TakeoverService
             {
                 // 系统项已恢复但配置没删掉 —— 状态不一致，但**用户重试即可**：
                 // Enable 是幂等的，本方法会再走一遍并删掉配置。
-                _log.Error(ex, $"释放『{item.Name}』失败：系统项已恢复但配置未更新，请重试");
+                _log.Error(ex, $"释放『{stored.Name}』失败：系统项已恢复但配置未更新，请重试");
                 return TakeoverOutcome.Failure(
-                    item.Id,
+                    stored.Id,
                     StartupFailureReason.Unknown,
                     $"系统启动项已恢复，但配置未能更新（{ex.Message}）。请在列表中重试「移出延时启动」。");
             }
@@ -241,8 +284,8 @@ public sealed class TakeoverService
             }
         }
 
-        _log.Info($"已释放『{item.Name}』（{item.Id}）");
-        return TakeoverOutcome.Success(item.Id);
+        _log.Info($"已释放『{stored.Name}』（{stored.Id}）");
+        return TakeoverOutcome.Success(stored.Id);
     }
 
     /// <summary>
@@ -289,7 +332,23 @@ public sealed class TakeoverService
     /// </remarks>
     public RestoreOutcome RestoreAll()
     {
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.LoadForMutation();
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, "读取配置失败，未执行任何还原或计划任务删除");
+            return new RestoreOutcome
+            {
+                RestoredCount = 0,
+                FailedCount = 1,
+                Failures = [$"配置：{ex.Message}"],
+                TaskDeleted = false,
+            };
+        }
+
         var failures = new List<string>();
         var restored = 0;
 
@@ -370,7 +429,7 @@ public sealed class TakeoverService
         // 再撤销步骤 2：把配置条目移除。
         try
         {
-            var config = _configStore.Load();
+            var config = _configStore.LoadForMutation();
             if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, itemId, StringComparison.Ordinal)) > 0)
             {
                 _configStore.Save(config);

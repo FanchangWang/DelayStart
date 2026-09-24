@@ -79,7 +79,7 @@ public sealed class ConfigEditService
                 message: "请先选择要延时启动的程序。");
         }
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
 
         var item = new DelayedItem
         {
@@ -149,7 +149,7 @@ public sealed class ConfigEditService
         ArgumentNullException.ThrowIfNull(itemId);
         ArgumentNullException.ThrowIfNull(values);
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         var item = Find(config, itemId);
 
         var delayChanged = item.DelaySeconds != values.DelaySeconds;
@@ -195,7 +195,7 @@ public sealed class ConfigEditService
     {
         ArgumentNullException.ThrowIfNull(itemId);
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         var item = Find(config, itemId);
 
         if (item.Enabled == enabled)
@@ -238,7 +238,7 @@ public sealed class ConfigEditService
             throw new ArgumentOutOfRangeException(nameof(delta), delta, "位移量只能是 -1 或 +1。");
         }
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         var item = Find(config, itemId);
 
         var group = config.Items
@@ -295,7 +295,7 @@ public sealed class ConfigEditService
     {
         ArgumentNullException.ThrowIfNull(itemId);
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, itemId, StringComparison.Ordinal)) == 0)
         {
             return false;
@@ -340,7 +340,7 @@ public sealed class ConfigEditService
     {
         ArgumentNullException.ThrowIfNull(itemId);
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         var item = Find(config, itemId);
 
         if (item.IsManual)
@@ -433,7 +433,7 @@ public sealed class ConfigEditService
             throw new ArgumentException("周期至少要包含一天。", nameof(days));
         }
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
 
         // 名称唯一性（2026-09-23 批复 14）：新建时没有任何"自己"要排除。
         EnsureNameAvailable(config, name, exceptCycleId: null);
@@ -471,7 +471,7 @@ public sealed class ConfigEditService
             throw new ArgumentException("周期至少要包含一天。", nameof(days));
         }
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
 
         // 改名也要判重，但**排除自己** —— 否则"只改星期、名字照旧"会被自己挡住。
         EnsureNameAvailable(config, name, exceptCycleId: cycleId);
@@ -504,7 +504,7 @@ public sealed class ConfigEditService
     /// </remarks>
     public bool DeleteCycle(string cycleId)
     {
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         var index = config.Cycles.FindIndex(candidate => string.Equals(candidate.Id, cycleId, StringComparison.Ordinal));
         if (index < 0)
         {
@@ -535,7 +535,7 @@ public sealed class ConfigEditService
     {
         ArgumentNullException.ThrowIfNull(itemId);
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         var item = Find(config, itemId);
 
         item.ScheduleCycleId = string.IsNullOrWhiteSpace(cycleId) ? BuiltinCycleIds.Everyday : cycleId.Trim();
@@ -615,7 +615,7 @@ public sealed class ConfigEditService
     {
         try
         {
-            var config = _configStore.Load();
+            var config = _configStore.LoadForMutation();
             if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, itemId, StringComparison.Ordinal)) > 0)
             {
                 _configStore.Save(config);

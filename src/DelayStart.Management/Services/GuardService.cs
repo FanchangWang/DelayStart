@@ -64,7 +64,7 @@ public sealed class GuardService
     /// <returns>巡检结果；守卫关闭时返回 <see cref="GuardRunReport.Disabled"/>。</returns>
     public GuardRunReport RunOnce()
     {
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
 
         if (config.Settings.GuardMode is GuardMode.Disabled)
         {

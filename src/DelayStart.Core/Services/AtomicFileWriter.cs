@@ -62,9 +62,25 @@ public static class AtomicFileWriter
     /// </summary>
     /// <param name="path">文件完整路径。</param>
     /// <returns>文件内容；不存在时为 <see langword="null"/>。</returns>
+    /// <exception cref="UnauthorizedAccessException">文件存在但当前进程无权读取。</exception>
+    /// <exception cref="IOException">其他读取 I/O 失败（文件被占用、路径过长等）。</exception>
     public static string? ReadAllTextOrNull(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return File.Exists(path) ? File.ReadAllText(path, Utf8WithoutBom) : null;
+
+        try
+        {
+            // 不能先用 File.Exists 判断：权限不足时它会静默返回 false，把
+            // “不可读”伪装成“文件不存在”（B1 的配置 fail-closed 会被绕过）。
+            return File.ReadAllText(path, Utf8WithoutBom);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 }

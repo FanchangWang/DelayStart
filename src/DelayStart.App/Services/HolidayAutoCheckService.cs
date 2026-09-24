@@ -1,6 +1,7 @@
 using System.Globalization;
 
 using DelayStart.Core.Abstractions;
+using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Management.Services;
 
@@ -115,7 +116,13 @@ public sealed class HolidayAutoCheckService
     /// </remarks>
     public string Describe()
     {
-        if (!_configStore.Load().Settings.AutoCheckHolidayUpdates)
+        var config = _configStore.LoadResult();
+        if (!config.IsSafeForMutation)
+        {
+            return "配置文件当前不可用，自动检查未执行。";
+        }
+
+        if (!config.Config.Settings.AutoCheckHolidayUpdates)
         {
             return "已关闭 —— 不会自动联网补数据；要补用上面的「补齐缺失年份」。";
         }
@@ -156,7 +163,14 @@ public sealed class HolidayAutoCheckService
 
         try
         {
-            if (!_configStore.Load().Settings.AutoCheckHolidayUpdates)
+            var config = _configStore.LoadResult();
+            if (!config.IsSafeForMutation)
+            {
+                _log.Warn("配置文件当前不可用，节假日数据自动检查未执行。");
+                return;
+            }
+
+            if (!config.Config.Settings.AutoCheckHolidayUpdates)
             {
                 return;
             }

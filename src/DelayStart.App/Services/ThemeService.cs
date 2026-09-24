@@ -47,7 +47,7 @@ public sealed class ThemeService
             return;
         }
 
-        var config = _configStore.Load();
+        var config = _configStore.LoadForMutation();
         config.Settings.Theme = theme;
         _configStore.Save(config);
 

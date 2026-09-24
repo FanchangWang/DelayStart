@@ -95,7 +95,7 @@ public sealed class GuardTaskBootstrap
 
         try
         {
-            var settings = _configStore.Load().Settings;
+            var settings = _configStore.LoadForMutation().Settings;
             mode = settings.GuardMode;
             minutes = settings.GuardMinutes;
         }

@@ -331,12 +331,12 @@ public sealed class ScanCacheService : IDisposable
     {
         try
         {
-            return [.. _configStore.Load().Items.Select(static item => item.Id)];
+            return [.. _configStore.LoadForMutation().Items.Select(static item => item.Id)];
         }
-        catch (Exception ex)
+        catch (StartupOperationException ex)
         {
-            _log.Warn(ex, "配置无法加载，局部重扫按「没有接管项」处理");
-            return [];
+            _log.Error(ex, "配置无法加载，局部重扫未继续，避免把未知状态显示成没有接管项");
+            throw;
         }
     }
 

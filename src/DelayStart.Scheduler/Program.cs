@@ -52,15 +52,15 @@ internal static class Program
             return 0;
         }
 
-        var engine = new SchedulerEngine(
-            new ConfigService(paths, log, SystemClock.Instance),
-            new RunStateService(paths, log),
-            new DeElevatedProcessLauncher(log),
-            paths,
-            log);
-
         try
         {
+            var engine = new SchedulerEngine(
+                new ConfigService(paths, log, SystemClock.Instance),
+                new RunStateService(paths, log),
+                new DeElevatedProcessLauncher(log),
+                paths,
+                log);
+
             return engine.Run();
         }
         catch (Exception ex)

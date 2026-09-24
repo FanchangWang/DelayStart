@@ -222,7 +222,11 @@ public sealed class ScanServiceTests
 
         public string ConfigFilePath => "(抛异常)";
 
+        public ConfigLoadResult LoadResult() => throw _exception;
+
         public AppConfig Load() => throw _exception;
+
+        public AppConfig LoadForMutation() => throw _exception;
 
         public void Save(AppConfig config) => throw _exception;
     }

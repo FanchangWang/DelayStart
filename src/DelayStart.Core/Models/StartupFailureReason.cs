@@ -35,7 +35,7 @@ public enum StartupFailureReason
     /// <summary>启动后立即以非零退出码退出（E5 / FR-5.9）。</summary>
     ExitedNonZero,
 
-    /// <summary>配置文件损坏，已保留副本并重建默认配置（E10 / FR-12.3）。</summary>
+    /// <summary>配置文件损坏，已保留副本；未覆盖原文件，配置变更被阻止（E10 / FR-12.3）。</summary>
     ConfigCorrupted,
 
     /// <summary>配置文件版本高于本程序支持的版本，拒绝加载以免写坏（前向兼容保护）。</summary>

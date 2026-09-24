@@ -29,6 +29,105 @@ public sealed class ConfigServiceTests : IDisposable
     public void Dispose() => _temp.Dispose();
 
     [Fact]
+    public void LoadResult_ConfigFileMissing_IsSafeForMutation()
+    {
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.Missing, result.Status);
+        Assert.True(result.IsSafeForMutation);
+        Assert.Empty(result.Config.Items);
+    }
+
+    [Fact]
+    public void LoadResult_CorruptConfig_IsNotSafeForMutationAndKeepsOriginal()
+    {
+        const string original = "{ this is definitely not json ";
+        WriteConfigFile(original);
+
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.Corrupt, result.Status);
+        Assert.False(result.IsSafeForMutation);
+        Assert.Equal(original, File.ReadAllText(_service.ConfigFilePath));
+        Assert.Single(Directory.GetFiles(_paths.ConfigRoot, CorruptBackupSearchPattern));
+    }
+
+    [Fact]
+    public void LoadResult_ConfigFileLocked_IsAccessDeniedAndNotSafeForMutation()
+    {
+        WriteConfigFile("""{ "version": 2, "items": [] }""");
+        using var exclusive = new FileStream(
+            _service.ConfigFilePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.None);
+
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.AccessDenied, result.Status);
+        Assert.False(result.IsSafeForMutation);
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.LoadForMutation());
+        Assert.Equal(StartupFailureReason.AccessDenied, exception.Reason);
+    }
+
+    [Fact]
+    public void LoadResult_ValidConfig_IsLoadedAndSafeForMutation()
+    {
+        WriteConfigFile("""{ "version": 2, "items": [], "settings": {} }""");
+
+        var result = _service.LoadResult();
+
+        Assert.Equal(ConfigLoadStatus.Loaded, result.Status);
+        Assert.True(result.IsSafeForMutation);
+    }
+
+    [Fact]
+    public void LoadForMutation_CorruptConfig_ThrowsAndDoesNotReturnEmptySnapshot()
+    {
+        WriteConfigFile("{ this is definitely not json ");
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.LoadForMutation());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+        Assert.Equal("{ this is definitely not json ", File.ReadAllText(_service.ConfigFilePath));
+    }
+
+    [Fact]
+    public void LoadResult_NullCollectionElements_AreRemoved()
+    {
+        WriteConfigFile("""{ "version": 2, "items": [null], "cycles": [null], "settings": {} }""");
+
+        var config = _service.Load();
+
+        Assert.Empty(config.Items);
+        Assert.Empty(config.Cycles);
+    }
+
+    [Fact]
+    public void Load_LegacyNullFields_FallBackInsteadOfCrashing()
+    {
+        WriteConfigFile("""{ "items": [ { "source": null, "sourceDetail": null } ] }""");
+
+        var config = _service.Load();
+
+        var item = Assert.Single(config.Items);
+        Assert.Equal(StartupSource.Manual, item.Source);
+        Assert.Equal(string.Empty, item.SourceDetail);
+    }
+
+    [Fact]
+    public void Save_IoFailure_IsWrappedAsStartupOperationException()
+    {
+        Directory.CreateDirectory(_service.ConfigFilePath);
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Save(new AppConfig()));
+
+        Assert.Equal(StartupFailureReason.Unknown, exception.Reason);
+        Assert.Contains("保存配置文件失败", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Load_ConfigFileMissing_ReturnsDefaultConfig()
     {
         // 首次运行的正常路径：不该报错，也不该记 Error
@@ -54,7 +153,7 @@ public sealed class ConfigServiceTests : IDisposable
     [Fact]
     public void Load_JsonArrayRoot_IsTreatedAsCorrupt()
     {
-        // 根节点不是对象 → 备份 + 重建，不能硬解析下去
+        // 根节点不是对象 → 备份并阻止配置变更，不能硬解析下去
         WriteConfigFile("[1, 2, 3]");
 
         var config = _service.Load();
@@ -64,9 +163,9 @@ public sealed class ConfigServiceTests : IDisposable
     }
 
     [Fact]
-    public void Load_CorruptJson_PreservesCopyThenRebuilds()
+    public void Load_CorruptJson_PreservesCopyAndDoesNotOverwrite()
     {
-        // E10 / FR-12.3：配置损坏必须**先留副本**再重建。
+        // E10 / FR-12.3：配置损坏必须**先留副本**，且不能在未恢复前覆盖原文件。
         // 直接覆盖是灾难 —— 副本里存着"哪些系统自启动项被接管了"，丢了就再也还原不回去。
         WriteConfigFile("{ this is definitely not json ");
 

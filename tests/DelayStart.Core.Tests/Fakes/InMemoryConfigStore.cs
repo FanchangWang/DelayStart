@@ -39,15 +39,21 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
     public Exception? LoadException { get; init; }
 
     /// <inheritdoc />
-    public AppConfig Load()
+    public ConfigLoadResult LoadResult()
     {
         if (LoadException is not null)
         {
             throw LoadException;
         }
 
-        return Copy(_config);
+        return new ConfigLoadResult(Copy(_config), ConfigLoadStatus.Loaded, null);
     }
+
+    /// <inheritdoc />
+    public AppConfig Load() => LoadResult().Config;
+
+    /// <inheritdoc />
+    public AppConfig LoadForMutation() => LoadResult().Config;
 
     /// <inheritdoc />
     public void Save(AppConfig config)

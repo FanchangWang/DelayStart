@@ -196,6 +196,22 @@ public sealed class TakeoverServiceTests
         Assert.Equal(0, harness.Registrar.RegisterCount);
     }
 
+    [Fact]
+    public void Takeover_ConfigUnavailable_NothingElseIsTouched()
+    {
+        var harness = new Harness(loadException: new StartupOperationException(
+            StartupFailureReason.ConfigCorrupted,
+            entryId: string.Empty,
+            message: "配置损坏"));
+
+        var outcome = harness.Service.Takeover(Entry(), new TakeoverOptions());
+
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(0, harness.Source.DisableCount);
+        Assert.Equal(0, harness.Registrar.RegisterCount);
+        Assert.Empty(harness.Config.Snapshot().Items);
+    }
+
     // ── Release ─────────────────────────────────────────────────────────────
 
     [Fact]
@@ -251,6 +267,24 @@ public sealed class TakeoverServiceTests
         Assert.False(outcome.Succeeded);
         // 🔴 配置是唯一的还原依据 —— 系统项还没恢复成功时绝不能把它删掉。
         Assert.Single(harness.Config.Snapshot().Items);
+    }
+
+    [Fact]
+    public void Release_UnknownSource_KeepsConfigAndDoesNotTouchSystem()
+    {
+        var harness = new Harness();
+        var item = Item();
+        item.Source = (StartupSource)999;
+        item.Scope = (StartupScope)999;
+        harness.Config.Seed(new AppConfig { Items = [item] });
+
+        var outcome = harness.Service.Release(item);
+
+        Assert.False(outcome.Succeeded);
+        Assert.Contains("无法识别", outcome.Message, StringComparison.Ordinal);
+        Assert.Single(harness.Config.Snapshot().Items);
+        Assert.Equal(0, harness.Source.EnableCount);
+        Assert.Equal(0, harness.Source.DisableCount);
     }
 
     [Fact]
@@ -325,6 +359,22 @@ public sealed class TakeoverServiceTests
     }
 
     // ── RestoreAll（D22 的卸载路径）──────────────────────────────────────────
+
+    [Fact]
+    public void RestoreAll_ConfigUnavailable_ReturnsFailureWithoutDeletingTask()
+    {
+        var harness = new Harness(loadException: new StartupOperationException(
+            StartupFailureReason.ConfigCorrupted,
+            entryId: string.Empty,
+            message: "配置损坏"));
+
+        var outcome = harness.Service.RestoreAll();
+
+        Assert.Equal(1, outcome.FailedCount);
+        Assert.Equal(1, outcome.ExitCode);
+        Assert.False(outcome.TaskDeleted);
+        Assert.Equal(0, harness.Registrar.DeleteCount);
+    }
 
     [Fact]
     public void RestoreAll_AllItemsRestored_ReturnsZeroExitCode()
@@ -438,7 +488,8 @@ public sealed class TakeoverServiceTests
             Exception? enableException = null,
             Exception? registerException = null,
             Exception? deleteException = null,
-            Exception? saveException = null)
+            Exception? saveException = null,
+            Exception? loadException = null)
         {
             Source = new FakeStartupSource
             {
@@ -452,7 +503,7 @@ public sealed class TakeoverServiceTests
                 DeleteException = deleteException,
             };
 
-            Config = new InMemoryConfigStore { SaveException = saveException };
+            Config = new InMemoryConfigStore { SaveException = saveException, LoadException = loadException };
             Log = new FakeLogSink();
             Service = new TakeoverService(Config, Registrar, [Source], Log);
         }

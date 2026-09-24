@@ -361,6 +361,16 @@ error CA1822: 成员"Summary"不访问实例数据，可标记为 static
 
 ---
 
+## 二十五、`File.Exists` 返回 false 不等于文件不存在
+
+**症状**：配置文件实际存在，但因权限不足、路径组件是目录或其他读取故障，`File.Exists(path)` 静默返回 `false`。若代码据此把它当成首次运行（空配置），后续保存就可能覆盖唯一的还原依据；卸载还原还可能把“读不到”误报成“没有接管项”。
+
+**做**：需要区分“确实不存在”和“存在但读不了”时，不要先问 `File.Exists`。直接尝试 `File.ReadAllText`，只把 `FileNotFoundException` / `DirectoryNotFoundException` 转成 `null`；`UnauthorizedAccessException` 和其他 `IOException` 原样上抛，交给配置状态模型归类为 `AccessDenied`。`AtomicFileWriter.ReadAllTextOrNull` 是这条规则的统一实现。
+
+**验证**：B1 增加配置文件独占锁用例，确认状态为 `AccessDenied`、不可用于变更；配置损坏用例确认原文件不被覆盖。
+
+---
+
 ## 教训方法论
 
 1. **先取证再改**：报错框是证据不是结论——"读到 A 要求 B、本机只有 C"要直接调一次探针验证（D64 的 DDLM 假铁证）。

@@ -12,15 +12,27 @@ public interface IAppConfigStore
     string ConfigFilePath { get; }
 
     /// <summary>
-    /// 加载配置。文件不存在时返回默认配置；文件损坏时保留副本并重建（E10 / FR-12.3）；
-    /// 低版本时自动迁移（FR-12.1）。
+    /// 加载配置并保留加载状态。只读调用方可以据此区分“确实没有配置”和“配置暂时不可用”；
+    /// 写操作应使用 <see cref="LoadForMutation"/>。
     /// </summary>
-    /// <returns>可直接使用的配置对象，保证非空且内部集合已规范化。</returns>
-    /// <exception cref="StartupOperationException">
-    /// 配置版本高于本程序支持的版本时抛出（<see cref="StartupFailureReason.ConfigVersionUnsupported"/>）——
-    /// 此时**拒绝加载**而不是尽力解析，以免把用户配置写坏。
-    /// </exception>
+    /// <returns>非空配置快照及其加载状态。</returns>
+    /// <exception cref="StartupOperationException">配置版本高于本程序支持的版本时抛出。</exception>
+    ConfigLoadResult LoadResult();
+
+    /// <summary>
+    /// 加载配置的只读兼容入口。文件不存在或正常时返回配置；损坏 / 暂不可用时返回
+    /// 一个空快照，调用方不得据此执行写入或恢复操作。
+    /// </summary>
+    /// <returns>可直接用于读取的配置对象，保证非空且内部集合已规范化。</returns>
     AppConfig Load();
+
+    /// <summary>
+    /// 为写入、删除或系统恢复加载配置。配置缺失是合法的空配置；配置损坏或暂不可用时
+    /// 必须抛出语义异常，禁止把“不知道”当成“没有”。
+    /// </summary>
+    /// <returns>可安全用于变更的配置快照。</returns>
+    /// <exception cref="StartupOperationException">配置损坏、暂不可用或版本不受支持时抛出。</exception>
+    AppConfig LoadForMutation();
 
     /// <summary>
     /// 原子保存配置（写 <c>.tmp</c> → <c>File.Replace</c>），保证断电不会留下半截文件

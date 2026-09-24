@@ -99,7 +99,7 @@ internal sealed class SchedulerEngine
         _launcher = launcher;
         _paths = paths;
         _log = log;
-        _settings = _configStore.Load().Settings;
+        _settings = _configStore.LoadForMutation().Settings;
     }
 
     /// <summary>
@@ -183,7 +183,7 @@ internal sealed class SchedulerEngine
         AppConfig config;
         try
         {
-            config = _configStore.Load();
+            config = _configStore.LoadForMutation();
         }
         catch (Exception ex)
         {

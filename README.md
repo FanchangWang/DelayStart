@@ -47,15 +47,8 @@ Windows 的自启动是全有或全无的：要么所有程序在登录瞬间一
 <p>
 <img src="images/registry.webp" width="49%"><img src="images/startup-folder.webp" width="49%">
 <img src="images/scheduled-tasks.webp" width="49%"><img src="images/uwp.webp" width="49%">
+<img src="images/schedule-log.webp" width="49%"><img src="images/settings.webp" width="49%">
 </p>
-
-**调度日志** —— 每次调度的逐条启动结果与耗时：
-
-<p><img src="images/runs-log.webp" width="72%"></p>
-
-**设置** —— 调度 / 守卫 / 通知策略：
-
-<p><img src="images/settings.webp" width="72%"></p>
 
 </details>
 

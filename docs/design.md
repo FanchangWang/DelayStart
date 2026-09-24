@@ -69,19 +69,21 @@
 
 ### FR-5 调度执行
 
-登录后 3s 由计划任务拉起（`onlogon` + `delay 0000:03` + `RunLevel=Highest`）；单实例 Mutex（FR-5.2）；时序 = 绝对时间点（FR-5.3，机制 5）；按 `DelaySeconds,SortOrder` 排序（FR-5.4）；逐条 try/catch（FR-5.5）；普通条目降权启动（机制 6，D40 调度端亲自降权）；管理员条目继承令牌不弹 UAC（FR-5.8）；成功判定 = 创建成功 + 1.5s 后复查 `HasExited`（机制 7）；无启用条目静默退出（FR-5.10；若"有启用条目、但今天全被周期跳过"，先写一份只含跳过项的运行记录再退出，FR-15.26）；跑完即退（FR-5.11）；实时状态写 `current-run.json`（FR-5.12）+ 归档 `runs\<runId>.json` 保留 30 次（FR-5.13）；源生成 JSON（FR-5.14）。
+登录后 3s 由计划任务拉起（`onlogon` + `delay 0000:03` + `RunLevel=Highest`）；单实例 Mutex（FR-5.2）；时序 = 绝对时间点（FR-5.3，机制 5）；按 `DelaySeconds,SortOrder` 排序（FR-5.4）；逐条 try/catch（FR-5.5）；普通条目降权启动（机制 6，D40 调度端亲自降权）；管理员条目继承令牌不弹 UAC（FR-5.8）；成功判定 = 创建成功 + 1.5s 后复查 `HasExited`（机制 7）；无启用条目静默退出（FR-5.10；若"有启用条目、但今天全被周期跳过"，先写一份只含跳过项的运行记录再退出，FR-15.26）；跑完即退（FR-5.11）；实时状态写 `scheduler\current-run.json`（FR-5.12）+ 归档 `scheduler\archive\<runId>.json` 保留 30 次（FR-5.13，D116 起新路径）；源生成 JSON（FR-5.14）。
 
 ### FR-6 结果通知与追溯
 
-托盘图标显示进度（预计驻留 < 15s 不显示）；点击弹面板（失焦即关）；**默认仅失败时通知**（FR-6.3，D15）；失败通知合并一条（FR-6.4）；失败角标保留（FR-6.5）；点通知打开管理端运行日志并定位本次运行（FR-6.6，`--goto-log --run=<id>`）；**连续失败 ≥3 次：角标不自动消失、告警条不提供忽略、唯一出口是「移出延时启动」**（FR-6.8/6.9）；**永不自动恢复失败项的自启动**（FR-6.10）。
+托盘图标显示进度（预计驻留 < 15s 不显示）；点击弹面板（失焦即关）；**默认仅失败时通知**（FR-6.3，D15）；失败通知合并一条（FR-6.4）；失败角标保留（FR-6.5）；点通知打开管理端调度日志并定位本次运行（FR-6.6，`--goto-log --run=<id>`）；**连续失败 ≥3 次：角标不自动消失、告警条不提供忽略、唯一出口是「移出延时启动」**（FR-6.8/6.9）；**永不自动恢复失败项的自启动**（FR-6.10）。
 
 ### FR-7 系统启动项（只读）
 
 服务只读展示 + 一键切"延迟自动启动"（原生 `delayed-auto`）；驱动/Winlogon/登录脚本纯只读；全部不参与延时配置（D5）。
 
-### FR-8 运行日志
+### FR-8 调度日志
 
 按 `runId` 分组；每项显示名称/延时/结果/启动时间/失败原因；保留 30 次；支持跳转定位；调度端自身日志滚动截断。**周期跳过（今天不该启动）的条目也进日志**：状态「已跳过」、说明写「今天不在启动周期内，未启动」（FR-15.26）—— 日志是"今天为什么什么都没启动"的**唯一**落点。
+
+**守卫日志页（D115 引入 / D116 改版 / D117 细化，2026-09-24 批复）**：左侧导航「调度日志」下方「守卫日志」，数据源 = **守卫巡检归档**（`guard\inspections\*.json`，内容为 `GuardRunReport` 原样序列化；D1=A 批复），**按次分组**（Expander，与调度日志页同构）：组标题 = 完成时间 + 巡检汇总（`GuardRunSummaryText.Build`，与 guard.log「巡检完成」行、总览卡同一口径），组内明细表（列头 = 类别 / 名称 / 说明）行 = 纠正（条目名 + 结果，失败标红）/ 新增（条目名 + 来源）/ 失效（条目名 + 原因）/ 来源失败（标红）；**纠正 / 新增 / 失效 / 来源失败全为 0 的组，展开后只有一行描述文字**（「本次巡检没有变化：没有需要纠正、新增或失效的条目。」），不渲染表头与空表（D117）；最新一组默认展开，保留 30 次；筛选 =「全部巡检 / 仅含变化与异常」（判据：有新增或失效、或纠正失败、或来源失败 —— 比通知触发条件宽：来源失败没有条目可指、通知不了用户，但在这里必须看得见，FR-1.4）。guard.log 文本日志双轨保留（D4），「打开日志文件」按钮仍指向 `logs\` 目录。**总览两个分节（D117 合并批复）**：「后台任务」= 开机调度卡（左 = 标题 + 一行说明，右 = 状态「✓ 已启用」；失败态说明让位给失败原因、右侧换「✕ 未就绪」+「重试创建」）+ 自启动项守卫卡（左 = 标题 + 一行说明，同步失败时让位给红字错误，右 = 重试 + 档位下拉）；「最近记录」= 调度卡 + 守卫卡（左 = 汇总 + 时间，调度含失败标红；**空态 = 左两行提示文字，右侧链接保留**），卡片身份由右侧链接文字（「查看调度日志 →」/「查看守卫日志 →」）表达。各卡左侧文字最多两行，档位说明行与任务注册细节不摆（D117）。
 
 ### FR-9 设置
 
@@ -102,11 +104,11 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 
 ### FR-13 自启动项守卫
 
-独立进程 `DelayStart.Guard.exe`，由登录触发的计划任务 `\DelayStartGuard` 拉起，跑一次巡检即退出（D74）。一次巡检 = **写回纠正**（把被应用写回启用的已接管项重新软禁用并复读确认，FR-13.1）→ **新增检测**（与基线差集，FR-13.2）→ **失效检测**（孤儿 / 目标已失效，FR-13.3）→ **更新基线**（用纠正后的结果，FR-13.4）。有变化且通知策略为「有变化时通知」时，发一条**系统通知**（右下角横幅 + 停留通知中心，标题显示 `DelayStart`）；点击经 `delaystart:` 协议拉起管理端并定位到对应来源页 /「延时启动」页（FR-13.5，D79/D80）。无变化（或策略为「从不通知」）静默退出，但**每次都写一行巡检汇总**（FR-13.6，守卫唯一的可审计痕迹）。档位 `GuardMode`（`Disabled`/`OnceAfterLogin`/`Periodic`）+ `GuardMinutes`（10/30/60），默认 `OnceAfterLogin` + 30（FR-13.7）；通知策略 `GuardNotifyMode`（`OnChange`/`Never`），默认 `OnChange`（D80）。入口自检：非管理员 / 守卫已关闭 / 已有实例 → 写日志后静默退出（FR-13.8，D78）。管理端每次启动按当前设置同步 / 补建 / 删除守卫任务（FR-13.9）。
+独立进程 `DelayStart.Guard.exe`，由登录触发的计划任务 `\DelayStartGuard` 拉起，跑一次巡检即退出（D74）。一次巡检 = **写回纠正**（把被应用写回启用的已接管项重新软禁用并复读确认，FR-13.1）→ **新增检测**（与基线差集，FR-13.2）→ **失效检测**（孤儿 / 目标已失效，FR-13.3）→ **更新基线**（用纠正后的结果，FR-13.4）。有变化且通知策略为「有变化时通知」时，发一条**系统通知**（右下角横幅 + 停留通知中心，标题显示 `DelayStart`）；点击经 `delaystart:` 协议拉起管理端并定位到对应来源页 /「延时启动」页（FR-13.5，D79/D80）。无变化（或策略为「从不通知」）静默退出，但**每次都写一行巡检汇总**（FR-13.6，守卫唯一的可审计痕迹；计数文案由 `GuardRunSummaryText.Build` 统一，D116）并**落一份结构化归档**（FR-13.10，D116 / D1=A 批复：`guard\inspections\<yyyyMMdd-HHmmss>.json`，内容 = `GuardRunReport` 原样序列化，含纠正明细 / 新增 / 失效条目名 —— 此前条目名只在系统通知里出现过；保留 30 份，写入失败只记 Warn 不阻塞巡检）。档位 `GuardMode`（`Disabled`/`OnceAfterLogin`/`Periodic`）+ `GuardMinutes`（10/30/60），默认 `OnceAfterLogin` + 30（FR-13.7）；通知策略 `GuardNotifyMode`（`OnChange`/`Never`），默认 `OnChange`（D80）。入口自检：非管理员 / 守卫已关闭 / 已有实例 → 写日志后静默退出（FR-13.8，D78）。管理端每次启动按当前设置同步 / 补建 / 删除守卫任务（FR-13.9）。
 
 ### FR-14 调度完成系统通知（N1–N12，2026-09-22 批复）
 
-独立进程 `DelayStart.NotifyBroker.exe`（**通知中转器**）：调度端收尾时把通知作业 JSON（`%TEMP%\DelayStart\notify\<Guid>\job.json`，字段 `Aumid/Tag/Group/Title/Message/Launch`）写盘，经**现有降权链**（外壳令牌 + CPWT，`DeElevatedProcessLauncher.LaunchAuxiliary`）以中完整性拉起中转器，fire-and-forget（不等回执；失败只记 `scheduler.log`，N12）。中转器读作业 → 组 toast XML → `ToastNotificationManager.Show()` → 驻留 ~500ms → 退出（退出码 0/2/3；日志 `notifybroker.log`）。🔴 双重理由必须经中转器：① 调度端提权运行，Win10/11 抑制提权进程的系统通知；② 调度端 AOT 无 WinRT 投影（D24/D28）。通知内容：标题 `DelayStart`；正文「启动完成：N 项成功 · M 项失败 · K 项跳过」+ 失败名前 3 条（超出折「等 N 项」，总长截断，`ScheduleToastComposer`）；`Tag=schedule-done` / `Group=delaystart`（🔴 与守卫 `guard-change` 不同 Tag，避免通知中心互相替换）；`activationType="protocol"` + `launch="delaystart://runs-log"`（点击直达运行日志页，D82）。中转器**绝不自行注册 AUMID**（管理端 `ShellRegistrationService` 的快捷方式未登记 → 发送失败仅记日志）。通知与面板彻底分离：收尾无论面板是否显示都按 `NotifyDecision` 发通知（N5）；面板仅手动弹出（N4）；形态非 AOT + WinRT 投影（TFM 带平台版本，跟随管理端出货形态，与守卫同款四件套同步）。
+独立进程 `DelayStart.NotifyBroker.exe`（**通知中转器**）：调度端收尾时把通知作业 JSON（`%TEMP%\DelayStart\notify\<Guid>\job.json`，字段 `Aumid/Tag/Group/Title/Message/Launch`）写盘，经**现有降权链**（外壳令牌 + CPWT，`DeElevatedProcessLauncher.LaunchAuxiliary`）以中完整性拉起中转器，fire-and-forget（不等回执；失败只记 `scheduler.log`，N12）。中转器读作业 → 组 toast XML → `ToastNotificationManager.Show()` → 驻留 ~500ms → 退出（退出码 0/2/3；日志 `notifybroker.log`）。🔴 双重理由必须经中转器：① 调度端提权运行，Win10/11 抑制提权进程的系统通知；② 调度端 AOT 无 WinRT 投影（D24/D28）。通知内容：标题 `DelayStart`；正文「启动完成：N 项成功 · M 项失败 · K 项跳过」+ 失败名前 3 条（超出折「等 N 项」，总长截断，`ScheduleToastComposer`）；`Tag=schedule-done` / `Group=delaystart`（🔴 与守卫 `guard-change` 不同 Tag，避免通知中心互相替换）；`activationType="protocol"` + `launch="delaystart://runs-log"`（点击直达调度日志页，D82）。中转器**绝不自行注册 AUMID**（管理端 `ShellRegistrationService` 的快捷方式未登记 → 发送失败仅记日志）。通知与面板彻底分离：收尾无论面板是否显示都按 `NotifyDecision` 发通知（N5）；面板仅手动弹出（N4）；形态非 AOT + WinRT 投影（TFM 带平台版本，跟随管理端出货形态，与守卫同款四件套同步）。
 
 **FR-14.1 需求锚点（N1–N12，原需求稿已退役并入本节）**：
 
@@ -122,14 +124,14 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 | N8 | 面板右上角：移除「关闭 ✕」与旧「置顶」，改为单枚「钉」按钮 |
 | N9 | 「钉」默认不选中：面板失焦自动关闭（启动中仅收起；完成态收起后进程退出） |
 | N10 | 「钉」选中：按钮高亮，面板置顶于其他窗口之上，失焦不再自动关闭 |
-| N11 | 通知点击落点：打开管理端「运行日志」页（复用 D82 `delaystart://runs-log`） |
+| N11 | 通知点击落点：打开管理端「调度日志」页（复用 D82 `delaystart://runs-log`） |
 | N12 | 通知发送**绝不阻塞 / 绝不拖垮**调度退出：中转器拉起失败、发送失败都只记日志 |
 
 ### FR-15 调度周期（2026-09-23 批复）
 
 每个延时条目**必须且只能**引用一个「调度周期」（`DelayedItem.ScheduleCycleId`），周期决定它**在哪些天**会被拉起；与延时正交（规则管"今天启不启"，延时管"启动后等多久"）。周期定义在 `config.json` 顶层 `cycles`，**内置 5 档不可改不可删**（`b:everyday` / `b:weekdays` / `b:weekends` / `b:legal-workday` / `b:legal-holiday`，名称与判定都由代码给出），自定义档 id 为 `c-<8hex>`。🔴 **这是引用关系不是快照**（D87）：改一个周期，所有引用它的条目同步生效 —— 代价用三条约束兜住：**被引用的周期不可删**（FR-15.14，按钮置灰 + 说明引用数）、**引用失效回落「每天」**（FR-15.15，绝不因此让条目"永不启动"）、**改前在面板副标题告知影响面**（FR-15.16）。🔴 **不存在"不选周期"的状态**（FR-15.1）：空值一律按每天处理；想让条目不跑就用条目级「启用」开关。
 
-判定 = Core 纯函数 `ScheduleRulePolicy.Matches(kind, days, today, calendar)`，**管理端与调度端同一份**（管理端只做展示，绝不自算）。接入点是唯一的：`SchedulePlan.BuildWithSkipped(items, cycles, today, calendar)`（`Build` 就是取它的 `Entries` 那一半，历史调用点不受影响），调用方 `SchedulerEngine` 在启动时取一次 `today` + 本地日历快照，**跨午夜不重判**（FR-15.5）。判定在 `Enabled` 过滤之后、排序之前；不匹配的条目**不进计划**（不启动、不上进度面板、不计成功/失败），但**进本次运行日志**（状态 `Skipped`、说明「今天不在启动周期内，未启动」，FR-15.26 —— 被 `Enabled=false` 关掉的条目不在此列）。`today == null` 时不做周期过滤（旧调用点行为不变，FR-15.6，配置版本不升）。
+判定 = Core 纯函数 `ScheduleRulePolicy.Matches(kind, days, today, calendar)`，**管理端与调度端同一份**（管理端只做展示，绝不自算）。接入点是唯一的：`SchedulePlan.BuildWithSkipped(items, cycles, today, calendar)`（`Build` 就是取它的 `Entries` 那一半，历史调用点不受影响），调用方 `SchedulerEngine` 在启动时取一次 `today` + 本地日历快照，**跨午夜不重判**（FR-15.5）。判定在 `Enabled` 过滤之后、排序之前；不匹配的条目**不进计划**（不启动、不上进度面板、不计成功/失败），但**进本次调度日志**（状态 `Skipped`、说明「今天不在启动周期内，未启动」，FR-15.26 —— 被 `Enabled=false` 关掉的条目不在此列）。`today == null` 时不做周期过滤（旧调用点行为不变，FR-15.6，配置版本不升）。
 
 **法定两档走三级降级链**（NFR-y）：① 当年数据里命中 `restDays`/`workdays` → **数据说话**（调休补班日会覆盖星期规律，例如 2026-09-20 周日算工作日）；② 当年有数据但当天未列出 → 按星期规律（静默）；③ **当年无数据 / 文件坏 → 按星期规律近似，且必须可见**（列表徽标带 `≈` + 悬停写明"缺 N 年数据"）。🔴 兜底方向只能是更宽松，不能是更严格。
 
@@ -153,7 +155,7 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 |---|---|
 | FR-15.1 | 每个条目**必须且只能**属于一个周期（`DelayedItem.ScheduleCycleId`），默认「每天」；手动条目与系统接管条目无差别。🔴 **不存在"不选周期"的状态**。 |
 | FR-15.2 | 规则与延时**正交**：规则管"今天启不启动"，延时管"启动后等多久"，独立存储、独立生效。 |
-| FR-15.3 | 不匹配 → **不进本次执行计划**（不启动、不上进度面板、不计成功/失败），但**进本次运行日志**（状态 `Skipped` + 说明「今天不在启动周期内，未启动」）。全部条目都不匹配时：先写一份只含跳过项的归档，再走 FR-5.10 静默退出。 |
+| FR-15.3 | 不匹配 → **不进本次执行计划**（不启动、不上进度面板、不计成功/失败），但**进本次调度日志**（状态 `Skipped` + 说明「今天不在启动周期内，未启动」）。全部条目都不匹配时：先写一份只含跳过项的归档，再走 FR-5.10 静默退出。 |
 | FR-15.4 | 与 `Enabled` **两层独立**，次序不可换：`Enabled=false` 第一层就排除（**既不进计划、也不写日志** —— 那是用户自己关的，不是周期决定的）；周期不匹配第二层排除（**写日志、不启动**）。 |
 | FR-15.5 | 判定时刻 = 调度端本次启动当天的**日期**，全流程一次性取用，**跨午夜不重判**。 |
 | FR-15.6 | 向后兼容：旧 `config.json` 无周期字段 → 默认「每天」，行为与升级前一致，**不升配置版本**。 |
@@ -173,7 +175,7 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 | FR-15.23 | 延时弹窗下方**只用一行纯文字**说明所选周期包含哪些天：静态档 →「「周一至周五」包含周一、周二、…」；法定两档 →「**按国务院通知**」。🔴 **不放任何可点的东西** —— 原先那颗七宫格是 `WeekdayGrid` 的**可编辑**形态，看起来能点、点下去什么都不变（假交互比没有交互更糟）；**不显示**"今天会不会启动""未来 7 天"（那是列表页「本次登录预览」的职责，两处重复反而让用户不知道以哪个为准）。 |
 | FR-15.24 | 🔴 **归一化是程序的事，不是用户的事**：设置页「从文件导入」**必须能直接吃下上游 `holiday-cn` 的原始格式**（顶层 `days`），也能吃本地归一化格式（顶层 `workdays`/`restDays`）；两种格式的转换实现**只有一份**，下载通道与导入共用。 |
 | FR-15.25 | 🔴 **周期名不允许重名**：与另一自定义周期同名、或与内置五档同名都拒绝（列表里两枚一模一样的「每天」没人分得清）。判据 = 去首尾空白 + 忽略大小写；**判据一份（Core `CycleNames.IsTaken`）、落点两处**（界面即时红字 + 落盘前兜底），改名时**排除自己**。 |
-| FR-15.26 | 🔴 **今天被周期跳过的条目必须进运行日志**：`Skipped` + 说明「今天不在启动周期内，未启动」，延时照填、发起时刻留空；**只进日志、不进进度面板**（面板答"这次跑得怎么样"，它答"今天该不该跑"）。全部启用条目都被跳过时**照样写一份归档 + `current-run.json`** 再静默退出 —— 否则"今天为什么什么都没启动"在整个界面上没有任何答案（用户只看得到一个安静的早晨）。 |
+| FR-15.26 | 🔴 **今天被周期跳过的条目必须进调度日志**：`Skipped` + 说明「今天不在启动周期内，未启动」，延时照填、发起时刻留空；**只进日志、不进进度面板**（面板答"这次跑得怎么样"，它答"今天该不该跑"）。全部启用条目都被跳过时**照样写一份归档 + `current-run.json`** 再静默退出 —— 否则"今天为什么什么都没启动"在整个界面上没有任何答案（用户只看得到一个安静的早晨）。 |
 
 **行为规格（场景矩阵）**：
 
@@ -205,8 +207,8 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
   - 周期节 = 内置 5 档在前（编辑/删除置灰、右列「内置周期，禁止删除」）+ 自定义周期在后（右列「N 个条目在用，禁止删除」/「未使用」）；「包含哪些天」**逐天列出**（「每天」也摊成「周一、周二…周日」）—— 这一列要和上下行做比较，简化名省下的字换来的是用户得自己翻译一次（列表徽标仍用简写：「每天」，窄徽标里七个星期会撑爆列宽）。
   - **收起是默认值**：两节各自可能攒下十几行，常驻展开会把后面的节假日数据 / 调度 / 守卫全挤进滚动区，而节头那行已经把"这一节是干什么的"说完了。
   - 节假日节 = 每个年份一张卡片（`N 放假日 / M 补班日` + 重新下载 + 导出）+ 补齐缺失年份 + 自动检查开关 + 从文件导入 + 打开数据目录。
-- **列表列头一律左对齐，且与行内文字共用同一条左基线**（2026-09-23 批复 24，批复 25 扩到全部列头，批复 26 修掉内缩）：总览「最近一次开机调度」（时间 / 程序 / 延时 / 结果）、延时启动（# / 程序 / 延时 / 身份 / 启用 / 顺序 / 操作）、自启动项（程序 / 状态 / 操作）、服务与驱动（启动类型 / 状态，同一处表头管两页）、运行日志（程序 / 延时 / 结果 / 说明）。行内容本来就是左对齐的，表头居中会让**同一列上下两个基准**——列头看着像标题，值看着像另一回事。做法上**不写对齐属性**就是左对齐：`TextBlock` 默认 `HorizontalAlignment=Stretch` + `TextAlignment=Left`。
-  - 🔴 **左右内缩的算法（D105）**：列头 `Grid.Padding` 的左右 = 「列头与行**之间**」各层内缩之和；行容器（`ListViewItem`）一律 `Padding=0`，于是它就等于**行 `Grid` 的左右内缩**（自启动项 / 服务 / 运行日志 12，总览 4，延时启动 28 = 内层卡片 8 + 行 20）。卡片 `Border` 的 `Padding` 是列头与行**共同**吃掉的，**不能**在列头里再补一遍 —— 之前按"卡片 8 + 容器 8 + 行 12 = 28"写，列头就比行多缩 8。`ListView` 漏挂 `ItemContainerStyle` 会静默落到 WinUI 默认（`Padding 12,0`、`MinHeight 40`），行比列头多缩 12、行高还被撑到 40。
+- **列表列头一律左对齐，且与行内文字共用同一条左基线**（2026-09-23 批复 24，批复 25 扩到全部列头，批复 26 修掉内缩）：总览「最近一次开机调度」（时间 / 程序 / 延时 / 结果）、延时启动（# / 程序 / 延时 / 身份 / 启用 / 顺序 / 操作）、自启动项（程序 / 状态 / 操作）、服务与驱动（启动类型 / 状态，同一处表头管两页）、调度日志（程序 / 延时 / 结果 / 说明）。行内容本来就是左对齐的，表头居中会让**同一列上下两个基准**——列头看着像标题，值看着像另一回事。做法上**不写对齐属性**就是左对齐：`TextBlock` 默认 `HorizontalAlignment=Stretch` + `TextAlignment=Left`。
+  - 🔴 **左右内缩的算法（D105）**：列头 `Grid.Padding` 的左右 = 「列头与行**之间**」各层内缩之和；行容器（`ListViewItem`）一律 `Padding=0`，于是它就等于**行 `Grid` 的左右内缩**（自启动项 / 服务 / 调度日志 12，总览 4，延时启动 28 = 内层卡片 8 + 行 20）。卡片 `Border` 的 `Padding` 是列头与行**共同**吃掉的，**不能**在列头里再补一遍 —— 之前按"卡片 8 + 容器 8 + 行 12 = 28"写，列头就比行多缩 8。`ListView` 漏挂 `ItemContainerStyle` 会静默落到 WinUI 默认（`Padding 12,0`、`MinHeight 40`），行比列头多缩 12、行高还被撑到 40。
 - **节假日节的四条交互硬要求**（2026-09-23 真机反馈后补定，"点了没反应"的根因**不是事件没绑上**，是三条反馈通道各断了一环）：
   1. **错误必须看得见**：`SettingsViewModel.HasError` 是 `StatusText` 的派生属性，必须在 `OnStatusTextChanged` 里补 `OnPropertyChanged(nameof(HasError))`；漏了之后一切 `Fail()` 全部静默（`InfoBar` 的 `Message` 确实变了、`IsOpen` 却永远是初始的 `false`）。
   2. **取行不能依赖 `DataContext`**：行内按钮长在 `stc:SettingsCard` 的 `Content` 里，该区域 `DataContext` 继承链**不可靠** → 一律 `Tag="{x:Bind}"`，取行时 `Tag` 优先、`DataContext` 兜底。
@@ -300,10 +302,13 @@ Tests ──> Core (+ Management)
 | 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**只读**；四类 exe 同目录（D75） |
 | 配置 | `%APPDATA%\DelayStart\config.json` | Roaming，原子写 |
 | 日志 | `%LOCALAPPDATA%\DelayStart\logs\{scheduler,manager,launchbroker,guard}.log` | 2MB 轮转 |
-| 实时状态 | `%LOCALAPPDATA%\DelayStart\state\current-run.json` | 每次状态变化原子重写 |
-| 运行归档 | `%LOCALAPPDATA%\DelayStart\runs\<runId>.json` | 保留 30 次 |
+| 调度实时状态 | `%LOCALAPPDATA%\DelayStart\scheduler\current-run.json` | 每次状态变化原子重写（D116 起从 `state\` 迁入，`RuntimeDataMigrator`） |
+| 调度运行归档 | `%LOCALAPPDATA%\DelayStart\scheduler\archive\<runId>.json` | 保留 30 次（D116 起从 `runs\` 迁入） |
 | 守卫基线 | `%LOCALAPPDATA%\DelayStart\guard\baseline.json` | 上一轮扫描快照，原子写（D74） |
+| 守卫巡检归档 | `%LOCALAPPDATA%\DelayStart\guard\inspections\<yyyyMMdd-HHmmss>.json` | 每次巡检一份（D1=A 批复，D116），保留 30 次 |
 | UI 定位请求 | `%LOCALAPPDATA%\DelayStart\ui-request.json` | 守卫 → 管理端的跨进程载荷（读后即删，D74） |
+
+🔴 **运行时数据按进程归堆（D116）**：调度端的实时状态与归档收在 `scheduler\`、守卫的数据收在 `guard\`，目录名即进程名。旧布局（`state\`、`runs\`）由 `RuntimeDataMigrator` 在**管理端启动**（CLI / GUI 共用组合根，任何读写之前）一次性迁入；迁移幂等、失败只记 Warn 不阻塞启动、几个版本后整体移除。
 
 调试覆盖：`DELAYSTART_LOCAL_DIR` / `DELAYSTART_CONFIG_DIR`（仅开发测试用）。计划任务身份必须是交互用户——SYSTEM 下 `%APPDATA%` 解析到 systemprofile 且不报错。
 
@@ -351,7 +356,7 @@ Tests ──> Core (+ Management)
 
 `guardMode` / `guardMinutes` = 守卫档位（D74，默认 `onceAfterLogin` + 30）；`guardNotifyMode` = 守卫通知策略（D80，默认 `onChange`）。三个字段都是**枚举 / 白名单值一律字符串或数字落盘**（与 `notifyMode` / `theme` / `source` 一致）。`guardMode` 是**唯一**的"守卫该不该跑"的事实来源 —— 入口自检、`GuardService.RunOnce()`、`GuardTaskBootstrap` 三处都读它，不另存状态；`guardNotifyMode` 只决定"有变化时要不要发通知"（见 11.6），与"跑不跑"无关。
 
-`maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；连续失败次数不落盘，由 `FailureStreakService` 扫 `runs/` 现算（两端共用，调度端无状态）。
+`maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；连续失败次数不落盘，由 `FailureStreakService` 扫 `scheduler/archive/` 现算（两端共用，调度端无状态；D116 起新路径）。
 
 ### 7.5 管理端（App）设计
 
@@ -379,20 +384,20 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 
 **结论先行：调度器是基础设施进程，不是应用程序。无主窗口，默认隐形，跑完即退。**
 
-**信息分级（0–4）**：完全静默 → 托盘悬停一行摘要（127 字符上限、不换行；格式 `n/m 已启动 · 下一项 n 秒`，D3）→ 点击弹面板（右下角工作区、只读列表）→ **完成后自动弹出面板**（取代气泡，D71）→ 管理端运行日志。任何升级必须用户主动触发（失败除外）。
+**信息分级（0–4）**：完全静默 → 托盘悬停一行摘要（127 字符上限、不换行；格式 `n/m 已启动 · 下一项 n 秒`，D3）→ 点击弹面板（右下角工作区、只读列表）→ **完成后自动弹出面板**（取代气泡，D71）→ 管理端调度日志。任何升级必须用户主动触发（失败除外）。
 
 **面板 UI v2（D71）**：
 
 - **右上角一枚「钉」**（N8，2026-09-22 批复，取代旧"置顶 + ✕"两枚图标）：**未选中（默认）** = 失焦自动关闭（`WM_ACTIVATE` deactivated）—— 启动中仅收起（可随时从托盘再打开），完成态收起后进程退出（D3 批复 A）；**选中** = 按钮高亮（accent 底 + accent 描边）+ `HWND_TOPMOST`，失焦不再自动关闭；再次点击取消并立即退出置顶。
 - **完成后倒计时自动关闭**（逻辑不变，钉住**不**暂停）：全成功 10 秒 / 有失败 60 秒；**鼠标移入暂停**（`TrackMouseEvent(TME_LEAVE)` + `WM_MOUSELEAVE`），移出继续且**不重置**。
 - 🔴 **完成态关闭面板（倒计时归零或失焦）= 退出调度器整个应用**，托盘图标随之 `NIM_DELETE` 移除；启动中失焦只 `SW_HIDE` 不退出。
-- **按钮**：完成态底部两枚 `打开 DelayStart` + `运行日志`；启动中主按钮 `立即启动剩余 N 项` + 次行 `跳过剩余任务 / 运行日志`。倒计时卡只在完成态出现。
+- **按钮**：完成态底部两枚 `打开 DelayStart` + `调度日志`；启动中主按钮 `立即启动剩余 N 项` + 次行 `跳过剩余任务 / 调度日志`。倒计时卡只在完成态出现。
 - **绘制**：分段进度条按条目着色（绿/金/灰/红）。启动中**不再有脚下提示行**（原「下一项 N 秒后启动 · 剩余 M 项」与当前项 ETA、统计行重复，D71 删除，`PanelSnapshot.FooterText` 一并移除）。
 - 🔴 **刷新源**：GDI 自绘面板没有独立刷新源，重绘只在 `InvalidateRect` 时发生 —— 状态变化（`changed`）之外，启动中的实时秒数（当前项卡片右侧 ETA）由引擎 `RefreshLiveCountdown()` **按秒驱动**（节拍 250ms，用"下一项剩余秒数"做节流签名，变了才重绘）；完成态倒计时由面板自带的 1 秒 `WM_TIMER`(id=2) 驱动。漏了前者就表现为"几秒才跳一次"。
 
 **面板双主题**：跟随管理端设置主题（自动 = 读系统 `AppsUseLightTheme`），浅/深两套调色板在绘制帧解析。
 
-**右键菜单（两套，随状态切换）**：顶部是**灰显不可点的状态头**（`启动中 · 4/8 已启动 · 剩余 3 项` / `启动完成 · 成功 6 · 失败 1`）。启动中 → `打开 DelayStart`、`查看启动进度`、`立即启动剩余任务`、`跳过剩余任务并退出`（无等待条目时后两项置灰；跳过 = **不启动**这些条目，标 `Skipped` 落盘，在日志与时间轴里可见）。启动完毕 → `打开 DelayStart`、`查看运行日志`、**`退出`**（结束调度端进程、托盘消失；此时已无剩余条目，裸退出是安全的）。菜单与面板同名按钮的语义差异见上方入口表。菜单走 `SetForegroundWindow + TrackPopupMenu(TPM_RETURNCMD) + WM_NULL`（KB135788）。**提权门槛**：非管理员令牌（手动双击）静默退出并记日志，调度端唯一合法入口是 `RunLevel=Highest` 计划任务。
+**右键菜单（两套，随状态切换）**：顶部是**灰显不可点的状态头**（`启动中 · 4/8 已启动 · 剩余 3 项` / `启动完成 · 成功 6 · 失败 1`）。启动中 → `打开 DelayStart`、`查看启动进度`、`立即启动剩余任务`、`跳过剩余任务并退出`（无等待条目时后两项置灰；跳过 = **不启动**这些条目，标 `Skipped` 落盘，在日志与时间轴里可见）。启动完毕 → `打开 DelayStart`、`查看调度日志`、**`退出`**（结束调度端进程、托盘消失；此时已无剩余条目，裸退出是安全的）。菜单与面板同名按钮的语义差异见上方入口表。菜单走 `SetForegroundWindow + TrackPopupMenu(TPM_RETURNCMD) + WM_NULL`（KB135788）。**提权门槛**：非管理员令牌（手动双击）静默退出并记日志，调度端唯一合法入口是 `RunLevel=Highest` 计划任务。
 
 **通知约束（为什么完成通知走中转器，N1）**：elevated 进程发不了系统通知（Win10/11 抑制提权进程的 toast）；AOT 用不了 WinRT 通知 API（D24/D28）；Win11 气泡不进通知中心。⇒ 完成通知改由**通知中转器** `DelayStart.NotifyBroker.exe`（中完整性、非 AOT + WinRT 投影、跑完即退）代发，见 FR-14。旧托盘气泡（D18）已随 N5/D5 批复退役。
 
@@ -431,7 +436,7 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 
 **成功判定与失败策略（D17=D）**：软件不自动处理——保持接管 + 提醒持续升级（第 1/2 次可忽略；**≥3 次角标不自动消失、告警条不提供忽略**，唯一出口 `[移出延时启动]`）；连续失败次数由 `FailureStreakService` 现算。状态机 `waiting → launching → done/failed(→重试→failed 最终)`，另有 `waiting → skipped`（仅用户主动触发，不计失败）。
 
-**跨进程状态**：调度端每次状态变化原子重写 `state/current-run.json`（含 pid）；管理端用 `Process.GetProcessById` 探测判"进行中"（D19）。点击通知 → `DelayStart.exe --goto-log --run=<runId>`。
+**跨进程状态**：调度端每次状态变化原子重写 `scheduler/current-run.json`（含 pid；D116 起从 `state/` 迁来，旧路径由 `RuntimeDataMigrator` 迁移）；管理端用 `Process.GetProcessById` 探测判"进行中"（D19）。点击通知 → `DelayStart.exe --goto-log --run=<runId>`。
 
 **设置项**：托盘开关 / 通知三档 / 重试次数 / 托盘保留时长；短任务（<15s）不显示图标为固定行为。
 
@@ -608,7 +613,9 @@ Guard **不做 NativeAOT**（D75）：publish 形态**跟随管理端**（full �
 
 | 落点 | 内容 |
 |---|---|
-| 总览页「自启动项守卫」区 | 档位下拉（7 档）+ 同步状态一行 + 失败时的红色说明与「重试」按钮（左右结构） |
+| 总览页「后台任务」分节（D117） | 开机调度卡（右 = 状态「✓ 已启用」；失败态换「✕ 未就绪」+「重试创建」）+ 自启动项守卫卡（右 = 档位下拉，同步失败时左侧说明让位给红字错误 +「重试」）；各卡左两行文字 |
+| 总览页「最近记录」分节（D117） | 调度卡 + 守卫卡：左两行（汇总 / 时间，调度含失败标红）+ 右侧直达对应日志页；空态 = 左两行提示，链接保留 |
+| 守卫日志页（D115 引入 / D116 改版） | 巡检归档（`guard\inspections\*.json`）的按次分组：组标题 = 时间 + 汇总（`GuardRunSummaryText` 统一口径），组内明细 = 纠正 / 新增 / 失效 / 来源失败，最新在前、保留 30 次，「全部巡检 / 仅含变化与异常」筛选 + 打开日志目录（guard.log 双轨保留） |
 | 设置页「守卫」分节 | 通知策略（`OnChange` / `Never`，D80） |
 | 延时启动页的失效行 | 「启用」列显示"已失效"（悬停给原因）、「操作」列给「删除」/「转为手动」（目标程序已不存在时只剩「删除」，D81） |
 | CLI `--goto-startup [--source=registry\|startup-folder\|scheduled-task\|uwp\|stale\|delay]` | 在 `CliHost` **之前**分流（🔴 见 `pitfalls.md` 十一）；已有实例 ⇒ 写一次性请求文件 `ui-request.json` 后退出（**D82：文件本身即信号**，实例侧 `FileSystemWatcher` 收到就切页）；无实例 ⇒ 本次启动直接落到目标页 |

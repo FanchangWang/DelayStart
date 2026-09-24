@@ -224,16 +224,33 @@ internal static class Program
 
             if (wait == WaitObject0)
             {
-                // 秒退不判失败：进程确实创建过（CreateProcess 语义），成败复查交给调度端评估器。
-                _ = NativeMethods.GetExitCodeProcess(hProcess, out var exitCode);
-                log.Warn($"目标进程 PID {pid} 在 {job.WaitTimeoutMs} ms 等待窗口内自行退出（exitCode={exitCode}）。");
+                // 🔴 `Ok` 只表达"进程确实被创建出来"（CreateProcess 语义），**不表达运行成败** ——
+                // 目标成败全在这份结果 JSON 里，由调度端判定（见类注释）。
+                // 这里必须把**真实退出码**如实带出去：调度端拿它区分"显式非零退出码 = 启动失败"
+                // 与"退出码 0 的秒退 = 正常"（E4）。
+                // 🔴 读不到退出码时要**留 null**（= 未知），绝不能兜成 0：那会被调度端
+                // 当成"成功退出"，而实际是"不知道"—— 两者在 E4 下都判成功，但日志里必须能分开，
+                // 否则一次读取失败就永久消失在"退出码 0"里。
+                uint? exitCode = null;
+                if (NativeMethods.GetExitCodeProcess(hProcess, out var readExitCode))
+                {
+                    exitCode = readExitCode;
+                }
+                else
+                {
+                    log.Error($"目标进程 PID {pid} 已退出，但读取退出码失败（Win32Error={Marshal.GetLastWin32Error()}）："
+                        + "按退出码未知上报，调度端将走 E4 宽容路径并在日志中标注未确认。");
+                }
+
+                var exitCodeText = exitCode is { } code ? code.ToString(System.Globalization.CultureInfo.InvariantCulture) : "未知";
+                log.Warn($"目标进程 PID {pid} 在 {job.WaitTimeoutMs} ms 等待窗口内自行退出（exitCode={exitCodeText}）。");
                 return new BrokerLaunchResult
                 {
                     Ok = true,
                     ProcessId = (int)pid,
                     ExitedImmediately = true,
                     ExitCode = exitCode,
-                    Message = $"目标在 {job.WaitTimeoutMs} ms 等待窗口内自行退出（exitCode={exitCode}）。",
+                    Message = $"目标在 {job.WaitTimeoutMs} ms 等待窗口内自行退出（exitCode={exitCodeText}）。",
                 };
             }
 

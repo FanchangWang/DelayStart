@@ -337,18 +337,20 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
                 return LaunchOutcome.Failure(timeout);
             }
 
-            if (!result.Ok)
+            // 🔴 判定下沉到 Core 的 BrokerResultPolicy（纯逻辑、可单测）：核心是分清
+            // "显式非零退出码 = 启动失败"与"退出码 0 的秒退 = 正常"（E4）。放过非零码去走
+            // 延时复查的话，进程早已消失、ProbeProcess 会按 E4 返回 0 → 假成功（B4）。
+            var brokerFailure = BrokerResultPolicy.FailureReason(result);
+            if (brokerFailure is not null)
             {
-                var failure = DescribeBrokerFailure(result);
-                _log.Warn($"『{item.Name}』{failure}（按 D20 不提权回退）。");
+                var failure = $"『{item.Name}』{brokerFailure}（按 D20 不提权回退）。";
+                _log.Warn(failure);
                 return LaunchOutcome.Failure(failure);
             }
 
-            if (result.ExitedImmediately)
+            if (BrokerResultPolicy.SecondsExitNote(result) is { } secondsNote)
             {
-                _log.Warn(
-                    $"『{item.Name}』目标进程创建后 {BrokerExitWaitTimeout.TotalMilliseconds} ms 内自行退出"
-                    + $"（exitCode={result.ExitCode}）—— 创建成功但可能启动失败，等复查判定。");
+                _log.Warn($"『{item.Name}』{secondsNote}");
             }
 
             // 目标是 uiAccess 程序：系统的成文策略是 AppInfo 按调用方身份抬 IL
@@ -402,24 +404,6 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
 
         return null;
-    }
-
-    /// <summary>把中转器的失败结果转成给用户看/写日志的中文描述。</summary>
-    private static string DescribeBrokerFailure(BrokerLaunchResult result)
-    {
-        var message = $"中转器报告目标启动失败：ShellExecuteEx 失败，Win32Error={result.Win32Error}";
-
-        if (result.Win32Error == 740)
-        {
-            message += "（740 = ERROR_ELEVATION_REQUIRED：目标要求提权或清单校验未过）";
-        }
-
-        if (!string.IsNullOrWhiteSpace(result.Message))
-        {
-            message += $" —— {result.Message}";
-        }
-
-        return message;
     }
 
     private static void TryDeleteDirectory(string path)

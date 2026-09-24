@@ -14,8 +14,9 @@ using DelayStart.Management.Services;
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 总览页 ViewModel（UI v3，2026-09-21 批复；D115 两张"上次记录"卡片；D117 分节合并）：
-/// 延时列表来源计数 / 后台任务两卡（调度 + 守卫）/ 扫描来源计数 / 最近记录两卡。
+/// 总览页 ViewModel（UI v3，2026-09-21 批复；D115 两张"上次记录"卡片；D117 分节合并；
+/// D118 来源计数合并展示为「启动项」）：延时来源计数（蓝）/ 扫描来源计数（灰）/
+/// 后台任务两卡（调度 + 守卫）/ 最近记录两卡。
 /// </summary>
 /// <remarks>
 /// <para>

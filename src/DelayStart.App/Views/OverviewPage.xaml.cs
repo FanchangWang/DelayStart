@@ -1,13 +1,16 @@
 using DelayStart.App.Services;
 using DelayStart.App.ViewModels;
 
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「总览」页（UI v3，2026-09-21 批复；D117 分节合并为「后台任务」+「最近记录」）。
+/// 「总览」页（UI v3，2026-09-21 批复；D117 分节合并为「后台任务」+「最近记录」；
+/// D118 来源计数合并为「启动项」——蓝 = 接管（延时页）、灰 = 系统全部（自启动项页））。
 /// </summary>
 /// <remarks>
 /// 2026-09-21 批复：开机调度任务从开关改为状态卡（缺失自动补建、失败给重试按钮），
@@ -23,6 +26,12 @@ public sealed partial class OverviewPage : Page
     /// 与设置页 <c>SettingsPage._initialized</c> 同款做法。
     /// </summary>
     private bool _initialized;
+
+    /// <summary>
+    /// 启动项数字悬停用的手型光标（静态缓存，进程内共用一份；
+    /// <c>InputSystemCursor</c> 实现了 <c>IDisposable</c>，但不 Dispose —— 页面可能反复进出）。
+    /// </summary>
+    private static readonly InputCursor HandCursor = InputSystemCursor.Create(InputSystemCursorShape.Hand);
 
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
@@ -50,6 +59,19 @@ public sealed partial class OverviewPage : Page
         _initialized = true;
     }
 
+    /// <summary>「接管」点击（蓝数字，D118）：跳「延时启动」页。</summary>
+    private void OnGoDelay(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.DelayTag);
+
+    /// <summary>
+    /// 启动项数字悬停：光标换手型（tooltip 由 XAML 的 <c>ToolTipService.ToolTip</c> 提供）。
+    /// <c>ProtectedCursor</c> 是 protected 成员，设在本页（悬停元素的祖先）上即对子树生效，
+    /// 离开时置回 <see langword="null"/> 恢复默认箭头（2026-09-24 D118 微调）。
+    /// </summary>
+    private void OnLinkPointerEntered(object sender, PointerRoutedEventArgs e) => ProtectedCursor = HandCursor;
+
+    private void OnLinkPointerExited(object sender, PointerRoutedEventArgs e) => ProtectedCursor = null;
+
+    /// <summary>灰数字点击（D118）：跳对应来源的「自启动项」页。</summary>
     private void OnGoRegistry(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.ItemsRegistryTag);
 
     private void OnGoFolder(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.ItemsFolderTag);
@@ -57,9 +79,6 @@ public sealed partial class OverviewPage : Page
     private void OnGoTask(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.ItemsTaskTag);
 
     private void OnGoUwp(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.ItemsUwpTag);
-
-    /// <summary>「手动添加」chip：手动条目只存在于延时列表，跳延时启动页。</summary>
-    private void OnGoDelay(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.DelayTag);
 
     /// <summary>「查看调度日志 →」：跳调度日志页（2026-09-21 批复）。</summary>
     private void OnGoRuns(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.RunsTag);

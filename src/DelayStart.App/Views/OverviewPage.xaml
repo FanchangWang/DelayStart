@@ -18,20 +18,16 @@
             <Setter Property="FontSize" Value="14" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
-        <!-- 计数 chip：两排统一最小宽度 -->
-        <Style x:Key="CountChipStyle" TargetType="Button">
+        <!-- D118：可点击文字（数字 /「接管」「系统全部」图例）。透明、无边框、零内边距，
+             悬停时保留按钮模板自带的浅色反馈 —— 界面上看是文字，点起来是按钮。 -->
+        <Style x:Key="TextLinkButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="16,8" />
-            <Setter Property="MinWidth" Value="130" />
-            <Setter Property="HorizontalAlignment" Value="Stretch" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-        </Style>
-        <!-- chip 内容（数字 + 文字）整体居中 -->
-        <Style x:Key="ChipContentStyle" TargetType="StackPanel">
-            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Bottom" />
         </Style>
         <!-- D117：卡片标题行（后台任务 / 最近记录两区的卡都长这样） -->
         <Style x:Key="CardTitleStyle" TargetType="TextBlock">
@@ -48,7 +44,7 @@
     </Page.Resources>
 
     <!--
-        「总览」页 UI v3（2026-09-21 批复）+ v4（D115）+ v5（D117，2026-09-24 批复）：
+        「总览」页 UI v3（2026-09-21 批复）+ v4（D115）+ v5（D117）+ v6（D118，2026-09-24 批复）：
         ① 「最大延时」分节删除；顶部「上次运行有失败」InfoBar 删除 —— 失败由记录卡红字承担；
         ② 开机调度任务从开关改为**状态卡**（缺失自动补建，失败红字 +「重试创建」）；
         ③ D115：上次记录从逐条目小表换成汇总卡片；
@@ -56,6 +52,9 @@
            「后台任务」= 开机调度卡 + 自启动项守卫卡（左两行文字，右 = 状态 / 按钮 / 下拉）；
            「最近记录」= 调度卡 + 守卫卡（左 = 汇总 + 时间，右 = 直达链接；空态左两行提示，
            右侧链接保留）。各卡左侧最多两行文字；档位说明行与任务注册细节删除。
+        ⑤ D118：「延时启动」+「系统自启动项」两节合并为「启动项」（方案 C 基准）——
+           每来源一格「接管 / 系统全部」，蓝数与「接管」→ 延时启动页，
+           灰数与「系统全部」→ 对应来源的自启动项页；五格等宽占满卡片。
     -->
     <ScrollView>
         <StackPanel Padding="32,8,32,40" HorizontalAlignment="Stretch" MaxWidth="1000">
@@ -69,45 +68,240 @@
                     Text="延时启动的整体状态：条目分布、后台任务与最近一次调度、巡检的结果。" />
             </StackPanel>
 
-            <!-- ── 延时启动 ── -->
+            <!-- ── 启动项（D118：原「延时启动」+「系统自启动项」两节合并，方案 C 基准）──
+                 每个来源一格：蓝 = 被接管的延时条目数（点击 → 延时启动页），
+                 灰 = 系统实际存在的全部条目数（点击 → 对应来源的自启动项页）。
+                 可点性由颜色与悬停反馈表达，不渲染图例与说明文字（2026-09-24 批复）；
+                 手动添加只存在接管理，无系统侧。
+                 悬停 = tooltip 提示去向 + 手型光标（2026-09-24 微调；光标处理在 code-behind）。 -->
             <TextBlock
                 Margin="0,28,0,2"
                 Style="{StaticResource SectionHeaderStyle}"
-                Text="延时启动" />
+                Text="启动项" />
 
-            <!-- 延时区的 5 个 chip 都跳「延时启动」页 -->
-            <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10">
-                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedRegistry, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="注册表" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedFolder, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="启动文件夹" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedTask, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="计划任务" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedUwp, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="UWP Apps" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoDelay" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.DelayedManual, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="手动添加" />
-                    </StackPanel>
-                </Button>
-            </StackPanel>
+            <Border
+                Margin="0,12,0,0"
+                Padding="12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="7">
+                <!-- 5 个等宽格占满卡片宽度（2026-09-24 批复第 4 点） -->
+                <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 注册表 -->
+                    <Border
+                        Grid.Column="0"
+                        Padding="14,10"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel Spacing="2">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="注册表" />
+                            <!-- 数字行：蓝 = 接管（→ 延时启动页），灰 = 系统全部（→ 对应来源页）。
+                                 三元素底边对齐，"/" 以 3px 底边距补偿降部差与大数字同基线（2026-09-24 批复）。 -->
+                            <Grid ColumnSpacing="10" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button
+                                    Grid.Column="0"
+                                    Click="OnGoDelay"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开延时启动页">
+                                    <TextBlock FontSize="26" FontWeight="Bold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ViewModel.DelayedRegistry, Mode=OneWay}" />
+                                </Button>
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Margin="0,0,0,3"
+                                    VerticalAlignment="Bottom"
+                                    FontSize="14"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="/" />
+                                <Button
+                                    Grid.Column="2"
+                                    Click="OnGoRegistry"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开自启动项 · 注册表页">
+                                    <TextBlock Margin="0,0,0,2" FontSize="18" FontWeight="Bold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ScannedRegistry, Mode=OneWay}" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 启动文件夹 -->
+                    <Border
+                        Grid.Column="1"
+                        Padding="14,10"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel Spacing="2">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="启动文件夹" />
+                            <Grid ColumnSpacing="10" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button
+                                    Grid.Column="0"
+                                    Click="OnGoDelay"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开延时启动页">
+                                    <TextBlock FontSize="26" FontWeight="Bold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ViewModel.DelayedFolder, Mode=OneWay}" />
+                                </Button>
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Margin="0,0,0,3"
+                                    VerticalAlignment="Bottom"
+                                    FontSize="14"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="/" />
+                                <Button
+                                    Grid.Column="2"
+                                    Click="OnGoFolder"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开自启动项 · 启动文件夹页">
+                                    <TextBlock Margin="0,0,0,2" FontSize="18" FontWeight="Bold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ScannedFolder, Mode=OneWay}" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 计划任务 -->
+                    <Border
+                        Grid.Column="2"
+                        Padding="14,10"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel Spacing="2">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="计划任务" />
+                            <Grid ColumnSpacing="10" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button
+                                    Grid.Column="0"
+                                    Click="OnGoDelay"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开延时启动页">
+                                    <TextBlock FontSize="26" FontWeight="Bold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ViewModel.DelayedTask, Mode=OneWay}" />
+                                </Button>
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Margin="0,0,0,3"
+                                    VerticalAlignment="Bottom"
+                                    FontSize="14"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="/" />
+                                <Button
+                                    Grid.Column="2"
+                                    Click="OnGoTask"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开自启动项 · 计划任务页">
+                                    <TextBlock Margin="0,0,0,2" FontSize="18" FontWeight="Bold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ScannedTask, Mode=OneWay}" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- UWP Apps -->
+                    <Border
+                        Grid.Column="3"
+                        Padding="14,10"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel Spacing="2">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="UWP Apps" />
+                            <Grid ColumnSpacing="10" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button
+                                    Grid.Column="0"
+                                    Click="OnGoDelay"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开延时启动页">
+                                    <TextBlock FontSize="26" FontWeight="Bold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ViewModel.DelayedUwp, Mode=OneWay}" />
+                                </Button>
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Margin="0,0,0,3"
+                                    VerticalAlignment="Bottom"
+                                    FontSize="14"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="/" />
+                                <Button
+                                    Grid.Column="2"
+                                    Click="OnGoUwp"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开自启动项 · UWP Apps 页">
+                                    <TextBlock Margin="0,0,0,2" FontSize="18" FontWeight="Bold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ScannedUwp, Mode=OneWay}" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 手动添加：手动条目只存在于延时列表，没有系统侧数字（图例只有「接管」） -->
+                    <Border
+                        Grid.Column="4"
+                        Padding="14,10"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel Spacing="2">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="手动添加" />
+                            <Grid Margin="0,4,0,0">
+                                <Button
+                                    Click="OnGoDelay"
+                                    PointerEntered="OnLinkPointerEntered"
+                                    PointerExited="OnLinkPointerExited"
+                                    Style="{StaticResource TextLinkButtonStyle}"
+                                    ToolTipService.ToolTip="打开延时启动页">
+                                    <TextBlock FontSize="26" FontWeight="Bold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ViewModel.DelayedManual, Mode=OneWay}" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
 
             <!-- ── 后台任务（D117：原「开机调度任务」+「自启动项守卫」合并） ── -->
             <TextBlock
@@ -227,39 +421,6 @@
                     </StackPanel>
                 </Grid>
             </Border>
-
-            <!-- ── 系统自启动项 ── -->
-            <TextBlock
-                Margin="0,32,0,2"
-                Style="{StaticResource SectionHeaderStyle}"
-                Text="系统自启动项" />
-
-            <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10">
-                <Button Click="OnGoRegistry" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedRegistry, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="注册表" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoFolder" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedFolder, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="启动文件夹" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoTask" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedTask, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="计划任务" />
-                    </StackPanel>
-                </Button>
-                <Button Click="OnGoUwp" Style="{StaticResource CountChipStyle}">
-                    <StackPanel Style="{StaticResource ChipContentStyle}">
-                        <TextBlock FontSize="20" FontWeight="SemiBold" TextAlignment="Center" Text="{x:Bind ViewModel.ScannedUwp, Mode=OneWay}" />
-                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextAlignment="Center" Text="UWP Apps" />
-                    </StackPanel>
-                </Button>
-            </StackPanel>
 
             <!-- ── 最近记录（D117：原「上次开机调度」+「上次守卫巡检」合并。
                  卡片身份由右侧链接文字表达；空态 = 左两行提示，右侧链接保留 ——

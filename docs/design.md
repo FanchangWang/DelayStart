@@ -28,7 +28,7 @@
 | 注册表 HKCU Run | `HKCU\...\CurrentVersion\Run` | ✅ | ✅ | |
 | 注册表 HKLM Run | `HKLM\...\CurrentVersion\Run` | ✅ | ✅ | |
 | 注册表 HKLM 32 位 | `HKLM\Software\WOW6432Node\...\Run` | ✅ | ✅ | 标记写 `StartupApproved\Run32` |
-| 用户启动文件夹 | `%APPDATA%\...\Startup` | ✅ | ✅ | `.lnk` / `.url`，解析真实目标与图标 |
+| 用户启动文件夹 | `%APPDATA%\...\Startup` | ✅ | ✅ | 只认 `.lnk`（`.url` 是 Internet 快捷方式、调度端无启动路由，扫出来必然启动失败）；解析真实目标与图标 |
 | 系统启动文件夹 | `%PROGRAMDATA%\...\Startup` | ✅ | ✅ | |
 | 计划任务 | 带 Logon/Boot 触发器、排除 `\Microsoft\` 文件夹（判据带尾分隔符，见 pitfalls 二） | ✅ | ✅ | 禁用粒度细分任务级/触发器级（D67） |
 | UWP / Store 应用 | `AppModel\SystemAppData\<PFN>\<TaskId>` | ✅ | ⚠️ 受限 | 见下 |
@@ -71,9 +71,15 @@
 
 登录后 3s 由计划任务拉起（`onlogon` + `delay 0000:03` + `RunLevel=Highest`）；单实例 Mutex（FR-5.2）；时序 = 绝对时间点（FR-5.3，机制 5）；按 `DelaySeconds,SortOrder` 排序（FR-5.4）；逐条 try/catch（FR-5.5）；普通条目降权启动（机制 6，D40 调度端亲自降权）；管理员条目继承令牌不弹 UAC（FR-5.8）；成功判定 = 创建成功 + 1.5s 后复查 `HasExited`（机制 7）；无启用条目静默退出（FR-5.10；若"有启用条目、但今天全被周期跳过"，先写一份只含跳过项的运行记录再退出，FR-15.26）；跑完即退（FR-5.11）；实时状态写 `scheduler\current-run.json`（FR-5.12）+ 归档 `scheduler\archive\<runId>.json` 保留 30 次（FR-5.13，D116 起新路径）；源生成 JSON（FR-5.14）。
 
+🔴 **托盘创建失败不放弃调度**（B7）。托盘是"用户能看到什么"的通道，不是启动目标的能力；早先的实现是 `return 1`，等于"图标画不出来 ⇒ 今天什么都不启动"——一个纯 UI 故障被升级成功能停摆，而用户连原因都看不到（托盘本来就没出来）。现在降级为继续调度：到点照常启动、结果照常落盘，代价只是没有托盘菜单（也就没有「立即启动 / 跳过剩余」两个手动入口），记 Error 即可。判据：托盘是**展示层**，不是**执行层**的前置条件。
+
+🔴 **重试次数两端都要夹**（B7）。`NormalizeSettings` 原先只夹下界，手改成 `1000000` 就是"失败一百万次"——每个失败都要走一遍降权链 / 计划任务调用，一轮下来能把登录后几分钟全占死，用户看到的表现只是"登录后卡很久"。上界取 **5**，与设置页 NumberBox 的 `Maximum` 一一对应（`ConfigService.MaximumRetryCount` 是唯一来源，另有一处单测钉住两者的同步）——留"余量"只会制造"界面显示 5、配置实际是 8"的错位。
+
 ### FR-6 结果通知与追溯
 
-托盘图标显示进度（预计驻留 < 15s 不显示）；点击弹面板（失焦即关）；**默认仅失败时通知**（FR-6.3，D15）；失败通知合并一条（FR-6.4）；失败角标保留（FR-6.5）；点通知打开管理端调度日志并定位本次运行（FR-6.6，`--goto-log --run=<id>`）；**连续失败 ≥3 次：角标不自动消失、告警条不提供忽略、唯一出口是「移出延时启动」**（FR-6.8/6.9）；**永不自动恢复失败项的自启动**（FR-6.10）。
+托盘图标显示进度（预计驻留 < 15s 不显示）；点击弹面板（失焦即关）；**默认仅失败时通知**（FR-6.3，D15）；失败通知合并一条（FR-6.4）；失败角标保留（FR-6.5）；点通知打开管理端调度日志并定位本次运行（FR-6.6，`--goto-log --run=<id>`）；**永不自动恢复失败项的自启动**（FR-6.10）。
+
+🔴 **不统计连续失败次数**（2026-09-25 用户决定废除，原 FR-6.8/6.9 整条删除）。一次失败已经会产生系统通知与调度日志记录，事实说清楚就够了；再叠一层"你已经失败 N 次、唯一出口是移出延时启动"属于**替用户做决定**——怎么处理是用户的事，程序不评判。与三原则之一"不替用户做决定"一致。原 `FailureStreakService` / `FailureStreak` / `FailureSummary` / `FailureStreakLevel` / `FailureAlertPolicy` 已整体删除。
 
 ### FR-7 系统启动项（只读）
 
@@ -98,13 +104,32 @@
 
 `TaskService` API 创建/更新（FR-11.3）；`SchedulerTaskBootstrap` 每次启动自检自愈（D68）；卸载清理路径（FR-11.4，`--restore-all`）。守卫与调度两条任务的注册机制统一在 `ScheduledTaskGateway`（纯数据 `ScheduledTaskSpec` + 单份的逐字段比对 / 写入 / 删除，D114）；守卫按档位变化同步（D74 / D112），调度为固定规则（D39 / D113）。
 
-### FR-12 配置迁移与备份
+### FR-12 配置加载与备份
 
-v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出；损坏时保留坏文件副本并重建默认配置。
+只有一种格式（v2，本程序写出），**不做旧格式迁移**。`ConfigService.Load()` 的契约只有两条，没有第三条：
+
+| 输入 | 行为 |
+|---|---|
+| 文件**不存在** | 返回默认配置（首次运行的正常路径） |
+| 文件**存在但读不了 / 解析不了 / 版本高于本程序** | 先留一份带时间戳的坏文件副本，再抛 `StartupOperationException`；**由调用方决定中止或提示** |
+
+🔴 **刻意不降级成"损坏时用默认配置继续"**（2026-09-25 推翻原设计）。`config.json` 里存着"哪些系统自启动项正被本程序软禁用"，它是**唯一的还原依据**；损坏后返回一个空配置，等于让程序在"自己什么都不知道"的状态下继续工作：
+
+- **守卫**拿到空配置 ⇒ 安静地什么都不纠正，而注册表里的禁用标记还在（系统实际已偏离预期状态，且无任何迹象）
+- **界面**把所有接管项显示成"未接管" ⇒ 用户点「接管」就是**双重接管**
+- **任何写操作**都会把仅存的损坏副本覆盖掉，还原路径彻底消失
+
+静默的破坏比明确的失败危险得多（硬约束 7：失败必须可见）。各调用方按语义分别处理：**调度端**整体不调度（记 Error、退出码 0）；**守卫**跳过巡检并返回非 0（新增 `GuardRunReport.ConfigUnavailable`，与"用户关闭守卫"严格分开，否则日志会把一次故障记成用户设置）；**扫描**标记 `ScanResult.ConfigUnavailable`，界面据此**拒绝提供任何接管 / 释放入口**；**UI** 读路径把异常转成可见提示；**CLI** 打印错误并非 0 退出。
+
+唯一保留的前向保护：反序列化后 `config.Version > AppConfig.CurrentVersion` 即拒绝加载（防旧程序把新字段写丢）。缺失版本视为当前版本。
+
+导入导出不受影响。
 
 ### FR-13 自启动项守卫
 
 独立进程 `DelayStart.Guard.exe`，由登录触发的计划任务 `\DelayStartGuard` 拉起，跑一次巡检即退出（D74）。一次巡检 = **写回纠正**（把被应用写回启用的已接管项重新软禁用并复读确认，FR-13.1）→ **新增检测**（与基线差集，FR-13.2）→ **失效检测**（孤儿 / 目标已失效，FR-13.3）→ **更新基线**（用纠正后的结果，FR-13.4）。有变化且通知策略为「有变化时通知」时，发一条**系统通知**（右下角横幅 + 停留通知中心，标题显示 `DelayStart`）；点击经 `delaystart:` 协议拉起管理端并定位到对应来源页 /「延时启动」页（FR-13.5，D79/D80）。无变化（或策略为「从不通知」）静默退出，但**每次都写一行巡检汇总**（FR-13.6，守卫唯一的可审计痕迹；计数文案由 `GuardRunSummaryText.Build` 统一，D116）并**落一份结构化归档**（FR-13.10，D116 / D1=A 批复：`guard\inspections\<yyyyMMdd-HHmmss>.json`，内容 = `GuardRunReport` 原样序列化，含纠正明细 / 新增 / 失效条目名 —— 此前条目名只在系统通知里出现过；保留 30 份，写入失败只记 Warn 不阻塞巡检）。档位 `GuardMode`（`Disabled`/`OnceAfterLogin`/`Periodic`）+ `GuardMinutes`（10/30/60），默认 `OnceAfterLogin` + 30（FR-13.7）；通知策略 `GuardNotifyMode`（`OnChange`/`Never`），默认 `OnChange`（D80）。入口自检：非管理员 / 守卫已关闭 / 已有实例 → 写日志后静默退出（FR-13.8，D78）。管理端每次启动按当前设置同步 / 补建 / 删除守卫任务（FR-13.9）。
+
+🔴 **首扫不完整时不落基线**（2026-09-25）。更新基线时：本次整体失败的来源，其条目沿用**旧基线**里的记录（否则它们会从基线消失，等来源恢复时整批老条目被报成"新增"）；而**首次巡检**（没有旧基线可沿用）且有来源失败时，**本次不写基线**——那份残缺结果一旦成为正式基线，失败来源里的条目就永久消失：既不在基线里，也永远等不到被扫到，守卫从此对它们完全失明。代价是"下一轮等同首次运行、少一轮新增通知"（`GuardNewItemPolicy` 在无基线时本来就不报新增），换来的是不会永久失明。
 
 ### FR-14 调度完成系统通知（N1–N12，2026-09-22 批复）
 
@@ -247,11 +272,12 @@ v1（demo）→ v2 迁移补齐 `scope`/`enabled`/`originalState`；导入导出
 | E2 | 写 HKLM 标记被拒 | 指出具体条目与原因（受策略保护），不静默失败 |
 | E3 | 目标 exe 已卸载 | 标记"已失效"，不参与调度 |
 | E4/E5 | 启动后立即退出（码 0 / ≠0） | 成功（拉起已有实例）/ 失败（记退出码） |
+| E4b | **经中转器启动**的目标秒退 | 🔴 **拿到真实非零退出码 ⇒ 当场判失败**（B4，`BrokerResultPolicy`）。不能放行到 1.5s 复查：那时进程早已消失，`ProbeProcess` 按 E4 返回"码 0" → 假成功。退出码 0 的秒退仍按成功；退出码**读不到**（`GetExitCodeProcess` 失败）按 E4 宽容但日志写明"未知、这次退出没有被确认过" |
 | E6 | 降权失败 | **判本条目失败并继续，绝不提权回退**（D40/D20 红线） |
 | E7 | 延时已过期（remaining ≤ 0） | 立即启动 |
 | E8 | 调度端被重复拉起 | Mutex 拦截，立即退出零副作用 |
 | E9 | 调度端被强杀 | `current-run.json` 留现场，管理端识别"未正常完成" |
-| E10 | `config.json` 损坏 | 保留坏副本 + 重建默认 + 提示 |
+| E10 | `config.json` 损坏 | 保留坏副本 + **抛异常**（`ConfigVersionUnsupported` / `ConfigCorrupted` / `AccessDenied` 三类各自可辨）；调用方按 FR-12 各自处理，**绝不降级成空配置继续** |
 | E11 | 用户手动改回注册表 | 以用户改动为准并解除接管 |
 | E12 | 计划任务被外部删除 | 检测到即重建（D68 自检自愈） |
 | E13 | 连续 3 次登录失败 | 保持接管；角标常驻 + 告警条 + `[移出延时启动]` |
@@ -324,11 +350,12 @@ Tests ──> Core (+ Management)
 
 ### 7.2 Core 层
 
-`Abstractions/`（IAppConfigStore / IRunStateStore / IProcessLauncher / IClock / ILogSink——只有 `Write` 两个方法，Info/Warn/Error 走扩展方法以规避 CA1716）、`Models/`（含 `ProcessSnapshot`、`StartupFailureReason`，异常消息强制带 EntryId 的 `StartupOperationException`）、`Services/`（PathService / AtomicFileWriter / ConfigService / RunStateService / CommandLineService / LaunchTargetTypes / PowerShellHost / DelayCalculator / ItemKeyBuilder / StartupSortComparer / LaunchResultEvaluator / FailureStreakService / UwpParsingName）、`Serialization/`（JsonContext 源生成 + v1 迁移 DTO）、`Logging/`。
+`Abstractions/`（IAppConfigStore / IRunStateStore / IProcessLauncher / IClock / ILogSink——只有 `Write` 两个方法，Info/Warn/Error 走扩展方法以规避 CA1716）、`Models/`（含 `ProcessSnapshot`、`StartupFailureReason`，异常消息强制带 EntryId 的 `StartupOperationException`）、`Services/`（PathService / AtomicFileWriter / ConfigService / RunStateService / CommandLineService / LaunchTargetTypes / PowerShellHost / DelayCalculator / ItemKeyBuilder / StartupSortComparer / LaunchResultEvaluator / BrokerResultPolicy / UwpParsingName）、`Serialization/`（JsonContext 源生成）、`Logging/`。
 
 ### 7.3 关键机制（编码必须照做）
 
 1. **稳定主键**：`ItemKeyBuilder.Build(source, scope, sourceKey)` 三元组小写；手动条目 `manual:{Guid:N}`。禁止 `(Name, Source)` 二元组判断（坑 6）。
+   - 🔴 **`sourceKey` 的构成按来源不同**：注册表 = 键值名；启动文件夹 = 快捷方式文件名；计划任务 = 任务完整路径；**UWP = `PackageFamilyName + "!" + TaskId`**（`TaskId` 是**包内**唯一标识，不同包可以各有同一个 `TaskId`，只用它建键会让两个应用撞成同一条 —— D120 的 B8 项）。`SourceKey` 字段仍只存包内的 `TaskId`（与 `SourceDetail` 的包名合看才完整）。
 2. **StartupApproved 键名三级回退**：原名 → `+.exe` → 去扩展名，全未命中才算启用（坑 1）。
 3. **scope 显式枚举**：`StartupScope { None, Hkcu, Hklm, HklmWow, UserFolder, SystemFolder }`，禁止字符串猜 hive（坑 5）。
 4. **软禁用矩阵**：Registry→`StartupApproved\Run`（WOW64→`Run32`）；Folder→`StartupFolder`；ScheduledTask→任务级/触发器级细分（D67：单触发器切任务级；多触发器只切登录/启动触发器且**全部**切、任务级已关时禁用动作一个字节都不动、启用先开任务级）；UWP→`State=0/2`；Manual→无动作。
@@ -356,7 +383,7 @@ Tests ──> Core (+ Management)
 
 `guardMode` / `guardMinutes` = 守卫档位（D74，默认 `onceAfterLogin` + 30）；`guardNotifyMode` = 守卫通知策略（D80，默认 `onChange`）。三个字段都是**枚举 / 白名单值一律字符串或数字落盘**（与 `notifyMode` / `theme` / `source` 一致）。`guardMode` 是**唯一**的"守卫该不该跑"的事实来源 —— 入口自检、`GuardService.RunOnce()`、`GuardTaskBootstrap` 三处都读它，不另存状态；`guardNotifyMode` 只决定"有变化时要不要发通知"（见 11.6），与"跑不跑"无关。
 
-`maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；连续失败次数不落盘，由 `FailureStreakService` 扫 `scheduler/archive/` 现算（两端共用，调度端无状态；D116 起新路径）。
+`maxDelaySeconds` / `trayKeepSeconds` / `showTrayIcon` / 降权两开关**已从模型删除**（不再可配）。运行归档 `RunRecord`：`runId / startedAt / finishedAt / completedNormally / items[{id,name,delay,state,launchedAt,reason,attempts}]`；🔴 **不统计连续失败次数**（2026-09-25 废除，见 FR-6），因此归档里也没有任何跨轮次累计字段。
 
 ### 7.5 管理端（App）设计
 
@@ -434,7 +461,7 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 
 **文案矩阵（面板内）**：全部成功 `启动完成` + `全部 N 项已启动`；部分失败 `完成 · N 项失败` + `成功 X · 失败 Y`（失败明细在中部卡片列第一条）；倒计时行只写 `面板 N 秒后自动关闭`（不重复统计数字）。
 
-**成功判定与失败策略（D17=D）**：软件不自动处理——保持接管 + 提醒持续升级（第 1/2 次可忽略；**≥3 次角标不自动消失、告警条不提供忽略**，唯一出口 `[移出延时启动]`）；连续失败次数由 `FailureStreakService` 现算。状态机 `waiting → launching → done/failed(→重试→failed 最终)`，另有 `waiting → skipped`（仅用户主动触发，不计失败）。
+**成功判定与失败策略（D17=D）**：软件不自动处理——保持接管，把失败事实通过系统通知 + 调度日志告诉用户，**不统计连续失败次数、不做提醒升级**（2026-09-25 废除，见 FR-6）。状态机 `waiting → launching → done/failed(→重试→failed 最终)`，另有 `waiting → skipped`（用户主动跳过 / 防双启动命中 / 今天不在启动周期内，均不计失败）。
 
 **跨进程状态**：调度端每次状态变化原子重写 `scheduler/current-run.json`（含 pid；D116 起从 `state/` 迁来，旧路径由 `RuntimeDataMigrator` 迁移）；管理端用 `Process.GetProcessById` 探测判"进行中"（D19）。点击通知 → `DelayStart.exe --goto-log --run=<runId>`。
 

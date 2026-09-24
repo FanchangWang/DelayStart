@@ -12,7 +12,7 @@
 - `StartupApproved` 标记为 12 字节 REG_BINARY：`[0]=0x03` 禁用 / `[1..3]=0` / `[4..11]=FILETIME`；启用 = `DeleteValue`，原 `Run` 值从未动过。
 - Run 值解析：带引号取到第二个 `"`；否则按第一个空格切，**仅当后半段以 `/` 或 `-` 开头才认定是参数**（防 `C:\Program Files\...` 被切坏）。
 - 全部按 `RegistryView.Registry64` 打开；WOW6432Node 走**显式子键路径**，不用 `RegistryView.Registry32`。
-- 启动文件夹扫 `*.lnk`/`*.url`；`.lnk` 目标解析用 `IShellLinkW` + `IPersistFile`。
+- 启动文件夹**只扫 `*.lnk`**（`.url` 是 Internet 快捷方式，调度端无启动路由 → 扫出来必然启动失败）；`.lnk` 目标解析用 `IShellLinkW` + `IPersistFile`。
 
 ## 二、计划任务与调度端
 

@@ -14,7 +14,7 @@
 | 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
 | 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· **.NET 10 + 非 AOT**（守卫端）· xUnit v3（测试） |
 | 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
-| 测试 | `.\scripts\test.ps1` → **643 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 测试 | `.\scripts\test.ps1` → **668 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
 | 状态 | 功能完整（含守卫、通知中转器、FR-15 调度周期），进安装包阶段；守卫 / D82 / **N1–N12 通知与面板拆分** / **FR-15 真机验收**均待真机验收；文档与代码同步 |
 
 ---
@@ -55,12 +55,12 @@
 | 延时计算（绝对时刻语义） | `Services/DelayCalculator.cs` |
 | 条目稳定主键 | `Services/ItemKeyBuilder.cs` |
 | 路径布局（唯一来源，禁止硬编码） | `Services/PathService.cs` |
-| 配置读写与迁移 | `Services/ConfigService.cs` + `Models/AppConfig.cs` |
+| 配置读写（**不做旧格式迁移**） | `Services/ConfigService.cs` + `Models/AppConfig.cs` |
 | 实时状态 / 运行归档 | `Services/RunStateService.cs` |
-| 失败连击计算 | `Services/FailureStreakService.cs` |
 | JSON 源生成 | `Serialization/JsonContext.cs` |
 | 日志落地 | `Logging/FileLogger.cs` |
 | 启动结果判定 | `Services/LaunchResultEvaluator.cs` + `Launch/` |
+| 中转器回执判定（秒退 / 显式非零退出码，E4 边界，B4） | `Services/BrokerResultPolicy.cs` |
 | uiAccess 作业 / 结果契约 | `Launch/BrokerContracts.cs` |
 | 目标 → 进程名推导（防双启动） | `Services/LaunchTargetResolver.cs` |
 | "同目标已在跑 ⇒ 跳过"判定 | `Services/DuplicateLaunchPolicy.cs` |
@@ -165,7 +165,7 @@
 - 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + 643 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + 668 个用例全绿。
 
 ---
 
@@ -196,7 +196,7 @@
 | `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-5.3`、`NFR-1.2` |
 | `E-x` | 异常场景矩阵 | `docs/design.md` 五 | `E13` |
 | `R-x` | 技术风险（已全部闭环） | `docs/decisions.md` 附表 | `R11` |
-| `D-x` | 决策点（D1–D118） | `docs/decisions.md` | `D17` |
+| `D-x` | 决策点（D1–D121） | `docs/decisions.md` | `D17` |
 | `坑 x` | 技术陷阱（编号 1–10 沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
 
 规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；**新踩的坑必须追加进 `pitfalls.md`**。
@@ -208,7 +208,7 @@
 | 文档 | 回答什么问题 | 什么时候必须改 |
 |---|---|---|
 | `docs/design.md` | 当前方案单一来源：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发流程 | 需求 / 机制 / 交互行为发生变化 |
-| `docs/decisions.md` | 每个决策的结论与取舍（D1–D118）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
+| `docs/decisions.md` | 每个决策的结论与取舍（D1–D121）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
 | `docs/pitfalls.md` | 技术陷阱：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 | 踩到新坑，或旧坑被修掉 / 定性变化 |
 | `docs/development.md` | 面向人：环境、构建测试、调试、发布打包、真机验收 | 环境要求 / 命令 / 流程变化 |
 | `docs/winget.md` | 上架 winget 的**手工提交教程**：提交什么、四个清单模板、流程步骤、自动化 | 包标识 / 提交形态 / 依赖声明 / 发布流程变化（决策见 D110） |

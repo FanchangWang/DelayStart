@@ -14,6 +14,13 @@ using Windows.ApplicationModel.DataTransfer;
 
 namespace DelayStart.App.ViewModels;
 
+/// <summary>一条开源库致谢（「关于」页开源节，D115）。</summary>
+/// <param name="Name">库名。</param>
+/// <param name="Url">项目主页。</param>
+/// <param name="Usage">本程序用它做什么。</param>
+/// <param name="License">许可证。</param>
+public sealed record OpenSourceLibrary(string Name, string Url, string Usage, string License);
+
 /// <summary>
 /// 「关于」页的 ViewModel（2026-09-24 批复 28）。
 /// </summary>
@@ -102,6 +109,34 @@ public sealed partial class AboutViewModel : ObservableObject
     /// <summary>项目主页。</summary>
     public string ProjectUrl { get; } = "https://github.com/FanchangWang/DelayStart";
 
+    /// <summary>本程序引用的开源库（D115，2026-09-24 用户要求）。</summary>
+    /// <remarks>
+    /// 🔴 刻意**不写版本号**：版本写在 <c>Directory.Packages.props</c>（CPM）里，
+    /// 界面上再抄一份就是两处维护，且用户真正关心的是"用了谁的什么东西"，不是版本。
+    /// 顺序按"离界面近 → 远"：UI 框架 → MVVM → 控件 → DI → 计划任务 → 测试。
+    /// </remarks>
+    public IReadOnlyList<OpenSourceLibrary> Libraries { get; } =
+    [
+        new("Windows App SDK（WinUI 3）", "https://github.com/microsoft/WindowsAppSDK", "应用框架与整个界面", "MIT"),
+        new("CommunityToolkit.Mvvm", "https://github.com/CommunityToolkit/dotnet", "MVVM 框架（源生成器）", "MIT"),
+        new("CommunityToolkit.WinUI", "https://github.com/CommunityToolkit/Windows", "设置页与关于页的卡片控件（SettingsCard）", "MIT"),
+        new("Microsoft.Extensions.DependencyInjection", "https://github.com/dotnet/runtime", "依赖注入容器", "MIT"),
+        new("TaskScheduler", "https://github.com/dahall/TaskScheduler", "Windows 计划任务的注册与读取", "MIT"),
+        new("xUnit v3", "https://github.com/xunit/xunit", "单元测试框架", "Apache-2.0"),
+    ];
+
+    /// <summary>节假日数据的上游项目主页（D115，2026-09-24 用户要求）。</summary>
+    public string HolidaySourceUrl { get; } = "https://github.com/NateScarlet/holiday-cn";
+
+    /// <summary>节假日数据来源的致谢说明（设置页的数据也来自这里）。</summary>
+    /// <remarks>
+    /// 🔴 与 README 的「开源致谢」节是**同一套口径**：holiday-cn 是国务院放假安排的
+    /// 社区整理版，本程序的「法定工作日 / 法定节假日」两档周期判定全部吃它的数据。
+    /// </remarks>
+    public string HolidayCredit { get; } =
+        "法定节假日数据来自 NateScarlet/holiday-cn —— 依据国务院历年公布的放假安排整理，"
+        + "本程序「法定工作日 / 法定节假日」周期判定用的就是这份数据。感谢其维护者与贡献者。";
+
     /// <summary>最后一次操作失败的原因；空串表示没有错误。</summary>
     [ObservableProperty]
     public partial string StatusText { get; set; } = string.Empty;
@@ -183,15 +218,20 @@ public sealed partial class AboutViewModel : ObservableObject
     /// <c>DeElevatedProcessLauncher</c>（降权令牌 + 父进程），但它的服务对象是"启动用户程序"，
     /// 为一条"打开网页"引入跨进程启动器不划算。
     /// </remarks>
-    public void OpenProjectPage()
+    public void OpenProjectPage() => OpenUrl(ProjectUrl, "项目主页");
+
+    /// <summary>用默认浏览器打开一个网址（开源库 / 节假日数据源与项目主页共用，D115）。</summary>
+    /// <param name="url">目标网址。</param>
+    /// <param name="what">出问题时提示里的称呼。</param>
+    public void OpenUrl(string url, string what = "链接")
     {
         try
         {
-            Process.Start(new ProcessStartInfo { FileName = ProjectUrl, UseShellExecute = true });
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
         }
         catch (Win32Exception ex)
         {
-            Fail($"打开项目主页失败：{ex.Message}");
+            Fail($"打开{what}失败：{ex.Message}");
         }
     }
 

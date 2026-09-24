@@ -170,6 +170,56 @@
                     </stc:SettingsCard>
                 </StackPanel>
 
+                <!-- 引用的开源库（D115，2026-09-24 用户要求）：每库一张卡，右侧直达项目主页 -->
+                <TextBlock
+                    Margin="0,16,0,0"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="引用的开源库：" />
+
+                <StackPanel Margin="0,6,0,0" Spacing="2">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Libraries, Mode=OneTime}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:OpenSourceLibrary">
+                                <stc:SettingsCard
+                                    Margin="0,0,0,2"
+                                    Description="{x:Bind Usage}"
+                                    Header="{x:Bind Name}">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            VerticalAlignment="Center"
+                                            Text="{x:Bind License}" />
+                                        <Button Click="OnOpenLibrary" Content="打开" Tag="{x:Bind Url}" />
+                                    </StackPanel>
+                                </stc:SettingsCard>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- 节假日数据来源（D115）：判定「法定工作日 / 法定节假日」两档周期吃的就是这份数据 -->
+                <TextBlock
+                    Margin="0,16,0,0"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="节假日数据：" />
+
+                <stc:SettingsCard
+                    Margin="0,6,0,0"
+                    Description="{x:Bind ViewModel.HolidayCredit, Mode=OneTime}"
+                    Header="NateScarlet/holiday-cn">
+                    <Button Click="OnOpenHolidaySource" Content="打开" />
+                </stc:SettingsCard>
+
+                <TextBlock
+                    Margin="0,10,0,0"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    TextWrapping="Wrap"
+                    Text="感谢以上开源项目的作者与贡献者 —— 没有这些轮子，这个程序不会长这么快。" />
+
                 <TextBlock
                     Margin="0,28,0,0"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"

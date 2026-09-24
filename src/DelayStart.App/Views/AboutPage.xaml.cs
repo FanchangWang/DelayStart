@@ -57,4 +57,17 @@ public sealed partial class AboutPage : Page
 
     /// <summary>用默认浏览器打开项目主页。</summary>
     private void OnOpenProjectPage(object sender, RoutedEventArgs e) => ViewModel.OpenProjectPage();
+
+    /// <summary>用默认浏览器打开一个开源库的项目主页（URL 从行的 <c>Tag</c> 上取，同 <see cref="OnOpenFolder"/>）。</summary>
+    private void OnOpenLibrary(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string url })
+        {
+            ViewModel.OpenUrl(url, "开源库主页");
+        }
+    }
+
+    /// <summary>用默认浏览器打开节假日数据源（holiday-cn）的项目主页。</summary>
+    private void OnOpenHolidaySource(object sender, RoutedEventArgs e) =>
+        ViewModel.OpenUrl(ViewModel.HolidaySourceUrl, "节假日数据源主页");
 }

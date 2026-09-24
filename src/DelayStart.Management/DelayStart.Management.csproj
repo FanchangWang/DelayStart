@@ -17,6 +17,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 计划任务机制的内部纯函数（如 ScheduledTaskGateway.SameAccount）要进单测；
+         只对测试程序集开放 internal 可见性，不扩大公共 API 面。 -->
+    <InternalsVisibleTo Include="DelayStart.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- 计划任务的创建 / 更新 / 查询（FR-11.3 明确要求用 API 而非 schtasks.exe）。
          注意包 id 是 TaskScheduler，理由见 Directory.Packages.props 的注释。 -->
     <PackageReference Include="TaskScheduler" />

@@ -65,11 +65,26 @@ public sealed class PathService
     /// <summary>日志目录。</summary>
     public string LogsRoot => Path.Combine(LocalRoot, "logs");
 
-    /// <summary>实时状态目录。</summary>
-    public string StateRoot => Path.Combine(LocalRoot, "state");
+    /// <summary>
+    /// 调度端的运行时数据目录（D116）：<c>{LocalRoot}\scheduler</c>。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 D116 起运行时数据**按进程归堆**：调度端的实时状态与归档都收进这里
+    /// （原先平铺的 <c>state\</c> 与 <c>runs\</c> 由 <see cref="RuntimeDataMigrator"/> 迁入），
+    /// 守卫的数据留在 <see cref="GuardRoot"/> —— 目录名即进程名，与 logs\ 下的文件名对得上。
+    /// </remarks>
+    public string SchedulerRoot => Path.Combine(LocalRoot, "scheduler");
 
-    /// <summary>运行归档目录。</summary>
-    public string RunsRoot => Path.Combine(LocalRoot, "runs");
+    /// <summary>运行归档目录（D116）：<c>{LocalRoot}\scheduler\archive</c>，每份 <c>{runId}.json</c>。</summary>
+    public string SchedulerArchiveRoot => Path.Combine(SchedulerRoot, "archive");
+
+    /// <summary>
+    /// 守卫巡检归档目录（D116）：<c>{LocalRoot}\guard\inspections</c>，每次巡检一份
+    /// <c>{yyyyMMdd-HHmmss}.json</c>。
+    /// </summary>
+    /// <remarks>目录由写入方按需创建（<c>AtomicFileWriter.WriteAllText</c> 自带建目录），
+    /// 与 <see cref="GuardRoot"/> 同口径，不进 <see cref="EnsureCreated"/>。</remarks>
+    public string GuardInspectionsRoot => Path.Combine(GuardRoot, "inspections");
 
     /// <summary>配置文件完整路径（<c>config.json</c>）。</summary>
     public string ConfigFilePath => Path.Combine(ConfigRoot, "config.json");
@@ -124,8 +139,8 @@ public sealed class PathService
     /// </remarks>
     public string UiRequestFilePath => Path.Combine(LocalRoot, "ui-request.json");
 
-    /// <summary>实时状态文件完整路径（<c>current-run.json</c>）。</summary>
-    public string CurrentRunFilePath => Path.Combine(StateRoot, "current-run.json");
+    /// <summary>调度实时状态文件完整路径（<c>scheduler\current-run.json</c>；D116 起从 <c>state\</c> 迁来）。</summary>
+    public string CurrentRunFilePath => Path.Combine(SchedulerRoot, "current-run.json");
 
     /// <summary>管理端可执行文件完整路径，注册计划任务时不用它（计划任务指向调度端），仅用于诊断展示。</summary>
     public string ManagerExecutablePath => Path.Combine(InstalledRoot, ManagerExecutableName);
@@ -145,10 +160,10 @@ public sealed class PathService
     /// <summary>全部**允许写入**的根目录。安装目录不在此列，这是 NFR-6.7 的可执行表述。</summary>
     public IReadOnlyList<string> WritableRoots => [LocalRoot, ConfigRoot];
 
-    /// <summary>取某次运行的归档文件路径。</summary>
+    /// <summary>取某次运行的归档文件路径（<c>scheduler\archive\{runId}.json</c>，D116）。</summary>
     /// <param name="runId">运行标识，格式 <c>yyyyMMdd-HHmmss</c>。</param>
     /// <returns>归档文件完整路径。</returns>
-    public string GetRunFilePath(string runId) => Path.Combine(RunsRoot, $"{runId}.json");
+    public string GetRunFilePath(string runId) => Path.Combine(SchedulerArchiveRoot, $"{runId}.json");
 
     /// <summary>取某一年份的法定日历文件路径（文件不一定存在）。</summary>
     /// <param name="year">年份，如 2026。</param>
@@ -173,8 +188,8 @@ public sealed class PathService
         Directory.CreateDirectory(LocalRoot);
         Directory.CreateDirectory(ConfigRoot);
         Directory.CreateDirectory(LogsRoot);
-        Directory.CreateDirectory(StateRoot);
-        Directory.CreateDirectory(RunsRoot);
+        Directory.CreateDirectory(SchedulerRoot);
+        Directory.CreateDirectory(SchedulerArchiveRoot);
     }
 
     private static string ResolveRoot(string? explicitValue, string environmentVariable, Environment.SpecialFolder fallback)

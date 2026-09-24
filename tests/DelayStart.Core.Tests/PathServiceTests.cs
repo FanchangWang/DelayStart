@@ -80,20 +80,22 @@ public sealed class PathServiceTests : IDisposable
         Assert.Equal(Path.Combine(paths.ConfigRoot, "config.json"), paths.ConfigFilePath);
         Assert.Equal(Path.Combine(paths.LogsRoot, "scheduler.log"), paths.SchedulerLogPath);
         Assert.Equal(Path.Combine(paths.LogsRoot, "manager.log"), paths.ManagerLogPath);
-        Assert.Equal(Path.Combine(paths.StateRoot, "current-run.json"), paths.CurrentRunFilePath);
+        Assert.Equal(Path.Combine(paths.SchedulerRoot, "current-run.json"), paths.CurrentRunFilePath);
         Assert.Equal(Path.Combine(paths.LocalRoot, "logs"), paths.LogsRoot);
-        Assert.Equal(Path.Combine(paths.LocalRoot, "state"), paths.StateRoot);
-        Assert.Equal(Path.Combine(paths.LocalRoot, "runs"), paths.RunsRoot);
+        Assert.Equal(Path.Combine(paths.LocalRoot, "scheduler"), paths.SchedulerRoot);
+        Assert.Equal(Path.Combine(paths.SchedulerRoot, "archive"), paths.SchedulerArchiveRoot);
+        Assert.Equal(Path.Combine(paths.GuardRoot, "inspections"), paths.GuardInspectionsRoot);
     }
 
     [Fact]
-    public void GetRunFilePath_PlacesArchiveUnderRunsRoot()
+    public void GetRunFilePath_PlacesArchiveUnderSchedulerArchiveRoot()
     {
+        // D116：运行归档收进 scheduler\archive\（原 runs\ 由 RuntimeDataMigrator 迁移）。
         var paths = new PathService(_temp.Combine("local"), _temp.Combine("config"), _temp.Path);
 
         var runFilePath = paths.GetRunFilePath("20260919-084112");
 
-        Assert.Equal(Path.Combine(paths.RunsRoot, "20260919-084112.json"), runFilePath);
+        Assert.Equal(Path.Combine(paths.SchedulerArchiveRoot, "20260919-084112.json"), runFilePath);
     }
 
     [Fact]
@@ -119,8 +121,8 @@ public sealed class PathServiceTests : IDisposable
         Assert.True(Directory.Exists(paths.LocalRoot));
         Assert.True(Directory.Exists(paths.ConfigRoot));
         Assert.True(Directory.Exists(paths.LogsRoot));
-        Assert.True(Directory.Exists(paths.StateRoot));
-        Assert.True(Directory.Exists(paths.RunsRoot));
+        Assert.True(Directory.Exists(paths.SchedulerRoot));
+        Assert.True(Directory.Exists(paths.SchedulerArchiveRoot));
     }
 
     [Fact]

@@ -48,7 +48,7 @@ public sealed class RunStateService : IRunStateStore
     public string CurrentStateFilePath => _paths.CurrentRunFilePath;
 
     /// <inheritdoc />
-    public string ArchiveRoot => _paths.RunsRoot;
+    public string ArchiveRoot => _paths.SchedulerArchiveRoot;
 
     /// <summary>按本地时间生成运行标识，格式 <c>yyyyMMdd-HHmmss</c>，同时用作归档文件名。</summary>
     /// <param name="localTime">本次运行的开始时间。</param>
@@ -141,7 +141,7 @@ public sealed class RunStateService : IRunStateStore
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
             {
-                // 单份归档读不出来不该让整个运行日志页空掉（FR-1.4 的同一条原则）。
+                // 单份归档读不出来不该让整个调度日志页空掉（FR-1.4 的同一条原则）。
                 _log.Warn(ex, $"运行归档无法读取，已跳过：{file}");
             }
         }

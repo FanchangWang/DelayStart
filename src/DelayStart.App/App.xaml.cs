@@ -1,4 +1,5 @@
 ﻿using DelayStart.App.Services;
+using DelayStart.Core.Services;
 using DelayStart.Management.Services;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -45,7 +46,7 @@ public partial class App : Application, IDisposable
 
     /// <summary>构造应用对象。</summary>
     /// <param name="services">共享容器，由 <see cref="Program"/> 构建一次后传入。</param>
-    /// <param name="openRunsLogOnLaunch">启动后是否直接切到「运行日志」页。</param>
+    /// <param name="openRunsLogOnLaunch">启动后是否直接切到「调度日志」页。</param>
     /// <param name="openStartupOnLaunch">启动后是否按待处理的定位请求切到「自启动项」的指定位置。</param>
     public App(
         IServiceProvider services,
@@ -79,6 +80,11 @@ public partial class App : Application, IDisposable
     /// </remarks>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        // 旧目录一次性迁移（D116）：state\ / runs\ → scheduler\。
+        // 🔴 放在**最前面** —— 之后的调度任务保障、页面加载都会读 current-run.json 与归档，
+        //    必须让它们读到的已经是新结构。幂等、失败只记日志不阻塞启动。
+        _services.GetRequiredService<RuntimeDataMigrator>().MigrateIfNeeded();
+
         // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测一次，缺失即自动补建。
         // 🔴 放在解析主窗口**之前** —— 总览页进入时也会检测补建（状态卡），
         //    这里先跑一轮可以把最常见的"任务被删"在页面显示前就修掉。
@@ -127,7 +133,7 @@ public partial class App : Application, IDisposable
         // 启动期的落点：本次进程自己就要落在目标位置（当时没有已运行的实例可被唤起）。
         // 🔴 applyNavigationRequest 对两者都开：`--goto-log` 现在也靠请求文件表达
         // （写的是 runs-log 令牌），不开就等于把它刚写的请求留在盘上，
-        // 下一次任意唤起都会莫名跳到运行日志页。
+        // 下一次任意唤起都会莫名跳到调度日志页。
         if (_openRunsLogOnLaunch || _openStartupOnLaunch)
         {
             DispatchActivation(
@@ -236,7 +242,7 @@ public partial class App : Application, IDisposable
     }
 
     /// <summary>把唤起信号投递到 UI 线程（注册回调在线程池线程上触发）。</summary>
-    /// <param name="openRunsLog">没有定位请求时，是否回落到「运行日志」页。</param>
+    /// <param name="openRunsLog">没有定位请求时，是否回落到「调度日志」页。</param>
     /// <param name="applyNavigationRequest">
     /// 是否优先应用跨进程定位请求（<c>--goto-startup</c> 写的一次性文件）。
     /// </param>
@@ -254,7 +260,7 @@ public partial class App : Application, IDisposable
     private void DispatchActivation(bool openRunsLog, bool applyNavigationRequest)
     {
         Program.LogGotoLog(openRunsLog
-            ? "管理端实例收到唤起信号（运行日志页），投递到 UI 线程。"
+            ? "管理端实例收到唤起信号（调度日志页），投递到 UI 线程。"
             : "管理端实例收到前台唤起信号，投递到 UI 线程。");
 
         var dispatcher = _window?.DispatcherQueue;

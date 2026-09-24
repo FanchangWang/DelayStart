@@ -2,7 +2,10 @@ using System.Globalization;
 
 using DelayStart.Core.Logging;
 using DelayStart.Core.Models;
+using DelayStart.Core.Services;
 using DelayStart.Management.Models;
+
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DelayStart.App.Cli;
 
@@ -65,6 +68,10 @@ internal static class CliHost
                 exitCode = PrintHelp();
                 return true;
             }
+
+            // 旧目录一次性迁移（D116）：与 GUI（App.OnLaunched）同一条规则 ——
+            // 管理端启动、任何读写之前。幂等、失败只记日志。
+            services.GetRequiredService<RuntimeDataMigrator>().MigrateIfNeeded();
 
             var cli = CliServices.Create(services);
 

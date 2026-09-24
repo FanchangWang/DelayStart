@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D120）
+# DelayStart — 决策记录（D1–D121）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -1095,6 +1095,20 @@
 
 ---
 
+### D121 应用自有计划任务不进入扫描，启动时只清理配置
+
+**结论**：计划任务来源只排除两个精确的应用自有根路径：`\DelayStartScheduler` 与 `\DelayStartGuard`；不使用 `\DelayStart*` 前缀。管理端启动时由 `OwnedScheduledTaskConfigCleanupService` 从延时配置中移除自有任务条目，但不调用 `TakeoverService.Release`，不按 `OriginalState` 恢复系统，也不直接操作计划任务。计划任务的存在性、启用状态和定义随后由 `SchedulerTaskBootstrap` / `GuardTaskBootstrap` 按当前设置负责同步。
+
+**为什么**：应用自己的任务不是用户自启动项，列出来会误导用户并允许把守卫基础设施纳入调度；但它们也不是普通第三方启动项，不需要保留历史接管时的 `OriginalState`。当前 Bootstrap 已经是自有任务生命周期的唯一事实来源，额外恢复会制造竞态和不必要的系统操作。
+
+**顺序与边界**：配置清理先于两个任务 Bootstrap；配置读取或保存失败时不把未知配置当空配置、不写盘，并记录错误。守卫关闭时仍由 `GuardTaskBootstrap` 按当前设置删除任务，这是现行策略，不应被历史状态覆盖。基线不做并发读改写，下一次成功的守卫巡检会用过滤后的扫描结果自然替换。
+
+**范围**：只改 Management 的自有任务身份判据、计划任务扫描过滤、管理端启动配置清理、测试与文档；不混入 B1.1b、B4 或守卫扫描完整性改造。
+
+**验证**：`.\scripts\build.ps1` 0 警告 0 错误；`.\scripts\test.ps1` 733/0；发布及 NativeAOT 成功。真实任务库的配置清理与 Bootstrap 交互仍需 Windows 真机验收。
+
+---
+
 ### 附表：R1–R13 技术风险与去向（已全部闭环）
 
 | # | 风险 | 怎么闭环的 |
@@ -1113,7 +1127,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D120 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D121 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

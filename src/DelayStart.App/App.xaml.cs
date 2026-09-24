@@ -85,6 +85,11 @@ public partial class App : Application, IDisposable
         //    必须让它们读到的已经是新结构。幂等、失败只记日志不阻塞启动。
         _services.GetRequiredService<RuntimeDataMigrator>().MigrateIfNeeded();
 
+        // B3：旧版本可能把应用自己的 Guard / Scheduler 任务误接管过。
+        // 启动时只从延时配置移除自有任务；计划任务的存在性、启用状态和定义由下面的
+        // SchedulerTaskBootstrap / GuardTaskBootstrap 按当前设置负责。
+        _ = _services.GetRequiredService<OwnedScheduledTaskConfigCleanupService>().RemoveOwnedTasks();
+
         // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测一次，缺失即自动补建。
         // 🔴 放在解析主窗口**之前** —— 总览页进入时也会检测补建（状态卡），
         //    这里先跑一轮可以把最常见的"任务被删"在页面显示前就修掉。

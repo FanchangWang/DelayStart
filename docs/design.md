@@ -30,11 +30,13 @@
 | 注册表 HKLM 32 位 | `HKLM\Software\WOW6432Node\...\Run` | ✅ | ✅ | 标记写 `StartupApproved\Run32` |
 | 用户启动文件夹 | `%APPDATA%\...\Startup` | ✅ | ✅ | `.lnk` / `.url`，解析真实目标与图标 |
 | 系统启动文件夹 | `%PROGRAMDATA%\...\Startup` | ✅ | ✅ | |
-| 计划任务 | 带 Logon/Boot 触发器、排除 `\Microsoft\` 文件夹（判据带尾分隔符，见 pitfalls 二） | ✅ | ✅ | 禁用粒度细分任务级/触发器级（D67） |
+| 计划任务 | 带 Logon/Boot 触发器、排除 `\Microsoft\` 文件夹及 DelayStart 自有根任务（`\DelayStartScheduler` / `\DelayStartGuard`；判据带尾分隔符，见 pitfalls 二） | ✅ | ✅ | 禁用粒度细分任务级/触发器级（D67） |
 | UWP / Store 应用 | `AppModel\SystemAppData\<PFN>\<TaskId>` | ✅ | ⚠️ 受限 | 见下 |
 | 手动添加 | exe / lnk / bat / cmd / ps1（`LaunchTargetTypes` 白名单，**无 .msi**，D47） | — | ✅ | 不进"自启动项"页 |
 
 **UWP 能力边界（必须写进 UI 文案，D4/D45）**：UWP 的自启动由系统 AppModel 调度，第三方无法延后。"延时启动 UWP" 实为 *禁用系统自启 + 到点 COM/外壳激活*；**UWP 进程恒为普通用户身份**（真机实测，中转外壳用谁的令牌都不改结果），编辑器不提供管理员胶囊。
+
+**应用自有计划任务（B3）**：扫描层只认两条精确根路径 `\DelayStartScheduler` 与 `\DelayStartGuard`，不把应用维持运行所需的任务列给用户，也不允许用户接管。管理端启动时由 `OwnedScheduledTaskConfigCleanupService` 只移除配置中的自有任务条目；计划任务本身的存在性、启用状态和定义随后由 `SchedulerTaskBootstrap` / `GuardTaskBootstrap` 按当前设置负责同步。
 
 **红线（不做）**：不删任何原始数据；不接管服务/驱动（服务走原生 `delayed-auto`）；不改 Winlogon/Userinit/Shell（只读展示）；不改登录脚本 / GPO 配置；失败后不自动恢复自启动（D17）；无常驻后台服务；不做批量操作（D10）。
 

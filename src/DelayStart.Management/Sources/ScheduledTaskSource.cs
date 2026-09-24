@@ -259,8 +259,9 @@ public sealed class ScheduledTaskSource : IStartupSource
             return null;
         }
 
-        // 自身的调度任务与普通用户代理任务不是"自启动项"，不列给用户 ——
-        // 它们的生命周期由本程序管理（FR-11 / D38）。旧版根任务一并排除（迁移过渡期）。
+        // 自身的调度任务与守卫任务不是"自启动项"，不列给用户 ——
+        // 它们的生命周期由本程序管理（FR-11 / D74 / B3）。只认精确的根路径，
+        // 不按 "\DelayStart*" 前缀宽泛过滤，避免误伤第三方任务。
         if (IsOwnedTask(path))
         {
             return null;
@@ -321,16 +322,13 @@ public sealed class ScheduledTaskSource : IStartupSource
     }
 
     /// <summary>
-    /// 判定是否为本程序自己的计划任务（唯一一条根任务 <c>\DelayStartScheduler</c>）。
+    /// 判定是否为本程序自己的计划任务（调度端或守卫端根任务）。
     /// </summary>
     /// <remarks>
-    /// D41：去掉了 D38 遗留文件夹的判定分支 —— 本程序不再创建任何任务文件夹，
-    /// 用户机器上的残留也已手工清除，保留分支只是让每个任务多一次字符串比较。
+    /// B3 统一两条应用自有任务的身份；判据只接受完整根路径，不能用
+    /// <c>StartsWith("\DelayStart")</c>，否则会误伤第三方任务。
     /// </remarks>
-    private static bool IsOwnedTask(string path)
-    {
-        return path.Equals(TaskRegistrationService.TaskPathConstant, StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool IsOwnedTask(string? path) => OwnedScheduledTaskPolicy.IsOwnedPath(path);
 
     /// <summary>
     /// 判断某计划任务是否落在受保护的 <c>\Microsoft</c> 文件夹下（FR-1.9）。

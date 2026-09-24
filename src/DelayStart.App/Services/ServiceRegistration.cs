@@ -108,6 +108,10 @@ internal static class ServiceRegistration
         // 才真的联网，所以正常机器上它一辈子只跑一次。单例只为与上面两个共享快照与状态。
         services.AddSingleton<HolidayAutoCheckService>();
 
+        // B3：管理端启动前从延时配置移除应用自有计划任务。计划任务本身由后面的
+        // SchedulerTaskBootstrap / GuardTaskBootstrap 按当前设置负责。
+        services.AddSingleton<OwnedScheduledTaskConfigCleanupService>();
+
         // 调度计划任务启动期保障（2026-09-21 批复）：每次启动检测，缺失即自动补建。
         // "每次都跑"就是它的语义，不靠容器保证只解析一次；Singleton 与配置 / 日志同一批。
         services.AddSingleton<SchedulerTaskBootstrap>();

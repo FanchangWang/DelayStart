@@ -105,7 +105,17 @@ public sealed class GuardService
         var staleItems = GuardStalePolicy.SelectStaleItems(config.Items, scan.Entries, failures);
 
         // 基线必须最后更新（用纠正后的状态），否则"刚被纠正回来的项"会在下一轮又被看成没变。
-        _baselineStore.Write(MergeBaselineForNext(baseline, scan.Entries, failures));
+        // 返回 null = 本次不落盘（首扫不完整，B6）：宁可下一轮重扫，也不要把残缺结果写成永久事实。
+        if (MergeBaselineForNext(baseline, scan.Entries, failures) is { } nextBaseline)
+        {
+            _baselineStore.Write(nextBaseline);
+        }
+        else
+        {
+            _log.Warn(
+                $"首次巡检有 {failures.Length} 个来源扫描失败，本次不更新基线"
+                + "（否则失败来源里的条目会永久从基线消失、守卫再也不会看见它们）。");
+        }
 
         return new GuardRunReport
         {
@@ -191,20 +201,32 @@ public sealed class GuardService
     }
 
     /// <summary>
-    /// 算出下一次巡检要用的基线。
+    /// 算出下一次巡检要用的基线；返回 <see langword="null"/> 表示**本次不落盘**。
     /// </summary>
     /// <remarks>
     /// 🔴 **本次整体失败的来源，其条目要沿用旧基线**。否则它们的条目会从基线里消失，
     /// 等来源恢复正常时，整整一批老条目会被报成"新增"—— 用户看到的是几十条假情报。
+    /// <para>
+    /// 🔴 **首扫（没有旧基线）且有来源失败时不落盘**（B6）。旧基线不存在，"沿用旧条目"
+    /// 这条保护无从谈起：那份残缺结果一旦成为正式基线，失败来源里的条目就**永久消失** ——
+    /// 既不在基线里，也永远等不到被扫到，守卫从此对它们完全失明。
+    /// 宁可不写：没有基线只是下一轮重新扫一遍，写错的基线却是永久的假事实。
+    /// </para>
     /// </remarks>
-    private static IReadOnlyList<StartupEntry> MergeBaselineForNext(
+    private static IReadOnlyList<StartupEntry>? MergeBaselineForNext(
         GuardBaseline? previous,
         IReadOnlyList<StartupEntry> currentEntries,
         ScanScope[] failures)
     {
-        if (previous is null || failures.Length == 0)
+        if (failures.Length == 0)
         {
             return currentEntries;
+        }
+
+        if (previous is null)
+        {
+            // 首扫 + 不完整 = 不知道全貌，不落盘。
+            return null;
         }
 
         var failed = new HashSet<ScanScope>(failures);

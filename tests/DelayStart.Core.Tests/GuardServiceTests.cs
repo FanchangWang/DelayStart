@@ -117,6 +117,47 @@ public sealed class GuardServiceTests
         Assert.Empty(recovered.NewItems);
     }
 
+    [Fact]
+    public void RunOnce_FirstRoundSourceFails_DoesNotPersistPartialBaseline()
+    {
+        // 🔴 B6：首扫（无旧基线）+ 来源整体失败 ⇒ 那份残缺结果**不能**成为正式基线。
+        // 否则失败来源里的条目永久从基线消失：既不在基线里，也永远等不到被扫到，
+        // 守卫从此对它们完全失明。宁可不写 —— 没有基线只是下一轮重扫。
+        var registry = new FakeStartupSource
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+        };
+        var healthy = new FakeStartupSource
+        {
+            Kind = StartupSource.ScheduledTask,
+            Scope = StartupScope.None,
+            Entries = [Entry("scheduled_task:none:x", "丙")],
+        };
+        using var harness = new Harness(GuardMode.Periodic, registry, healthy);
+
+        // 第一轮：注册表来源整体失败 ⇒ 不落盘。
+        registry.FailWith(new InvalidOperationException("注册表打不开"));
+        var first = harness.Service.RunOnce();
+
+        Assert.Single(first.Failures);
+
+        // 第二轮：注册表恢复。因为首轮没写基线，这一轮等同"首次运行" ——
+        // 而 `GuardNewItemPolicy` 刻意在无基线时不报新增（否则会把全部条目报成新增，那是噪声）。
+        // 代价是"少一轮新增通知"，换来的是"不会永久失明"。这一条就是那个代价的记录。
+        registry.FailWith(exception: null);
+        var second = harness.Service.RunOnce();
+
+        Assert.Empty(second.Failures);
+        Assert.Empty(second.NewItems);
+
+        // 第三轮：基线已由第二轮的完整扫描建立 ⇒ 新增检测恢复正常，新条目能被报出来。
+        registry.SetEntries([Entry("registry:hkcu:a", "甲"), Entry("registry:hkcu:b", "乙")]);
+        var third = harness.Service.RunOnce();
+
+        var added = Assert.Single(third.NewItems);
+        Assert.Equal("registry:hkcu:b", added.Id);
+    }
+
     // ── 写回纠正 ────────────────────────────────────────────────────────────
 
     [Fact]

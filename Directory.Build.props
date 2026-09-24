@@ -18,7 +18,7 @@
       ⚠️ 改版本只改这一行 —— installer/DelayStart.iss 里的 AppVersion 只是缺省值，
       手工编译时才生效；正式构建一律由 installer/build-installer.ps1 传入。
     -->
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
 
     <!-- 验收标准是零警告。不要用 #pragma warning disable 绕过。 -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

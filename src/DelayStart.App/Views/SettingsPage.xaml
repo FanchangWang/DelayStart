@@ -467,6 +467,8 @@
                             SelectionChanged="OnNotifyModeChanged" />
                     </stc:SettingsCard>
                     <stc:SettingsCard Description="同一次运行内的重试次数（0–5）" Header="重试次数">
+                        <!-- 🔴 上下界与 ConfigService.MinimumRetryCount / MaximumRetryCount 一一对应（B7）。
+                             x:Bind 拿不到 C# 常量，只能写字面量 —— 改这里必须同步改那两处。 -->
                         <NumberBox
                             MinWidth="120"
                             Maximum="5"

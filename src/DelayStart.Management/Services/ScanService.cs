@@ -47,11 +47,14 @@ public sealed class ScanService
     /// <summary>
     /// 执行一次全量扫描。
     /// </summary>
-    /// <returns>汇总结果；来源级失败收集在 <see cref="ScanResult.Failures"/> 中而不是抛出。</returns>
+    /// <returns>汇总结果；来源级失败收集在 <see cref="ScanResult.Failures"/> 中而不是抛出。
+    /// 配置不可用时 <see cref="ScanResult.ConfigUnavailable"/> 为 <see langword="true"/>，
+    /// 此时 <see cref="ScanResult.Entries"/> 里每一项的"是否已接管"都不可信，调用方**不得**
+    /// 据此提供接管 / 释放操作。</returns>
     public ScanResult Scan()
     {
         // 接管判定必须基于**稳定主键**，而不是 (Name, Source) 二元组（坑 6 / FR-1.6）。
-        var takenOverKeys = LoadTakenOverKeys();
+        var configLoad = LoadTakenOverKeys();
 
         var entries = new List<StartupEntry>();
         var failures = new List<ScanFailure>();
@@ -60,7 +63,7 @@ public sealed class ScanService
         {
             try
             {
-                entries.AddRange(source.Scan(takenOverKeys));
+                entries.AddRange(source.Scan(configLoad.Keys));
             }
             catch (Exception ex)
             {
@@ -92,32 +95,35 @@ public sealed class ScanService
                 : string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
         });
 
-        return new ScanResult { Entries = entries, Failures = failures };
+        return new ScanResult
+        {
+            Entries = entries,
+            Failures = failures,
+            ConfigUnavailable = !configLoad.Available,
+        };
     }
 
     /// <summary>
     /// 从配置里读出全部已接管条目的稳定主键。
     /// </summary>
     /// <remarks>
-    /// 配置损坏时 <c>ConfigService.Load</c> 会重建默认配置并返回空集合 —— 此时扫描结果里
-    /// 所有条目都会显示为"未接管"。这是**安全的降级方向**：宁可显示"没接管过"，
-    /// 也不能把没接管过的项显示成"已接管"而让用户失去操作入口。
+    /// 🔴 配置不可用时**不降级成"没有任何条目被接管"**：那会让每一项的
+    /// <c>IsTakenOver</c> 都变成 false，界面于是显示出一堆可点的"未接管"条目 ——
+    /// 用户点下去就是双重接管。这里改为把"不可信"如实上报，由 UI 拒绝提供操作入口。
     /// </remarks>
-    private HashSet<string> LoadTakenOverKeys()
+    private (HashSet<string> Keys, bool Available) LoadTakenOverKeys()
     {
         try
         {
             var config = _configStore.Load();
-            return new HashSet<string>(
-                config.Items.Select(static item => item.Id),
-                StringComparer.Ordinal);
+            return (
+                new HashSet<string>(config.Items.Select(static item => item.Id), StringComparer.Ordinal),
+                Available: true);
         }
-        catch (StartupOperationException ex)
+        catch (Exception ex)
         {
-            // 配置版本高于本程序（前向兼容保护）—— 拒绝加载是正确行为，
-            // 但扫描本身不该因此不可用。
-            _log.Warn(ex, "配置无法加载，本次扫描按「没有任何条目被接管」处理");
-            return new HashSet<string>(StringComparer.Ordinal);
+            _log.Error(ex, "配置无法加载：本次扫描结果的「是否已接管」不可信，已禁止一切接管操作");
+            return (new HashSet<string>(StringComparer.Ordinal), Available: false);
         }
     }
 }

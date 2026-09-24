@@ -35,8 +35,10 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
         _config = Copy(config);
     }
 
-    /// <summary>非空时 <see cref="Load"/> 抛出它（模拟"配置版本高于本程序"这类拒绝加载的场景）。</summary>
-    public Exception? LoadException { get; init; }
+    /// <summary>
+    /// 非空时 <see cref="Load"/> 抛出它，模拟"配置不可用"——损坏 / 不可读 / 版本过高的统一替身。
+    /// </summary>
+    public Exception? LoadException { get; set; }
 
     /// <inheritdoc />
     public AppConfig Load()

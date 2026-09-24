@@ -35,7 +35,6 @@ namespace DelayStart.Core.Serialization;
     AllowTrailingCommas = true)]
 [JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(RunRecord))]
-[JsonSerializable(typeof(LegacyConfigV1))]
 internal sealed partial class JsonContext : JsonSerializerContext
 {
 }

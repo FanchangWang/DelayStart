@@ -12,13 +12,20 @@ public interface IAppConfigStore
     string ConfigFilePath { get; }
 
     /// <summary>
-    /// 加载配置。文件不存在时返回默认配置；文件损坏时保留副本并重建（E10 / FR-12.3）；
-    /// 低版本时自动迁移（FR-12.1）。
+    /// 加载配置。文件**不存在**时返回默认配置（首次运行的正常路径）；文件**存在但读不了或解析不了**时
+    /// **抛异常**（E10 / FR-12.3）—— 不返回"看起来正常"的空配置。
     /// </summary>
-    /// <returns>可直接使用的配置对象，保证非空且内部集合已规范化。</returns>
+    /// <returns>配置对象，保证非空且内部集合已规范化。</returns>
+    /// <remarks>
+    /// 🔴 为什么"读不了"必须抛异常而不是降级：配置里存着"哪些系统自启动项正被本程序软禁用"，
+    /// 它是**唯一的还原依据**。损坏后返回一个空配置，等于让程序在"自己什么都不知道"的状态下继续工作 ——
+    /// 守卫会安静地什么都不纠正、界面会把所有接管项显示成"未被接管"、任何一次写操作都会把
+    /// 仅存的损坏副本覆盖掉。宁可整体拒绝工作（调用方据此中止并提示用户），也不要这种静默的破坏。
+    /// </remarks>
     /// <exception cref="StartupOperationException">
-    /// 配置版本高于本程序支持的版本时抛出（<see cref="StartupFailureReason.ConfigVersionUnsupported"/>）——
-    /// 此时**拒绝加载**而不是尽力解析，以免把用户配置写坏。
+    /// 配置损坏（<see cref="StartupFailureReason.ConfigCorrupted"/>，已先保留副本）、
+    /// 不可读（<see cref="StartupFailureReason.AccessDenied"/>）或版本高于本程序
+    /// （<see cref="StartupFailureReason.ConfigVersionUnsupported"/>）时抛出。
     /// </exception>
     AppConfig Load();
 

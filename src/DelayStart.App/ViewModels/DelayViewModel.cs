@@ -199,7 +199,20 @@ public sealed partial class DelayViewModel : ObservableObject
                         var scan = _scanner.Scan();
                         _scanHadFailures = scan.HasFailures;
 
-                        var config = _configStore.Load();
+                        // 🔴 配置不可用时不做任何"判定"：失效标记与图标都建立在"这是配置里的
+                        // 第 N 条"之上，缺了配置算出来的结果一律是假的。跳过即可 ——
+                        // 紧随其后的 Load() 会把错误原文摆到界面上。
+                        AppConfig config;
+                        try
+                        {
+                            config = _configStore.Load();
+                        }
+                        catch (StartupOperationException)
+                        {
+                            _staleKinds = [];
+                            _pendingPixels = [];
+                            return;
+                        }
 
                         var failures = scan.Failures
                             .Select(static failure => new ScanScope(failure.Source, failure.Scope))

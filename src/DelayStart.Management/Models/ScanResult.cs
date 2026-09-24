@@ -13,6 +13,17 @@ public sealed class ScanResult
     /// <summary>整体失败的来源（FR-1.4）。非空表示 <see cref="Entries"/> 是不完整的。</summary>
     public IReadOnlyList<ScanFailure> Failures { get; init; } = [];
 
+    /// <summary>
+    /// 配置不可用导致"是否已接管"无法判定，本次结果**整体不可信**（<see cref="ScanResult.ConfigUnavailable"/>）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这不是"某个来源失败"那种可以部分使用的情况：<see cref="Entries"/> 里每一项的
+    /// <c>IsTakenOver</c> 都是错的。此时若照常展示，用户会看到一堆"未接管"的可点条目，
+    /// 点下去就是**双重接管**（系统项被再次接管，而它其实早就被接管了）。
+    /// 宁可整份列表都不给。
+    /// </remarks>
+    public bool ConfigUnavailable { get; init; }
+
     /// <summary>是否有来源整体失败。</summary>
     public bool HasFailures => Failures.Count > 0;
 

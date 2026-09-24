@@ -64,7 +64,20 @@ public sealed class GuardService
     /// <returns>巡检结果；守卫关闭时返回 <see cref="GuardRunReport.Disabled"/>。</returns>
     public GuardRunReport RunOnce()
     {
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.Load();
+        }
+        catch (Exception ex)
+        {
+            // 🔴 配置不可用时**跳过本次巡检**，而不是拿空配置继续：配置里存着"哪些项正被我们
+            // 软禁用"，读不到就无从判断"有没有人把接管项改回启用"，也纠不回去。
+            // 降级成空配置的后果是守卫**安静地什么都不做** —— 用户看不到任何迹象，
+            // 而系统实际已偏离预期状态。
+            _log.Error(ex, "读取配置失败，本次巡检已跳过（未纠正任何项目）。");
+            return GuardRunReport.ConfigUnavailableReport();
+        }
 
         if (config.Settings.GuardMode is GuardMode.Disabled)
         {

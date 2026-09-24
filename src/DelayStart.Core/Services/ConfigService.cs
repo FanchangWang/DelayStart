@@ -8,23 +8,39 @@ using DelayStart.Core.Serialization;
 namespace DelayStart.Core.Services;
 
 /// <summary>
-/// 配置的加载、校验、迁移与原子保存（§2.2 / FR-4.8 / FR-12）。
+/// 配置的加载、规范化与原子保存（§2.2 / FR-4.8）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 三条容错策略，按"用户损失最小"排序：
+/// 加载策略只有两条，没有第三条：
 /// </para>
 /// <list type="number">
-/// <item><description>文件不存在 → 用默认配置，不报错（首次运行的正常路径）。</description></item>
-/// <item><description>解析失败 → **保留坏文件副本**再重建默认配置（E10 / FR-12.3）。
-/// 直接删掉用户的配置是不能接受的：里面存着"哪些系统项被接管了"。</description></item>
-/// <item><description>版本高于本程序 → **拒绝加载**并抛异常。硬解析未知结构会把配置写坏，
-/// 而写坏之后连还原路径都没了。</description></item>
+/// <item><description>文件**不存在** → 返回默认配置，不报错（首次运行的正常路径）。</description></item>
+/// <item><description>文件**存在但读不了 / 解析不了 / 版本过高** → 抛 <see cref="StartupOperationException"/>，
+/// 由调用方决定中止还是提示。损坏时先留一份副本再抛，绝不覆盖原文件（E10 / FR-12.3）。
+/// 直接删掉或覆盖配置文件是不能接受的：里面存着"哪些系统项被接管了"，那是唯一的还原依据。</description></item>
 /// </list>
+/// <para>
+/// 🔴 刻意**不做**"损坏时降级成默认配置"：那会让程序在"自己什么都不知道"的状态下继续工作 ——
+/// 守卫安静地什么都不纠正、界面把接管项全显示成未接管、任何写操作都会覆盖掉仅存的副本。
+/// 静默的破坏比明确的失败危险得多。
+/// </para>
+/// <para>
+/// 只支持当前一种格式（v<see cref="AppConfig.CurrentVersion"/>，由本程序写出），不做旧格式迁移。
+/// </para>
 /// </remarks>
 public sealed class ConfigService : IAppConfigStore
 {
     private const string CorruptFileMarker = ".corrupt-";
+
+    /// <summary>重试次数下界。</summary>
+    public const int MinimumRetryCount = 0;
+
+    /// <summary>
+    /// 重试次数上界。与设置页 NumberBox 的 <c>Maximum</c> 一一对应 ——
+    /// 两处各写一个数就会出现"界面显示 5、实际存着 8"的错位。
+    /// </summary>
+    public const int MaximumRetryCount = 5;
 
     private readonly PathService _paths;
     private readonly ILogSink _log;
@@ -58,31 +74,39 @@ public sealed class ConfigService : IAppConfigStore
         {
             json = AtomicFileWriter.ReadAllTextOrNull(ConfigFilePath);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            _log.Error(ex, $"读取配置文件失败，本次使用默认配置：{ConfigFilePath}");
-            return new AppConfig();
+            _log.Error(ex, $"读取配置文件失败，已拒绝加载：{ConfigFilePath}");
+            throw new StartupOperationException(
+                StartupFailureReason.AccessDenied,
+                entryId: string.Empty,
+                message: $"配置文件当前不可读：{ex.Message}",
+                innerException: ex);
         }
 
         if (string.IsNullOrWhiteSpace(json))
         {
+            // 文件不存在 = 首次运行，合法状态。
             return new AppConfig();
         }
 
-        AppConfig config;
         try
         {
-            config = Parse(json);
+            var config = Parse(json);
+            Normalize(config);
+            return config;
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or FormatException)
         {
-            _log.Error(ex, $"配置文件解析失败，已保留副本并重建默认配置（E10）：{ConfigFilePath}");
+            // 先留副本再抛：原文件里是"哪些系统项被接管了"，是唯一的还原依据。
+            _log.Error(ex, $"配置文件解析失败，已保留副本，已拒绝加载（E10）：{ConfigFilePath}");
             PreserveCorruptFile();
-            return new AppConfig();
+            throw new StartupOperationException(
+                StartupFailureReason.ConfigCorrupted,
+                entryId: string.Empty,
+                message: $"配置文件损坏，已保留副本（{ConfigFilePath}）：{ex.Message}",
+                innerException: ex);
         }
-
-        Normalize(config);
-        return config;
     }
 
     /// <inheritdoc />
@@ -91,171 +115,49 @@ public sealed class ConfigService : IAppConfigStore
         ArgumentNullException.ThrowIfNull(config);
 
         Normalize(config);
-        _paths.EnsureCreated();
 
-        var json = JsonSerializer.Serialize(config, JsonContext.Default.AppConfig);
-        AtomicFileWriter.WriteAllText(ConfigFilePath, json);
+        try
+        {
+            _paths.EnsureCreated();
+            var json = JsonSerializer.Serialize(config, JsonContext.Default.AppConfig);
+            AtomicFileWriter.WriteAllText(ConfigFilePath, json);
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException
+            or NotSupportedException)
+        {
+            throw new StartupOperationException(
+                StartupFailureReason.Unknown,
+                entryId: string.Empty,
+                message: $"保存配置文件失败：{ConfigFilePath}（{ex.Message}）",
+                innerException: ex);
+        }
     }
 
-    private AppConfig Parse(string json)
+    /// <summary>
+    /// 解析配置 JSON。只有一种受支持格式（v<see cref="AppConfig.CurrentVersion"/>，由本程序写出）。
+    /// </summary>
+    /// <remarks>
+    /// 不做任何旧格式迁移：本项目没有需要兼容的历史配置，配置损坏或形状不符时由调用方
+    /// 按损坏处理（保留原文件、不覆盖）。唯一保留的前向保护是：版本高于当前程序的配置
+    /// **拒绝加载**，避免旧程序把新字段写丢。
+    /// </remarks>
+    private static AppConfig Parse(string json)
     {
-        var version = ReadVersion(json);
+        var config = JsonSerializer.Deserialize(json, JsonContext.Default.AppConfig)
+            ?? throw new FormatException("配置文件内容无法解析为配置对象。");
 
-        if (version > AppConfig.CurrentVersion)
+        if (config.Version > AppConfig.CurrentVersion)
         {
             throw new StartupOperationException(
                 StartupFailureReason.ConfigVersionUnsupported,
                 entryId: string.Empty,
-                message: $"配置版本 v{version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
+                message: $"配置版本 v{config.Version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
                     + "为避免写坏配置已拒绝加载。请升级程序后再试。");
         }
 
-        if (version < AppConfig.CurrentVersion)
-        {
-            return MigrateFromV1(json);
-        }
-
-        return JsonSerializer.Deserialize(json, JsonContext.Default.AppConfig) ?? new AppConfig();
-    }
-
-    /// <summary>
-    /// 读取配置版本号。
-    /// </summary>
-    /// <remarks>
-    /// 找不到 <c>version</c> 字段时返回 1：demo 时代的 v1 配置没有稳定写版本号，
-    /// 而 v2 由本程序写出、**必然**带 version。因此"没有版本号"等价于 v1。
-    /// </remarks>
-    private static int ReadVersion(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-
-        if (document.RootElement.ValueKind is not JsonValueKind.Object)
-        {
-            throw new FormatException("配置文件根节点不是 JSON 对象。");
-        }
-
-        foreach (var property in document.RootElement.EnumerateObject())
-        {
-            if (property.Name.Equals("version", StringComparison.OrdinalIgnoreCase)
-                && property.Value.TryGetInt32(out var version))
-            {
-                return version;
-            }
-        }
-
-        return 1;
-    }
-
-    /// <summary>
-    /// v1（demo 格式）→ v2 迁移（FR-12.1）。
-    /// </summary>
-    /// <remarks>
-    /// 补齐的三项：<c>scope</c>、<c>enabled</c>、<c>originalState</c>。
-    /// <para>
-    /// <c>originalState</c> 取 <see cref="OriginalState.WasEnabled"/> = <see langword="true"/>。
-    /// ⚠️ 早先此处取 <c>false</c>，理由是"能被接管的条目在接管时通常已被软禁用" ——
-    /// <b>那是把因果搞反了</b>：接管后处于禁用状态是**我们刚写的标记**造成的，
-    /// 而 <c>OriginalState</c> 要回答的是"接管**之前**是什么样"。v1 条目在接管前是正常
-    /// 自启动的，记成 <c>false</c> 会让它们「移出延时启动」后仍然不启动，用户无从知道原因。
-    /// </para>
-    /// </remarks>
-    private AppConfig MigrateFromV1(string json)
-    {
-        var legacy = JsonSerializer.Deserialize(json, JsonContext.Default.LegacyConfigV1)
-            ?? new LegacyConfigV1();
-
-        var config = new AppConfig { Version = AppConfig.CurrentVersion };
-        foreach (var legacyItem in legacy.Items)
-        {
-            config.Items.Add(ConvertLegacyItem(legacyItem));
-        }
-
-        _log.Info($"配置已从 v1 迁移到 v{AppConfig.CurrentVersion}，共 {config.Items.Count} 个条目（FR-12.1）");
         return config;
-    }
-
-    private static DelayedItem ConvertLegacyItem(LegacyItemV1 legacy)
-    {
-        var source = ParseLegacySource(legacy.Source);
-
-        return new DelayedItem
-        {
-            Id = legacy.Id,
-            Name = legacy.Name,
-            Path = legacy.Path,
-            Arguments = legacy.Args,
-            DelaySeconds = legacy.DelaySeconds,
-            SortOrder = legacy.SortOrder,
-            RunAsAdmin = legacy.RunAsAdmin,
-            Enabled = true,
-            Source = source,
-            Scope = InferLegacyScope(source, legacy.SourceDetail),
-            SourceKey = legacy.SourceKeyName,
-            SourceDetail = legacy.SourceDetail,
-            // v1 条目记不下接管前的状态。按"原本会自启动"处理 —— 取 false 会让这些历史条目
-            // 在「移出延时启动」后仍然不启动，而用户无从知道原因。
-            OriginalState = new OriginalState { WasEnabled = true },
-        };
-    }
-
-    private static StartupSource ParseLegacySource(string value)
-        => value.Trim().ToLowerInvariant() switch
-        {
-            "registry" => StartupSource.Registry,
-            "startup_folder" => StartupSource.StartupFolder,
-            "scheduled_task" => StartupSource.ScheduledTask,
-            "uwp" => StartupSource.Uwp,
-            _ => StartupSource.Manual,
-        };
-
-    /// <summary>
-    /// 从 v1 的位置描述字符串推断 <see cref="StartupScope"/>。
-    /// </summary>
-    /// <remarks>
-    /// 🔴 **这是迁移期的一次性推断，不是运行时逻辑。** 推断结果会固化进配置文件，
-    /// 此后一切判断都读枚举值。运行期用字符串猜 hive 是坑 5 明令禁止的
-    /// （结果只能靠字符串猜，写错还不报错）。这里必须推断，因为 v1 根本没存 scope；
-    /// 所幸只有这一次，而且推断失败也只是退化为 <see cref="StartupScope.None"/>。
-    /// </remarks>
-    private static StartupScope InferLegacyScope(StartupSource source, string sourceDetail)
-    {
-        if (string.IsNullOrWhiteSpace(sourceDetail))
-        {
-            return StartupScope.None;
-        }
-
-        if (source is StartupSource.Registry)
-        {
-            // v1 的 SourceDetail 形如 "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
-            // 或 "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"。
-            if (sourceDetail.Contains("WOW6432Node", StringComparison.OrdinalIgnoreCase))
-            {
-                return StartupScope.HklmWow;
-            }
-
-            if (sourceDetail.StartsWith("HKLM", StringComparison.OrdinalIgnoreCase))
-            {
-                return StartupScope.Hklm;
-            }
-
-            if (sourceDetail.StartsWith("HKCU", StringComparison.OrdinalIgnoreCase))
-            {
-                return StartupScope.Hkcu;
-            }
-
-            return StartupScope.None;
-        }
-
-        if (source is StartupSource.StartupFolder)
-        {
-            // v1 的 SourceDetail 是 "用户启动文件夹" / "系统启动文件夹"。
-            var isSystem = sourceDetail.Contains("系统", StringComparison.Ordinal)
-                || sourceDetail.Contains("Common", StringComparison.OrdinalIgnoreCase);
-
-            return isSystem ? StartupScope.SystemFolder : StartupScope.UserFolder;
-        }
-
-        return StartupScope.None;
     }
 
     /// <summary>
@@ -371,10 +273,12 @@ public sealed class ConfigService : IAppConfigStore
     {
         settings.DelayPresets = NormalizePresets(settings.DelayPresets);
 
-        if (settings.RetryCount < 0)
-        {
-            settings.RetryCount = 0;
-        }
+        // 🔴 重试次数**两端都要夹**（B7）。原先只夹下界，手改成 1000000 就是"失败一百万次"：
+        // 每个失败都要走一遍降权链 / 计划任务调用，一轮下来能把登录后的几分钟全占死，
+        // 而用户看到的表现只是"登录后卡很久"。
+        // 上界与设置页 NumberBox 的 `Maximum="5"` **保持一致**（唯一来源，不要各写一个数）：
+        // 留"余量"只会制造"界面显示 5、配置实际是 8"这种显示与实际不符的状态。
+        settings.RetryCount = Math.Clamp(settings.RetryCount, MinimumRetryCount, MaximumRetryCount);
 
         // 默认预设必须真的是列表成员：手改配置删掉它时兜底到第一项。
         if (!settings.DelayPresets.Contains(settings.DefaultPreset))
@@ -397,6 +301,19 @@ public sealed class ConfigService : IAppConfigStore
         }
 
         settings.GuardMinutes = GuardSchedulePlan.NormalizeMinutes(settings.GuardMinutes);
+
+        // 通知策略（D80）：枚举未知值回默认档。与 Theme / GuardMode 同理 ——
+        // 枚举强转不抛异常，手改配置写个 7 进来不会报错，只会让收尾判定走到一个
+        // 既不是"总是"也不是"从不"的分支，行为变得不可预期。
+        if (settings.NotifyMode is not (NotifyMode.FailuresOnly or NotifyMode.Always or NotifyMode.Never))
+        {
+            settings.NotifyMode = NotifyMode.FailuresOnly;
+        }
+
+        if (settings.GuardNotifyMode is not (GuardNotifyMode.OnChange or GuardNotifyMode.Never))
+        {
+            settings.GuardNotifyMode = GuardNotifyMode.OnChange;
+        }
     }
 
     private static int[] NormalizePresets(int[]? presets)

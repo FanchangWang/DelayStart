@@ -49,7 +49,19 @@ internal sealed class SchedulerEngine
     private readonly IProcessLauncher _launcher;
     private readonly ILogSink _log;
     private readonly PathService _paths;
-    private readonly Settings _settings;
+
+    /// <summary>
+    /// 当前配置里的设置。由 <see cref="Initialize"/> 读入；读失败时调度端整体不启动
+    /// （<see cref="Run"/> 提前返回），因此正常使用路径下必非 <see langword="null"/>。
+    /// </summary>
+    private Settings? _settings;
+
+    /// <summary>
+    /// <see cref="_settings"/> 的非空视图。只能在 <see cref="Initialize"/> 成功之后访问 ——
+    /// 它是"配置已读到、调度已启动"这个不变式的单一表达点。
+    /// </summary>
+    private Settings Settings => _settings
+        ?? throw new InvalidOperationException("配置尚未加载：Run() 尚未通过 Initialize()。");
 
     private readonly List<SchedulerRuntimeItem> _items = [];
     private readonly Stopwatch _stopwatch = new();
@@ -99,7 +111,6 @@ internal sealed class SchedulerEngine
         _launcher = launcher;
         _paths = paths;
         _log = log;
-        _settings = _configStore.Load().Settings;
     }
 
     /// <summary>
@@ -125,12 +136,19 @@ internal sealed class SchedulerEngine
         _tray = CreateTrayHost(_icons);
         if (_tray is null)
         {
-            _log.Error("托盘宿主创建失败，本次调度无法进行。");
-            return 1;
+            // 🔴 托盘创建失败**不放弃调度**：它只是"用户能看到什么"的通道，不是启动目标的能力。
+            // 早先这里 return 1，等于"图标画不出来 ⇒ 今天什么都不启动" —— 一个纯 UI 故障
+            // 升级成了功能停摆，而且用户连原因都看不到（托盘本来就没出来）。
+            // 现在降级为继续调度：到点照常启动，失败与结果照常落盘；代价只是没有托盘菜单
+            // （也就没有「立即启动 / 跳过剩余」这两个手动入口），这个代价远小于"全部不启动"。
+            _log.Error("托盘宿主创建失败，本次调度继续（无法显示托盘菜单与面板）。");
+        }
+        else
+        {
+            _tray.TimerTick = Tick;
+            _tray.StartTimer(TimerIntervalMilliseconds);
         }
 
-        _tray.TimerTick = Tick;
-        _tray.StartTimer(TimerIntervalMilliseconds);
         _ = NativeMethods.RunMessageLoop();
         return 0;
     }
@@ -187,9 +205,14 @@ internal sealed class SchedulerEngine
         }
         catch (Exception ex)
         {
+            // 🔴 配置不可用时**整体不调度**，而不是拿空配置凑合：配置里存着"哪些系统项正被我们
+            // 软禁用"，读不到就等于不知道该启动什么、也不知道该不该纠正回去。半懂不懂地跑
+            // 比明确地不跑危险得多（硬约束 7：失败必须可见）。
             _log.Error(ex, "读取配置失败，本次不调度（保持全部接管状态不变）。");
             return false;
         }
+
+        _settings = config.Settings;
 
         // 计划生成（过滤 + 排序 + 到点时刻）下沉到 Core 的 SchedulePlan，便于单测（FR-5.3 / FR-5.4）。
         // 调度周期（FR-15）：today 与法定日历都在这一处取，全流程共用一个快照 ——
@@ -347,7 +370,7 @@ internal sealed class SchedulerEngine
             HasWaitingItems,
             () => _finishing,
             BuildMenuStatusText,
-            () => _settings.Theme);
+            () => Settings.Theme);
         if (!host.TryCreate(BuildTooltip(), withIcon: icons is not null))
         {
             host.Dispose();
@@ -447,9 +470,9 @@ internal sealed class SchedulerEngine
     {
         if (runtime.Result.Attempts == 0 && ShouldSkipAsAlreadyRunning(runtime.Item, out var skipReason))
         {
-            // 🔴 标 Skipped 而不是 Failed（D1 A）：FailureStreakService 只认 Failed，
-            // 一次 Failed 就推进失败连击、触发托盘角标与失败横幅 —— 而"进程已经在跑"
-            // 根本不是失败。Skipped 语义准确，且天然不污染连击统计。
+            // 🔴 标 Skipped 而不是 Failed（D1 A）："进程已经在跑"根本不是失败 ——
+            // 标成 Failed 会让这条记录在调度日志里显示为一次启动失败，白白制造假警报。
+            // Skipped 语义准确，用户看到的是"已跳过（进程已在运行）"。
             runtime.Result.State = RunItemState.Skipped;
             runtime.Result.Reason = skipReason;
             _log.Info($"『{runtime.Item.Name}』{skipReason}");
@@ -469,7 +492,7 @@ internal sealed class SchedulerEngine
                 var evaluation = LaunchResultEvaluator.Evaluate(outcome, snapshotAfterDelay: null);
                 MarkResult(runtime, evaluation);
 
-                if (RetryPolicy.Decide(runtime.Result.Attempts, _settings.RetryCount) == RetryDecision.Fail)
+                if (RetryPolicy.Decide(runtime.Result.Attempts, Settings.RetryCount) == RetryDecision.Fail)
                 {
                     return;
                 }
@@ -568,7 +591,7 @@ internal sealed class SchedulerEngine
         MarkResult(runtime, evaluation);
 
         if (!evaluation.IsSuccess
-            && RetryPolicy.Decide(runtime.Result.Attempts, _settings.RetryCount) == RetryDecision.Retry)
+            && RetryPolicy.Decide(runtime.Result.Attempts, Settings.RetryCount) == RetryDecision.Retry)
         {
             Launch(runtime);
         }
@@ -691,9 +714,9 @@ internal sealed class SchedulerEngine
     /// </remarks>
     private void SendCompletionNotification(int failedCount)
     {
-        if (!NotifyDecision.Decide(_settings.NotifyMode, failedCount))
+        if (!NotifyDecision.Decide(Settings.NotifyMode, failedCount))
         {
-            _log.Info($"通知策略为 {_settings.NotifyMode}，跳过完成通知。");
+            _log.Info($"通知策略为 {Settings.NotifyMode}，跳过完成通知。");
             return;
         }
 

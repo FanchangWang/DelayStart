@@ -417,6 +417,20 @@ public sealed partial class ItemsViewModel : ObservableObject
         ApplyFilters();
         Subtitle = BuildSubtitle(snapshot, SourceFilter);
 
+        // 🔴 配置不可用 ⇒ 每一行的「是否已接管」都是错的（FR-12）。此时**不摆列表**：
+        // 摆出来就是一屏可点的"未接管"，用户点「接管」就是双重接管（系统项其实早被接管了）。
+        // 空列表 + 明确说明，好过一份会诱导危险操作的假数据。
+        if (snapshot.ConfigUnavailable)
+        {
+            Rows.Clear();
+            ApplyFilters();
+            Subtitle = "配置不可用";
+            FailureText = "配置不可用，无法判断哪些项已被接管 —— 已停止显示列表，以免误操作。"
+                + "请修复或删除损坏的 config.json 后重新扫描。";
+            OnPropertyChanged(nameof(IsEmpty));
+            return;
+        }
+
         if (snapshot.Failures.Count > 0)
         {
             var names = string.Join("、", snapshot.Failures

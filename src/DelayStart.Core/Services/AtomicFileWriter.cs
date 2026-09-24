@@ -60,11 +60,22 @@ public static class AtomicFileWriter
     /// <summary>
     /// 读取文本。文件不存在时返回 <see langword="null"/>，让调用方自行决定是"用默认值"还是"报错"。
     /// </summary>
+    /// <remarks>
+    /// 🔴 不用 <see cref="File.Exists(string)"/> 预判：权限不足 / 文件被锁会让它返回
+    /// <see langword="false"/>，把"读不到"误报成"不存在"（B1）。直接读，只把真正的不存在吞掉。
+    /// </remarks>
     /// <param name="path">文件完整路径。</param>
-    /// <returns>文件内容；不存在时为 <see langword="null"/>。</returns>
+    /// <returns>文件内容；不存在时为 <see langword="null"/>。权限 / 锁定等 I/O 错误照样抛出。</returns>
     public static string? ReadAllTextOrNull(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return File.Exists(path) ? File.ReadAllText(path, Utf8WithoutBom) : null;
+        try
+        {
+            return File.ReadAllText(path, Utf8WithoutBom);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 }

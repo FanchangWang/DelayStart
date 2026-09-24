@@ -6,7 +6,7 @@ using DelayStart.Core.Tests.Fakes;
 namespace DelayStart.Core.Tests;
 
 /// <summary>
-/// <see cref="ConfigService"/> 的单元测试：加载、损坏恢复、v1→v2 迁移与原子写（FR-4.8 / FR-12）。
+/// <see cref="ConfigService"/> 的单元测试：加载、损坏恢复与原子写（FR-4.8 / FR-12.3）。
 /// </summary>
 public sealed class ConfigServiceTests : IDisposable
 {
@@ -54,32 +54,13 @@ public sealed class ConfigServiceTests : IDisposable
     [Fact]
     public void Load_JsonArrayRoot_IsTreatedAsCorrupt()
     {
-        // 根节点不是对象 → 备份 + 重建，不能硬解析下去
+        // 根节点不是对象 → 与其他损坏形态同等对待：留副本 + 抛异常，绝不降级成空配置。
         WriteConfigFile("[1, 2, 3]");
 
-        var config = _service.Load();
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
 
-        Assert.Empty(config.Items);
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
         Assert.Single(Directory.GetFiles(_paths.ConfigRoot, CorruptBackupSearchPattern));
-    }
-
-    [Fact]
-    public void Load_CorruptJson_PreservesCopyThenRebuilds()
-    {
-        // E10 / FR-12.3：配置损坏必须**先留副本**再重建。
-        // 直接覆盖是灾难 —— 副本里存着"哪些系统自启动项被接管了"，丢了就再也还原不回去。
-        WriteConfigFile("{ this is definitely not json ");
-
-        var config = _service.Load();
-
-        Assert.Equal(AppConfig.CurrentVersion, config.Version);
-        Assert.Empty(config.Items);
-
-        var backups = Directory.GetFiles(_paths.ConfigRoot, CorruptBackupSearchPattern);
-        Assert.Single(backups);
-        Assert.Contains("20260919-084112", backups[0], StringComparison.Ordinal);
-        Assert.True(File.Exists(backups[0]));
-        Assert.True(_log.Contains(LogLevel.Error, "解析失败"));
     }
 
     [Fact]
@@ -94,90 +75,123 @@ public sealed class ConfigServiceTests : IDisposable
     }
 
     [Fact]
-    public void Load_LegacyV1_MigratesScopeEnabledAndOriginalState()
+    public void Load_MissingFile_ReturnsEmptyConfig()
     {
-        // FR-12.1：v1（demo 格式）→ v2
-        WriteConfigFile(LegacyV1Json);
-
+        // 文件不存在 = 合法的空配置，允许写入
         var config = _service.Load();
 
-        // Assert：版本升上来了，条目都在
         Assert.Equal(AppConfig.CurrentVersion, config.Version);
-        Assert.Equal(2, config.Items.Count);
-
-        // 注册表项：补 scope、改名 arguments / sourceKey、补 enabled 与 originalState
-        var registry = config.Items[0];
-        Assert.Equal("legacy-hkcu", registry.Id);
-        Assert.Equal(StartupSource.Registry, registry.Source);
-        Assert.Equal(StartupScope.Hkcu, registry.Scope);
-        Assert.Equal("-silent", registry.Arguments);
-        Assert.Equal("Weixin", registry.SourceKey);
-        Assert.Equal(30, registry.DelaySeconds);
-        Assert.True(registry.Enabled);
-        // v1 条目接管前是正常自启动的 → 迁移后必须记成"原本启用"，
-        // 否则「移出延时启动」会把它永久留在禁用状态（见 ConfigService 迁移方法的 remarks）。
-        Assert.True(registry.OriginalState.WasEnabled);
-
-        // 启动文件夹项：scope 推断为系统启动文件夹
-        var folder = config.Items[1];
-        Assert.Equal(StartupSource.StartupFolder, folder.Source);
-        Assert.Equal(StartupScope.SystemFolder, folder.Scope);
-        Assert.Equal("sync.lnk", folder.SourceKey);
-        Assert.True(folder.RunAsAdmin);
+        Assert.Empty(config.Items);
     }
 
     [Fact]
-    public void Load_LegacyV1_MigrationIsRecordedInLog()
+    public void Load_CorruptJson_ThrowsAndKeepsOriginal()
     {
-        WriteConfigFile(LegacyV1Json);
+        // E10 / FR-12.3：配置损坏时**抛异常**，绝不降级成空配置。
+        // 降级意味着程序在"自己什么都不知道"的状态下继续工作：守卫安静地什么都不纠正、
+        // 界面把接管项全显示成未接管、任何写操作都会覆盖掉仅存的副本。静默的破坏比明确的失败危险得多。
+        // 抛之前先留带时间戳的副本 —— 里面存着"哪些系统自启动项被接管了"，那是唯一的还原依据。
+        WriteConfigFile("{ this is definitely not json ");
 
-        _ = _service.Load();
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
 
-        Assert.True(_log.Contains(LogLevel.Info, "迁移"));
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+        Assert.True(File.Exists(_service.ConfigFilePath), "原文件必须保留，不能被覆盖");
+
+        var backups = Directory.GetFiles(_paths.ConfigRoot, CorruptBackupSearchPattern);
+        Assert.Single(backups);
+        Assert.Contains("20260919-084112", backups[0], StringComparison.Ordinal);
+        Assert.True(_log.Contains(LogLevel.Error, "解析失败"));
     }
 
-    [Theory]
-    [InlineData(@"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", StartupScope.Hkcu)]
-    [InlineData(@"HKLM\Software\Microsoft\Windows\CurrentVersion\Run", StartupScope.Hklm)]
-    [InlineData(@"HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run", StartupScope.HklmWow)]
-    [InlineData("某个不认识的位置", StartupScope.None)]
-    public void Load_LegacyV1RegistryDetail_InfersScope(string sourceDetail, StartupScope expectedScope)
+    [Fact]
+    public void Load_ValidConfig_ReturnsNormalizedSnapshot()
     {
-        // 迁移期的一次性推断：v1 没存 scope，只能从位置描述里读出来并用枚举固化
-        WriteConfigFile(BuildLegacyJson("registry", EscapeForJson(sourceDetail)));
+        WriteConfigFile("""{ "version": 2, "items": [], "settings": { "retryCount": -5 } }""");
 
         var config = _service.Load();
 
-        Assert.Single(config.Items);
-        Assert.Equal(expectedScope, config.Items[0].Scope);
+        Assert.Equal(AppConfig.CurrentVersion, config.Version);
+        Assert.Equal(0, config.Settings.RetryCount);
     }
 
-    [Theory]
-    [InlineData("用户启动文件夹", StartupScope.UserFolder)]
-    [InlineData("系统启动文件夹", StartupScope.SystemFolder)]
-    public void Load_LegacyV1StartupFolderDetail_InfersScope(string sourceDetail, StartupScope expectedScope)
+    [Fact]
+    public void Load_RetryCountAboveCeiling_IsClamped()
     {
-        WriteConfigFile(BuildLegacyJson("startup_folder", sourceDetail));
+        // 🔴 B7：原先只夹下界。手改成 1000000 就是"失败一百万次"——每个失败都要走一遍
+        // 降权链 / 计划任务调用，一轮下来能把登录后几分钟全占死，而用户只看到"登录后卡很久"。
+        WriteConfigFile("""{ "version": 2, "items": [], "settings": { "retryCount": 1000000 } }""");
 
         var config = _service.Load();
 
-        Assert.Single(config.Items);
-        Assert.Equal(expectedScope, config.Items[0].Scope);
+        Assert.Equal(ConfigService.MaximumRetryCount, config.Settings.RetryCount);
     }
 
-    [Theory]
-    [InlineData("scheduled_task", StartupSource.ScheduledTask)]
-    [InlineData("uwp", StartupSource.Uwp)]
-    [InlineData("完全不认识的来源", StartupSource.Manual)]
-    public void Load_LegacyV1Source_IsMappedToEnum(string source, StartupSource expected)
+    [Fact]
+    public void Load_RetryCountWithinRange_IsPreserved()
     {
-        WriteConfigFile(BuildLegacyJson(source, "任意位置"));
+        // 区间内的值不能被夹：夹了就成了"设置页改了没反应"。
+        WriteConfigFile("""{ "version": 2, "items": [], "settings": { "retryCount": 3 } }""");
 
         var config = _service.Load();
 
-        Assert.Single(config.Items);
-        Assert.Equal(expected, config.Items[0].Source);
-        Assert.Equal(StartupScope.None, config.Items[0].Scope);
+        Assert.Equal(3, config.Settings.RetryCount);
+    }
+
+    [Fact]
+    public void RetryCountBounds_MatchSettingsPageNumberBox()
+    {
+        // 🔴 上界必须与设置页 NumberBox 的 Maximum 一致（见 SettingsPage.xaml 的注释）：
+        // 两处各写一个数就会出现"界面显示 5、配置实际是 8"的错位。
+        // x:Bind 拿不到 C# 常量，所以这条断言就是那道人工同步的护栏 —— 改了一边必须改另一边。
+        const int numberBoxMaximum = 5;
+        const int numberBoxMinimum = 0;
+
+        Assert.Equal(numberBoxMaximum, ConfigService.MaximumRetryCount);
+        Assert.Equal(numberBoxMinimum, ConfigService.MinimumRetryCount);
+    }
+
+    [Theory]
+    [InlineData(99, NotifyMode.FailuresOnly)]
+    [InlineData(-1, NotifyMode.FailuresOnly)]
+    [InlineData(0, NotifyMode.FailuresOnly)]
+    [InlineData(1, NotifyMode.Always)]
+    [InlineData(2, NotifyMode.Never)]
+    public void Load_UnknownNotifyMode_FallsBackToDefault(int raw, NotifyMode expected)
+    {
+        // 枚举强转不抛异常：手改配置写个 7 进来不会报错，只会让收尾判定走到一个
+        // 既不是"总是"也不是"从不"的分支，行为变得不可预期。
+        WriteConfigFile($$"""{ "version": 2, "items": [], "settings": { "notifyMode": {{raw}} } }""");
+
+        var config = _service.Load();
+
+        Assert.Equal(expected, config.Settings.NotifyMode);
+    }
+
+    [Theory]
+    [InlineData(99, GuardNotifyMode.OnChange)]
+    [InlineData(-1, GuardNotifyMode.OnChange)]
+    [InlineData(0, GuardNotifyMode.OnChange)]
+    [InlineData(1, GuardNotifyMode.Never)]
+    public void Load_UnknownGuardNotifyMode_FallsBackToDefault(int raw, GuardNotifyMode expected)
+    {
+        WriteConfigFile($$"""{ "version": 2, "items": [], "settings": { "guardNotifyMode": {{raw}} } }""");
+
+        var config = _service.Load();
+
+        Assert.Equal(expected, config.Settings.GuardNotifyMode);
+    }
+
+    [Fact]
+    public void Save_ConfigPathOccupiedByDirectory_ThrowsStartupOperationException()
+    {
+        // 4.7：保存失败必须包装成 StartupOperationException（I/O、权限、文件系统能力），
+        // 让 UI 有统一的 catch 形状，而不是把裸 IOException 撒到事件处理器里。
+        Directory.CreateDirectory(_paths.ConfigFilePath);
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Save(new AppConfig()));
+
+        Assert.Equal(StartupFailureReason.Unknown, exception.Reason);
     }
 
     [Fact]
@@ -378,61 +392,6 @@ public sealed class ConfigServiceTests : IDisposable
         Assert.Throws<ArgumentNullException>(() => new ConfigService(_paths, null!, _clock));
         Assert.Throws<ArgumentNullException>(() => new ConfigService(_paths, _log, null!));
     }
-
-    private const string LegacyV1Json = """
-    {
-      "Version": 1,
-      "Items": [
-        {
-          "Id": "legacy-hkcu",
-          "Name": "微信",
-          "Path": "C:\\Program Files\\WeChat\\WeChat.exe",
-          "Args": "-silent",
-          "DelaySeconds": 30,
-          "RunAsAdmin": false,
-          "SortOrder": 1,
-          "Source": "registry",
-          "SourceDetail": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-          "SourceKeyName": "Weixin"
-        },
-        {
-          "Id": "legacy-folder",
-          "Name": "同步盘",
-          "Path": "C:\\App\\sync.exe",
-          "Args": "",
-          "DelaySeconds": 60,
-          "RunAsAdmin": true,
-          "SortOrder": 2,
-          "Source": "startup_folder",
-          "SourceDetail": "系统启动文件夹",
-          "SourceKeyName": "sync.lnk"
-        }
-      ]
-    }
-    """;
-
-    private static string BuildLegacyJson(string source, string escapedSourceDetail) => $$"""
-    {
-      "Version": 1,
-      "Items": [
-        {
-          "Id": "legacy-item",
-          "Name": "测试项",
-          "Path": "C:\\App\\a.exe",
-          "Args": "",
-          "DelaySeconds": 10,
-          "RunAsAdmin": false,
-          "SortOrder": 0,
-          "Source": "{{source}}",
-          "SourceDetail": "{{escapedSourceDetail}}",
-          "SourceKeyName": "test"
-        }
-      ]
-    }
-    """;
-
-    private static string EscapeForJson(string value)
-        => value.Replace(@"\", @"\\", StringComparison.Ordinal);
 
     private void WriteConfigFile(string json)
     {

@@ -62,6 +62,13 @@ public sealed class GuardInspectionStore
             return;
         }
 
+        if (report.ConfigUnavailable)
+        {
+            // 同理：巡检根本没开始，归档出来的会是"扫描 0 项"的假记录，
+            // 反而把一次故障伪装成"扫过、没发现问题"。
+            return;
+        }
+
         var fileName = report.CompletedAt.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
         var targetPath = Path.Combine(_paths.GuardInspectionsRoot, $"{fileName}.json");
 

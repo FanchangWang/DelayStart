@@ -52,8 +52,7 @@ public sealed partial class MainWindow : Window
 
         InitializeComponent();
 
-        // FR-9 主题设置：启动即应用配置里的主题偏好；设置页切换时实时跟随。
-        _themeService.Load();
+        // FR-9 主题设置：主题偏好由 ThemeService 构造时读入；设置页切换时实时跟随。
         RootGrid.RequestedTheme = ThemeService.ToElementTheme(_themeService.Current);
         _themeService.ThemeChanged += theme =>
             RootGrid.RequestedTheme = ThemeService.ToElementTheme(theme);

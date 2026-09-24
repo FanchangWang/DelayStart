@@ -106,7 +106,20 @@ public sealed class TakeoverService
                 $"找不到『{entry.Name}』所属的来源（{entry.Source} / {entry.Scope}），无法接管。");
         }
 
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.Load();
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, $"接管『{entry.Name}』失败：配置当前不可用");
+            return TakeoverOutcome.Failure(
+                entry.Id,
+                ex.Reason,
+                $"配置当前不可用，未执行接管：{ex.Message}");
+        }
+
         if (config.Items.Exists(item => string.Equals(item.Id, entry.Id, StringComparison.Ordinal)))
         {
             return TakeoverOutcome.Failure(entry.Id, StartupFailureReason.Unknown, "该项已被接管，无需重复操作。");
@@ -181,21 +194,64 @@ public sealed class TakeoverService
     /// 🔴 第 1 步失败时**保持配置不动**并直接返回失败。配置是唯一的还原依据，
     /// 在系统项还没恢复成功时删掉它，就等于永久丢失了"该怎么恢复"的答案。
     /// 用户重试即可 —— 恢复动作本身是幂等的（删标记，值不存在时静默跳过）。
+    /// <para>
+    /// 🔴 配置损坏 / 不可读时（<see cref="IAppConfigStore.Load"/> 抛异常），
+    /// 或非手动条目的来源无法识别时，同样**保持配置不动**并返回失败 —— 系统项此刻仍处于
+    /// 被禁用状态，删掉配置 = 永久丢失"该怎么恢复"的答案（4.1）。
+    /// </para>
     /// </remarks>
     public TakeoverOutcome Release(DelayedItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        // 找不到来源不算错误：手动条目本就没有来源，其余情况也只需跳过系统动作。
-        _ = TryResolveSource(item.Source, item.Scope, out var source);
+        // 先拿到可安全变更的配置快照：配置损坏/不可读时绝不能先改系统再把还原依据删掉。
+        AppConfig config;
+        try
+        {
+            config = _configStore.Load();
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, $"释放『{item.Name}』失败：配置当前不可用，未执行任何系统恢复");
+            return TakeoverOutcome.Failure(
+                item.Id,
+                ex.Reason,
+                $"配置当前不可用，未执行释放：{ex.Message}");
+        }
+
+        // 以配置快照中的条目为准：调用方给的 item 可能已过期。
+        var stored = config.Items.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, item.Id, StringComparison.Ordinal));
+        if (stored is null)
+        {
+            return TakeoverOutcome.Failure(
+                item.Id,
+                StartupFailureReason.Unknown,
+                "配置中找不到该条目，未执行系统恢复；请刷新列表后重试。");
+        }
 
         // ── 步骤 1：恢复系统启动项 ────────────────────────────────────────────
         // 手动条目在系统里没有任何对应物，直接跳过（FR-3.4）。
-        if (!item.IsManual && source is not null)
+        IStartupSource? source;
+        if (stored.IsManual)
+        {
+            source = null;
+        }
+        else if (!TryResolveSource(stored.Source, stored.Scope, out source))
+        {
+            // 🔴 来源识别失败 = 没有人知道"该怎么恢复"。系统项此刻仍处于软禁用，
+            // 此时删掉配置 = 永久丢失还原依据（4.1）—— 保留配置并返回失败。
+            return TakeoverOutcome.Failure(
+                stored.Id,
+                StartupFailureReason.Unknown,
+                $"无法识别『{stored.Name}』的来源（{stored.Source} / {stored.Scope}），已保留配置，未执行系统恢复。");
+        }
+
+        if (source is not null)
         {
             try
             {
-                RestoreToOriginalState(item, source);
+                RestoreToOriginalState(stored, source);
             }
             catch (StartupOperationException ex)
             {
@@ -208,8 +264,7 @@ public sealed class TakeoverService
         }
 
         // ── 步骤 2：从配置中删除 ──────────────────────────────────────────────
-        var config = _configStore.Load();
-        if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, item.Id, StringComparison.Ordinal)) > 0)
+        if (config.Items.RemoveAll(candidate => string.Equals(candidate.Id, stored.Id, StringComparison.Ordinal)) > 0)
         {
             try
             {
@@ -289,7 +344,25 @@ public sealed class TakeoverService
     /// </remarks>
     public RestoreOutcome RestoreAll()
     {
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.Load();
+        }
+        catch (StartupOperationException ex)
+        {
+            // 🔴 配置不可用 = 不知道有哪些条目被接管过。此时绝不能"0 项还原成功"假过关，
+            // 更不能删除调度计划任务 —— 条目还在配置里，卸载后它们将永远失去调度者。
+            _log.Error(ex, "还原全部失败：配置当前不可用，未删除调度计划任务");
+            return new RestoreOutcome
+            {
+                RestoredCount = 0,
+                FailedCount = 1,
+                Failures = [$"配置不可用，还原中止：{ex.Message}"],
+                TaskDeleted = false,
+            };
+        }
+
         var failures = new List<string>();
         var restored = 0;
 

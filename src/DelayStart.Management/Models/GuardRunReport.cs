@@ -28,6 +28,16 @@ public sealed record GuardRunReport
     /// <summary>守卫在配置里是关闭状态，本次未执行任何巡检。</summary>
     public bool GuardDisabled { get; init; }
 
+    /// <summary>
+    /// 配置不可用导致巡检**无法开始**。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="GuardDisabled"/> 严格分开：那是"用户主动关闭"（正常状态、不用管），
+    /// 这是"程序不知道该管什么"（异常状态、必须让人看见）。混为一谈会让日志把一次故障
+    /// 记成用户的设置，下次翻日志的人根本看不出发生过什么。
+    /// </remarks>
+    public bool ConfigUnavailable { get; init; }
+
     /// <summary>本次扫描到的条目数（不全的扫描也会给出已扫到的数量）。</summary>
     public int ScannedCount { get; init; }
 
@@ -62,6 +72,10 @@ public sealed record GuardRunReport
     /// <summary>构造"守卫已关闭"的结果。</summary>
     /// <returns>未执行巡检的结果。</returns>
     public static GuardRunReport Disabled() => new() { GuardDisabled = true };
+
+    /// <summary>构造"配置不可用、巡检无法开始"的结果。</summary>
+    /// <returns>未执行任何扫描的结果。</returns>
+    public static GuardRunReport ConfigUnavailableReport() => new() { ConfigUnavailable = true };
 }
 
 /// <summary>

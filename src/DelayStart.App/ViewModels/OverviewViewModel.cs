@@ -152,6 +152,18 @@ public partial class OverviewViewModel : ObservableObject
     /// <summary>是否显示失败提示（由 <see cref="GuardError"/> 通知驱动）。</summary>
     public bool GuardHasError => GuardError.Length > 0;
 
+    /// <summary>配置不可用时的整页提示；空字符串表示正常。</summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="GuardError"/> 分开：那条只管守卫设置，这条是"程序读不到自己的配置"——
+    /// 页面上所有计数都会是假的，必须整页说清楚，而不是只在一个角落闪红字。
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLoadError))]
+    public partial string LoadError { get; set; } = string.Empty;
+
+    /// <summary>是否显示配置不可用提示（由 <see cref="LoadError"/> 通知驱动）。</summary>
+    public bool HasLoadError => LoadError.Length > 0;
+
     /// <summary>守卫设置保存 / 任务同步是否正在进行（防重入）。</summary>
     [ObservableProperty]
     public partial bool IsWorkingOnGuard { get; set; }
@@ -220,7 +232,18 @@ public partial class OverviewViewModel : ObservableObject
     /// <returns>异步任务。</returns>
     public async Task LoadAsync()
     {
-        var config = _configStore.Load();
+        AppConfig config;
+        try
+        {
+            config = _configStore.Load();
+        }
+        catch (StartupOperationException ex)
+        {
+            // 🔴 读不到配置时页面上每个数字都是假的（接管数会显示成 0，像"你什么都没接管"）。
+            // 明确说出来，好过一片看似正常的 0。
+            LoadError = $"配置不可用，以下数据无法显示：{ex.Message}";
+            return;
+        }
 
         // ── 延时列表来源计数 ─────────────────────────────────────────────
         DelayedRegistry = config.Items.Count(static item => item.Source == StartupSource.Registry);
@@ -277,7 +300,7 @@ public partial class OverviewViewModel : ObservableObject
         {
             try
             {
-                var registered = await Task.Run(_registrar.IsRegistered).ConfigureAwait(true);
+                var registered = await Task.Run(_registrar.Matches).ConfigureAwait(true);
                 if (registered)
                 {
                     TaskReady = true;

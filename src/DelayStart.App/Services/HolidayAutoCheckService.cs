@@ -1,6 +1,7 @@
 using System.Globalization;
 
 using DelayStart.Core.Abstractions;
+using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Management.Services;
 
@@ -115,7 +116,18 @@ public sealed class HolidayAutoCheckService
     /// </remarks>
     public string Describe()
     {
-        if (!_configStore.Load().Settings.AutoCheckHolidayUpdates)
+        bool autoCheckEnabled;
+        try
+        {
+            autoCheckEnabled = _configStore.Load().Settings.AutoCheckHolidayUpdates;
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, "读取自动检查设置失败");
+            return "配置不可用 —— 无法判断节假日数据的更新状态。";
+        }
+
+        if (!autoCheckEnabled)
         {
             return "已关闭 —— 不会自动联网补数据；要补用上面的「补齐缺失年份」。";
         }
@@ -217,6 +229,12 @@ public sealed class HolidayAutoCheckService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _log.Error(ex, "节假日数据自动检查失败");
+        }
+        catch (StartupOperationException ex)
+        {
+            // 配置不可用：自动检查本来就无从判断"该不该跑"，静默跳过并把状态摆到设置页。
+            _log.Error(ex, "读取配置失败，节假日数据自动检查已跳过");
+            _status.Report(Describe());
         }
         finally
         {

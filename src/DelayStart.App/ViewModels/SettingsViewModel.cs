@@ -463,7 +463,11 @@ public partial class SettingsViewModel : ObservableObject
             var settings = _configStore.Load().Settings;
 
             RebuildPresets(settings);
-            RetryCount = Math.Clamp(settings.RetryCount, 0, 5);
+            // 夹取范围引用 Core 常量，不在本文件另写一份数字（x:Bind 的字面量除外，见 SettingsPage.xaml 注释）。
+            RetryCount = Math.Clamp(
+                settings.RetryCount,
+                ConfigService.MinimumRetryCount,
+                ConfigService.MaximumRetryCount);
             NotifyModeIndex = (int)settings.NotifyMode;
             GuardNotifyModeIndex = (int)settings.GuardNotifyMode;
             ThemeIndex = (int)settings.Theme;
@@ -478,6 +482,13 @@ public partial class SettingsViewModel : ObservableObject
             RefreshHolidayStatus();
 
             StatusText = string.Empty;
+        }
+        catch (StartupOperationException ex)
+        {
+            // 🔴 配置不可用：页面上每个控件都会是默认值，用户改任何一项都会被 SaveOrReport
+            // 拒绝。把原因说清楚，别让它看起来像"设置都是空的"。
+            _log.Error(ex, "配置无法加载");
+            Fail(ex.Message);
         }
         finally
         {
@@ -576,7 +587,18 @@ public partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        var settings = _configStore.Load().Settings;
+        Settings settings;
+        try
+        {
+            settings = _configStore.Load().Settings;
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, "配置无法加载，未执行删除延时预设");
+            Fail(ex.Message);
+            return;
+        }
+
         var list = settings.DelayPresets.ToList();
         if (list.Count <= 1 || !list.Contains(row.Seconds))
         {
@@ -613,7 +635,16 @@ public partial class SettingsViewModel : ObservableObject
             return null;
         }
 
-        var settings = _configStore.Load().Settings;
+        Settings settings;
+        try
+        {
+            settings = _configStore.Load().Settings;
+        }
+        catch (StartupOperationException ex)
+        {
+            _log.Error(ex, "配置无法加载，未添加延时预设");
+            return ex.Message;
+        }
 
         if (seconds < 0)
         {
@@ -1078,18 +1109,24 @@ public partial class SettingsViewModel : ObservableObject
     /// <param name="mutate">对 <c>settings</c> 节点的局部修改。</param>
     private void Persist(Action<Settings> mutate)
     {
-        var config = _configStore.Load();
-        mutate(config.Settings);
-        SaveOrReport(config.Settings);
+        try
+        {
+            var config = _configStore.Load();
+            mutate(config.Settings);
+            SaveOrReport(config.Settings);
+        }
+        catch (StartupOperationException ex)
+        {
+            Fail(ex.Message);
+        }
     }
 
     private void SaveOrReport(Settings settings)
     {
-        var config = _configStore.Load();
-        config.Settings = settings;
-
         try
         {
+            var config = _configStore.Load();
+            config.Settings = settings;
             _configStore.Save(config);
             StatusText = string.Empty;
         }

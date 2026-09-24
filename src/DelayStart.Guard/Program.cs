@@ -95,6 +95,14 @@ internal static class Program
             return 0;
         }
 
+        if (report.ConfigUnavailable)
+        {
+            // 🔴 与"守卫已关闭"是两回事：那是用户的选择，这是程序读不到自己的配置。
+            // 必须留下痕迹并返回非 0 —— 否则计划任务会以为一切正常，而实际上没有任何项目被纠正。
+            GuardLog.Error("配置不可用，本次巡检未能开始（未扫描、未纠正任何项目）。");
+            return 1;
+        }
+
         WriteSummary(report);
 
         // 结构化归档（D116，D1=A 批复）：汇总行之后落盘。守卫关闭的那条路径在上面

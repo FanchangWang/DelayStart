@@ -274,6 +274,65 @@ public sealed class TakeoverServiceTests
         Assert.Equal(0, harness.Source.EnableCount);
     }
 
+    [Fact]
+    public void Release_NonManualItemWithUnresolvableSource_KeepsConfig()
+    {
+        // 4.1：来源识别失败 = 没有人知道"该怎么恢复"，系统项此刻仍处于软禁用。
+        // 删掉配置 = 永久丢失还原依据 —— 必须保留配置并返回失败。
+        var harness = new Harness();
+        var stranded = new DelayedItem
+        {
+            Id = "registry:hklm:weixin",
+            Name = "微信",
+            Path = @"C:\Program Files\Tencent\Weixin\Weixin.exe",
+            Source = StartupSource.Registry,
+            Scope = StartupScope.Hklm, // harness 只注册了 (Registry, Hkcu)
+            SourceKey = "Weixin",
+            OriginalState = new OriginalState { WasEnabled = true },
+        };
+        harness.Config.Seed(new AppConfig { Items = [stranded] });
+
+        var outcome = harness.Service.Release(stranded);
+
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(0, harness.Source.EnableCount);
+        Assert.Single(harness.Config.Snapshot().Items);
+    }
+
+    [Fact]
+    public void Release_ConfigUnavailable_FailsWithoutTouchingSystem()
+    {
+        var harness = new Harness();
+        harness.Config.Seed(new AppConfig { Items = [Item()] });
+        harness.Config.LoadException = new StartupOperationException(
+            StartupFailureReason.ConfigCorrupted, "registry:hkcu:weixin", "配置损坏");
+
+        var outcome = harness.Service.Release(Item());
+
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, outcome.FailureReason);
+        Assert.Equal(0, harness.Source.EnableCount); // 系统未被改动
+        Assert.Single(harness.Config.Snapshot().Items);
+    }
+
+    [Fact]
+    public void RestoreAll_ConfigUnavailable_FailsWithoutDeletingTask()
+    {
+        // 卸载路径（FR-11.4）：配置不可用 = 不知道有哪些条目被接管过。
+        // 绝不能"0 项还原成功"假过关，更不能删调度任务（还原依据还在配置里，
+        // 一旦卸载，条目将永远失去调度者）。
+        var harness = new Harness();
+        harness.Config.LoadException = new StartupOperationException(
+            StartupFailureReason.ConfigCorrupted, string.Empty, "配置损坏");
+
+        var outcome = harness.Service.RestoreAll();
+
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(1, outcome.FailedCount);
+        Assert.False(outcome.TaskDeleted);
+        Assert.Equal(0, harness.Registrar.DeleteCount);
+    }
+
     // ── 恢复成接管前的状态（FR-2.7 / docs/design.md 9.3 第 4 条）────────────
 
     [Fact]

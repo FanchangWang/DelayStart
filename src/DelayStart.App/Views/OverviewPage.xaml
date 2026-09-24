@@ -59,6 +59,19 @@
     <ScrollView>
         <StackPanel Padding="32,8,32,40" HorizontalAlignment="Stretch" MaxWidth="1000">
 
+            <!-- 🔴 配置不可用时的整页接管（FR-12）：读不到配置时下面每个数字都是假的
+                 （接管数会显示成 0，像"你什么都没接管"），所以**主体内容整体隐藏**，
+                 只留这一条说明 —— 明确说清好过一片看似正常的 0。
+                 退出条件：用户修好/删掉损坏的 config.json 后重新进入本页。 -->
+            <InfoBar
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasLoadError, Mode=OneWay}"
+                Severity="Error"
+                Title="配置不可用"
+                Message="{x:Bind ViewModel.LoadError, Mode=OneWay}" />
+
+            <StackPanel Visibility="{x:Bind ViewModel.HasLoadError, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}">
+
             <!-- 页头 -->
             <StackPanel Spacing="4">
                 <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="总览" />
@@ -530,6 +543,8 @@
                         Content="查看守卫日志 →" />
                 </Grid>
             </Border>
+
+            </StackPanel>
         </StackPanel>
     </ScrollView>
 </Page>

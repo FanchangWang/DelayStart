@@ -188,7 +188,7 @@ public sealed class ScanCacheService : IDisposable
         }
 
         var entries = await ResolveUwpNamesAsync(result.Entries, pixels, cancellationToken).ConfigureAwait(false);
-        return new ScanSnapshot(entries, pixels, result.Failures);
+        return new ScanSnapshot(entries, pixels, result.Failures, result.ConfigUnavailable);
     }
 
     /// <summary>重扫单个来源并合并进缓存（后台线程调用）。</summary>
@@ -196,7 +196,7 @@ public sealed class ScanCacheService : IDisposable
     {
         var existing = _snapshot!;
 
-        var takenOver = LoadTakenOverKeys();
+        var configLoad = LoadTakenOverKeys();
 
         // 三类数据按来源剔除旧值，必须**同进同退** —— 漏掉任何一类都会留下"已经不在
         // 快照里的键"。🔴 `pixels` 此前正是漏掉的那一类（2026-09-24 批复 28 / B2）：
@@ -220,7 +220,7 @@ public sealed class ScanCacheService : IDisposable
         {
             try
             {
-                var scanned = source.Scan(takenOver);
+                var scanned = source.Scan(configLoad.Keys);
                 foreach (var entry in scanned)
                 {
                     entries.Add(entry);
@@ -243,7 +243,7 @@ public sealed class ScanCacheService : IDisposable
         entries.Sort(CompareEntries);
         var resolved = await ResolveUwpNamesAsync(entries, pixels, cancellationToken).ConfigureAwait(false);
         ((List<StartupEntry>)resolved).Sort(CompareEntries);
-        return new ScanSnapshot(resolved, pixels, failures);
+        return new ScanSnapshot(resolved, pixels, failures, configLoad.Available ? existing.ConfigUnavailable : true);
     }
 
     /// <summary>
@@ -327,16 +327,20 @@ public sealed class ScanCacheService : IDisposable
         return parsingName is null ? null : _icons.TryGetIcon(parsingName);
     }
 
-    private HashSet<string> LoadTakenOverKeys()
+    private (HashSet<string> Keys, bool Available) LoadTakenOverKeys()
     {
         try
         {
-            return [.. _configStore.Load().Items.Select(static item => item.Id)];
+            return (
+                [.. _configStore.Load().Items.Select(static item => item.Id)],
+                Available: true);
         }
         catch (Exception ex)
         {
-            _log.Warn(ex, "配置无法加载，局部重扫按「没有接管项」处理");
-            return [];
+            // 🔴 不降级成"没有接管项"：那会让刷新后的列表把接管项全显示成未接管，
+            // 用户一点就是双重接管。改为把不可信标记透传给快照，由界面拒绝提供操作入口。
+            _log.Error(ex, "配置无法加载：本次快照的「是否已接管」不可信");
+            return ([], Available: false);
         }
     }
 
@@ -367,7 +371,12 @@ public sealed class ScanCacheService : IDisposable
 /// <param name="Entries">全部条目（已按来源 → 作用域 → 名称排序）。</param>
 /// <param name="Pixels">每个条目的图标像素；缺失为 <see langword="null"/>。</param>
 /// <param name="Failures">来源级扫描失败（FR-1.4）。</param>
+/// <param name="ConfigUnavailable">
+/// 配置不可用导致"是否已接管"无法判定（<see langword="true"/> 时本快照**不得**用于提供
+/// 接管 / 释放操作 —— 每一项的接管状态都是错的）。
+/// </param>
 public sealed record ScanSnapshot(
     IReadOnlyList<StartupEntry> Entries,
     IReadOnlyDictionary<StartupEntry, IconPixels?> Pixels,
-    IReadOnlyList<ScanFailure> Failures);
+    IReadOnlyList<ScanFailure> Failures,
+    bool ConfigUnavailable = false);

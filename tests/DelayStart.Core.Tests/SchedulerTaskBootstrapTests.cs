@@ -45,8 +45,25 @@ public sealed class SchedulerTaskBootstrapTests
 
         harness.Service.EnsureSchedulerTask();
 
-        Assert.Equal(1, harness.Registrar.RegisterCount); // 没有重复注册
+        Assert.Equal(1, harness.Registrar.WriteCount); // 只真正写入过一次，未重复写入
         Assert.True(harness.Registrar.Registered);
+    }
+
+    [Fact]
+    public void EnsureSchedulerTask_UpToDateDefinition_SkipsRewriteAndLogsNoRebuild()
+    {
+        var harness = new Harness();
+
+        // 模拟上一次启动已正确注册、且定义没有变化（F1 调度端镜像 / D113）。
+        harness.Registrar.RegisterOrUpdate();
+        var before = harness.Registrar.WriteCount;
+
+        harness.Service.EnsureSchedulerTask();
+
+        // 定义一致时不重写：写入次数不应增长，且日志明确"无需重建"。
+        Assert.Equal(before, harness.Registrar.WriteCount);
+        Assert.True(harness.Registrar.Registered);
+        Assert.True(harness.Log.Contains(LogLevel.Info, "已是最新，无需重建"));
     }
 
     [Fact]
@@ -57,7 +74,7 @@ public sealed class SchedulerTaskBootstrapTests
         harness.Service.EnsureSchedulerTask();
         harness.Service.EnsureSchedulerTask();
 
-        Assert.Equal(1, harness.Registrar.RegisterCount);
+        Assert.Equal(1, harness.Registrar.WriteCount);
     }
 
     // ── 失败路径 ────────────────────────────────────────────────────────────

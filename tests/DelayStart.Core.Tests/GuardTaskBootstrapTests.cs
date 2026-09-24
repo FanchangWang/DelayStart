@@ -12,14 +12,15 @@ namespace DelayStart.Core.Tests;
 /// <para>
 /// 用户的原话是"守卫的计划任务也要跟调度器的计划任务一样进行检测复建，目的都是防丢失"。
 /// 但守卫与调度**有一处本质差异**，本类要把它钉死：守卫的档位是用户可调的设置项，
-/// 所以每次启动都按当前设置**重写**一次任务（幂等），而不是"已存在就不动"。
+/// 所以每次启动都按当前设置**同步**任务 —— 档位变了才真正重写、定义已一致则跳过重写
+/// （保留已武装的登录触发器，F1 / D112），而不是"已存在就永远不动"。
 /// </para>
 /// <para>
 /// 由此派生出的四条核心行为：
 /// </para>
 /// <list type="number">
 /// <item><description>守卫启用、任务缺失 ⇒ 按当前档位补建；</description></item>
-/// <item><description>守卫启用、任务已存在 ⇒ 按当前档位**同步**（档位改动即时生效）；</description></item>
+/// <item><description>守卫启用、任务已存在 ⇒ 按当前档位**同步**（定义一致则跳过重写保留触发器，档位改动即时重写）；</description></item>
 /// <item><description>守卫关闭、任务存在 ⇒ **删除**任务（不能让它按旧档位偷偷跑）；</description></item>
 /// <item><description>守卫关闭、任务本来就没有 ⇒ 什么都不做（不算改动、不报错）。</description></item>
 /// </list>
@@ -95,7 +96,7 @@ public sealed class GuardTaskBootstrapTests
     }
 
     [Fact]
-    public void SyncWithSettings_CalledTwiceInSameSession_IsIdempotent()
+    public void SyncWithSettings_CalledTwiceInSameSession_SkipsRewriteWhenUpToDate()
     {
         var harness = new Harness(GuardMode.OnceAfterLogin, DefaultMinutes);
 
@@ -103,8 +104,9 @@ public sealed class GuardTaskBootstrapTests
         var second = harness.Service.SyncWithSettings();
 
         Assert.Equal(GuardTaskSyncResult.Registered, first.Result);
-        Assert.Equal(GuardTaskSyncResult.Updated, second.Result);
-        Assert.Equal(2, harness.Registrar.RegisterCount); // 幂等重写，不是"跳过"
+        // F1 / D112：同一次会话里档位没变，第二次不应重建登录触发器（否则该次巡检被静默吞掉）。
+        Assert.Equal(GuardTaskSyncResult.NoChange, second.Result);
+        Assert.Equal(2, harness.Registrar.RegisterCount); // 仍被调用两次，但第二次判定无需写入
         Assert.Equal(DefaultMinutes, harness.Registrar.LastMinutes);
     }
 

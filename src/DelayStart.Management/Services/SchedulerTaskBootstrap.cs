@@ -15,6 +15,13 @@ namespace DelayStart.Management.Services;
 /// "自动补建会推翻用户关掉开关的意愿" 这条反对理由不复存在。
 /// </para>
 /// <para>
+/// 2026-09-24（D113，F1 调度端镜像）：任务**已存在且定义一致**时不重写，保留已武装的登录触发器与
+/// 运行统计。调度端是固定规则、不随设置变化，相同定义下每次启动都不应触碰它 —— 否则
+/// <c>CreateOrUpdate</c> 重建登录触发器会重置「登录后 N 秒」这一一次性窗口，并覆盖「上次运行时间」
+/// 等统计（与守卫 D112 同源的问题，只是守卫因此会静默吞掉巡检、调度端是统计失真）。
+/// 只有定义确实变了（安装目录迁移 / 任务被改坏）或任务缺失时才真正写入。
+/// </para>
+/// <para>
 /// 原先 <c>FirstRunBootstrap</c> 依赖的 <c>Settings.SchedulerTaskInitialized</c>
 /// 标记随之废止（配置模型里的字段已删除；老配置里残留的该键会被 JSON 反序列化忽略）。
 /// </para>
@@ -40,19 +47,26 @@ public sealed class SchedulerTaskBootstrap
         _log = log;
     }
 
-    /// <summary>幂等：任务已存在时直接返回，可以在每次启动时调用。</summary>
+    /// <summary>
+    /// 幂等：任务已存在且定义一致时跳过重写（保留触发器与运行统计）；缺失或定义变更则补建。
+    /// 可在每次启动时调用（镜像守卫 <see cref="GuardTaskBootstrap"/> 的 F1 行为，D113）。
+    /// </summary>
     public void EnsureSchedulerTask()
     {
         try
         {
-            if (_registrar.IsRegistered())
-            {
-                _log.Info("调度计划任务已存在，无需补建");
-                return;
-            }
+            // 与守卫 F1（D112）同一思路：先判断任务是否存在，再让他决定要不要写。
+            // RegisterOrUpdate 内部会比对完整定义，完全一致则返回 false 跳过重写，
+            // 保留触发器的"已武装"状态与「上次运行时间」等统计；只有缺失或定义确实变了才写。
+            var existed = _registrar.IsRegistered();
+            var changed = _registrar.RegisterOrUpdate();
 
-            _registrar.RegisterOrUpdate();
-            _log.Info("调度计划任务缺失，已自动重新创建（2026-09-21 批复：缺失即补建）");
+            _log.Info((existed, changed) switch
+            {
+                (true, false) => "调度计划任务已是最新，无需重建（保留触发器与运行统计）。",
+                (true, true) => "调度计划任务定义已变更，已自动重新创建。",
+                (false, _) => "调度计划任务缺失，已自动重新创建（2026-09-21 批复：缺失即补建）。",
+            });
         }
         catch (Exception ex)
         {

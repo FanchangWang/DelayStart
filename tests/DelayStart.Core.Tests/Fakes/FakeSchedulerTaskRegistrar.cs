@@ -17,8 +17,11 @@ internal sealed class FakeSchedulerTaskRegistrar : ISchedulerTaskRegistrar
     /// <summary>当前是否处于"已注册"状态。</summary>
     public bool Registered { get; private set; }
 
-    /// <summary><see cref="RegisterOrUpdate"/> 被调用的次数。</summary>
+    /// <summary><see cref="RegisterOrUpdate"/> 被调用的次数（含被跳过的那次）。</summary>
     public int RegisterCount { get; private set; }
+
+    /// <summary>真正执行了写入（跳过的那次不计入）的次数，用于判定"只注册一次"。</summary>
+    public int WriteCount { get; private set; }
 
     /// <summary><see cref="Delete"/> 被调用的次数。</summary>
     public int DeleteCount { get; private set; }
@@ -44,7 +47,7 @@ internal sealed class FakeSchedulerTaskRegistrar : ISchedulerTaskRegistrar
     }
 
     /// <inheritdoc />
-    public void RegisterOrUpdate()
+    public bool RegisterOrUpdate()
     {
         RegisterCount++;
         if (RegisterException is not null)
@@ -52,7 +55,17 @@ internal sealed class FakeSchedulerTaskRegistrar : ISchedulerTaskRegistrar
             throw RegisterException;
         }
 
+        // F1 调度端镜像（D113）：已经写过分"一模一样"的固定定义时，跳过重写（返回 false），
+        // 模拟真实注册端 IsDefinitionUpToDate 的短路。调度端定义不随设置变化，所以"已存在"
+        // 就等价于"定义一致"，无需重复写入。
+        if (Registered)
+        {
+            return false;
+        }
+
+        WriteCount++;
         Registered = true;
+        return true;
     }
 
     /// <inheritdoc />

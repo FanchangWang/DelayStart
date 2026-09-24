@@ -8,7 +8,7 @@ namespace DelayStart.Management.Services;
 /// <summary>一次守卫任务同步的结果。</summary>
 public enum GuardTaskSyncResult
 {
-    /// <summary>无需改动（守卫关闭且本来就没有任务）。</summary>
+    /// <summary>无需改动（守卫关闭且本来就没有任务，或守卫任务定义已是最新、跳过重写）。</summary>
     NoChange,
 
     /// <summary>任务此前缺失，已自动补建。</summary>
@@ -44,9 +44,11 @@ public sealed record GuardTaskSyncOutcome(GuardTaskSyncResult Result, string Mes
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// 调度任务已存在时不重写（省一次写）；守卫任务**每次启动都重写一次**
-/// （<c>CreateOrUpdate</c> 幂等、保留统计信息），这样档位改动能即时生效，
-/// 不需要额外的"档位与任务是否一致"探测逻辑。
+/// 调度任务已存在时不重写（省一次写）；守卫任务也只在"现有定义与期望不一致"时重写
+/// （F1 / D112，2026-09-24 修正）。此前每次启动都重写，而 <c>CreateOrUpdate</c> 会重建登录
+/// 触发器，把"登录后 N 分钟"这个一次性窗口丢掉——登录事件已经过去，新触发器在本会话内
+/// 等不到下一次登录，导致该次巡检被静默吞掉。现在改为先比对定义，完全一致就跳过写入；
+/// 档位调大调小、安装目录迁移、任务被改坏仍会即时补写。
 /// </description></item>
 /// <item><description>
 /// 档位为 <see cref="GuardMode.Disabled"/> 时不是"什么都不做"，而是**删除任务** ——
@@ -120,12 +122,18 @@ public sealed class GuardTaskBootstrap
                 return new GuardTaskSyncOutcome(GuardTaskSyncResult.Deleted, "守卫已关闭，计划任务已删除。");
             }
 
-            _registrar.RegisterOrUpdate(mode, minutes);
+            var changed = _registrar.RegisterOrUpdate(mode, minutes);
 
             var description = GuardTaskRegistrar.DescribeMode(mode, minutes);
-            return existed
-                ? new GuardTaskSyncOutcome(GuardTaskSyncResult.Updated, $"守卫计划任务已同步（{description}）。")
-                : new GuardTaskSyncOutcome(GuardTaskSyncResult.Registered, $"守卫计划任务缺失，已自动补建（{description}）。");
+            return (existed, changed) switch
+            {
+                (true, false) => new GuardTaskSyncOutcome(
+                    GuardTaskSyncResult.NoChange, $"守卫计划任务已是最新（{description}），无需重写。"),
+                (true, true) => new GuardTaskSyncOutcome(
+                    GuardTaskSyncResult.Updated, $"守卫计划任务已同步（{description}）。"),
+                (false, _) => new GuardTaskSyncOutcome(
+                    GuardTaskSyncResult.Registered, $"守卫计划任务缺失，已自动补建（{description}）。"),
+            };
         }
         catch (Exception ex)
         {

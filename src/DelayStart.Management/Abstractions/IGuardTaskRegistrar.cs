@@ -29,11 +29,13 @@ public interface IGuardTaskRegistrar
     /// <summary>
     /// 按档位幂等注册或更新守卫计划任务；<paramref name="mode"/> 为
     /// <see cref="GuardMode.Disabled"/> 时等价于 <see cref="Delete"/>。
+    /// 现有定义与期望完全一致时**不重写**，以保留登录触发器的已武装状态（F1 / D112）。
     /// </summary>
     /// <param name="mode">守卫模式。</param>
     /// <param name="minutes">间隔档位（分钟）。</param>
+    /// <returns>是否真正写入了任务定义（<see langword="false"/> 表示已跳过重写）。</returns>
     /// <exception cref="StartupOperationException">创建或更新失败时抛出。</exception>
-    void RegisterOrUpdate(GuardMode mode, int minutes);
+    bool RegisterOrUpdate(GuardMode mode, int minutes);
 
     /// <summary>删除守卫计划任务。任务不存在时静默返回，不抛异常（可重复执行）。</summary>
     /// <exception cref="StartupOperationException">删除失败时抛出。</exception>

@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D111）
+# DelayStart — 决策记录（D1–D114）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -956,6 +956,50 @@
 
 **未生效的备选**：换成真 GUID（`New-Guid` 生成）并同步 manifest 的 `ProductCode` —— 只在"尚无任何公开装机量"时才值得做（现在 v0.2.0–v0.3.1 已经发出去过）。
 
+### D112 守卫任务「每次启动重写」会吞掉本次会话的巡检（2026-09-24 用户上报后定案）
+
+**结论**：`GuardTaskRegistrar.RegisterOrUpdate` 在写入前**先逐字段比对现有任务定义**，完全一致则跳过 `RegisterTaskDefinition`，保留已武装的登录触发器；只有定义确实变了才重写。
+
+**背景**：用户发现开机登录后打开管理端，守卫当天一次都没跑（guard.log 自昨日 14:44 后零记录），任务计划程序里「上次运行时间」显示的是管理端重写任务的时刻、而「下次运行时间」卡在昨天。`CreateOrUpdate` 每次都重建触发器。
+
+**根因**：守卫触发器是 `LogonTrigger` + `InitialDelay`（登录后 N 分钟、一次性）。登录事件在会话里**只能消费一次**；管理端启动期重写任务 = 用全新 `LogonTrigger` 替换定义，而此时登录事件已过去，新触发器在本会话内永远等不到下一次登录 → 该次巡检被静默丢弃。周期模式同理（重复序列锚在触发器激活上）。
+
+**正确做法（F1）**：写入前比对现有定义的关键字段 —— action 路径与工作目录、Principal（Interactive/Highest/UserId）、触发器（Delay、Repetition.Interval、UserId）、六项 Settings（ExecutionTimeLimit=0、DisallowStartIfOnBatteries/StopIfGoingOnBatteries/RunOnlyIfIdle/RunOnlyIfNetworkAvailable=false、MultipleInstances=IgnoreNew）、`RegistrationInfo.Description`。**全部一致 → 跳过写入**；任一不符（档位调整 / 安装目录迁移 / 任务被改坏）→ 真正重写。D74「缺失即补建 / 关闭即删除」语义全部保留，只去掉了"每次启动无条件重写"。
+
+**附带发现（已记 pitfalls 二十二）**：此前 `GuardTaskRegistrar` 注释称 `CreateOrUpdate` 幂等、保留运行统计 —— **被真机证伪**：重写会重置触发器、且「上次运行时间」等统计会被覆盖成重写时刻（假成功）。
+
+**验证**：`dotnet build -c Release` 0 警告 0 错误；`scripts/test.ps1` 643/0。新增判定「同会话内第二次同步应返回 `NoChange`」锁住 F1（原 `FakeGuardTaskRegistrar` 改为：同模式同档位的重复请求返回 `false`，模拟"定义已最新"）。
+
+---
+
+### D113 调度计划任务「每次启动重写」同样会重置登录触发器（F1 调度端镜像，2026-09-24 用户要求）
+
+**结论**：把守卫 F1（D112）的"定义一致就跳过重写"机制**原样应用到调度端** —— `TaskRegistrationService.RegisterOrUpdate` 在写入前先逐字段比对 `\DelayStartScheduler` 的现有定义，完全一致则跳过 `RegisterTaskDefinition`，保留已武装的登录触发器与运行统计；只有缺失或定义确实变了才重写。
+
+**背景**：用户明确指示"调度器的任务计划也应该同样处理，已经存在并且一模一样的情况下，也不要重建调度器计划任务"。守卫因重写而静默吞掉巡检（D112）是这轮修复的起因；调度任务的触发器同样是 `LogonTrigger + InitialDelay`（登录后 N 秒、一次性），重写会重置该窗口并覆盖「上次运行时间」等统计——虽不像守卫那样直接吞掉一次巡检，但统计失真、且毫无必要地触碰系统状态。
+
+**正确做法（与 D112 同源，仅少"重复"一项）**：比对字段 = action 路径与工作目录、Principal（Interactive/Highest/UserId）、触发器（Delay = 登录后 N 秒、不重复、UserId）、六项 Settings（ExecutionTimeLimit=0、DisallowStartIfOnBatteries/StopIfGoingOnBatteries/RunOnlyIfIdle/RunOnlyIfNetworkAvailable=false、MultipleInstances=IgnoreNew）、`RegistrationInfo.Description`。**全部一致 → 跳过写入**；任一不符 → 真正重写。`SchedulerTaskBootstrap.EnsureSchedulerTask` 改为先取 `IsRegistered` 再调 `RegisterOrUpdate`（返回是否真正写入），按（已存在, 已写入）组合记不同日志。D68「缺失即补建」语义全部保留，只去掉了"每次启动无条件重写"。
+
+**与守卫的差异**：调度端是固定规则、不随设置变化，所以**不存在"档位调整"这种触发重写的情形**；这也意味着相同定义下每次启动都不应触碰它。守卫的 `IsDefinitionUpToDate` 多了 `Repetition.Interval`（周期模式）一项，调度端没有。
+
+**验证**：`dotnet build -c Release` 0 警告 0 错误；`scripts/test.ps1` 644/0（新增 `EnsureSchedulerTask_UpToDateDefinition_SkipsRewriteAndLogsNoRebuild` 锁住"已存在且一致则跳过重写"；原 `FakeSchedulerTaskRegistrar` 改为 `RegisterOrUpdate` 返回 `bool`，已写过分相同定义时返回 `false`，并增 `WriteCount` 区分"调用次数"与"实际写入次数"）。
+
+---
+
+### D114 守卫与调度的计划任务注册机制合并为一份（2026-09-24 用户要求）
+
+**结论**：新增纯数据 `ScheduledTaskSpec`（任务名 / 路径 / 描述 / exe / 工作目录 / 登录延迟 / 重复间隔 / 文案简称）与机制层 `ScheduledTaskGateway`（`internal sealed`，不进 DI，D3 批复），守卫与调度两条计划任务的注册 / 逐字段比对 / 删除实现收敛为**唯一一份**；`GuardTaskRegistrar` 与 `TaskRegistrationService` 瘦身为**策略适配器** —— 只决定"此刻该有什么样的任务"（守卫：档位→`GuardSchedulePlan`→Spec、`Disabled`→删除；调度：固定 Spec），把 Spec 交给 Gateway 执行。两个接口（`IGuardTaskRegistrar` / `ISchedulerTaskRegistrar`）、两个 Bootstrap、测试替身、全部调用方与 DI 注册**零改动**。
+
+**背景**：D112 / D113 落地后，两份 `IsDefinitionUpToDate`（各约 70 行）与注册主流程逐字拷贝并存，守卫注释里写着"这六项与 `TaskRegistrationService` 一模一样，改一处要改两处"；用户明确指示"不要重复实现高度类似的代码"。有利条件：测试只依赖接口与 Fake，两个实现类没有任何直接单测，重写实现层对 644 个用例零冲击。
+
+**取舍**：备选 A（模板方法基类）否——继承耦合，守卫"Disabled→删除"这类策略在基类里难安放，Fake 也无法复用；备选 C（单类实现双接口）否——违背 D74 的接口分离理由（守卫随设置变化、Disabled 即消失，调度是"必须存在的固定规则"）。选 B（组合式 Spec + Gateway）：机制单份、Spec 纯数据、策略留在适配器。
+
+**文案微调（仅调度侧异常消息，属改善）**：异常统一为"注册/删除调度计划任务失败"（原"注册/删除计划任务失败"缺主语）；exe 缺失统一为"调度程序不存在"（原"调度端程序不存在"）。其余日志与守卫侧文案逐字不变。
+
+**真机首验修正（同日）**：用户以 `scripts\all.ps1` 产物实测发现"每次启动都重写"仍发生。只读探针取证：任务库落盘把 Principal 账户名规范化成 **SID**、库读回 `Principal.UserId` 是**裸名** `guyue`（丢 `MSI\` 前缀），与写入值 `MSI\guyue` 的字符串比对永不命中——F1 被架空。修正：Principal 与触发器的 UserId 比对改经 `SameAccount`（全名/裸名/SID 统一归一化成 SID 再比，pitfalls 二十四），并给测试程序集开 `InternalsVisibleTo` 补 8 例纯函数单测（652/0）。教训：新机制的"自写自读"往返保真必须在真机验证，单测与 Fake 覆盖不到系统服务的规范化行为。
+
+**验证**：`dotnet build -c Release` 0 警告 0 错误；`scripts/test.ps1` 652/0（D114 本体未改用例 644/0；账户归一化修正后含新增 `SameAccount_NormalizesSidAndNameForms` 8 例）。
+
 ---
 
 ### 附表：R1–R13 技术风险与去向（已全部闭环）
@@ -976,7 +1020,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D111 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D114 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

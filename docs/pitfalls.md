@@ -314,6 +314,51 @@ error CA1822: 成员"Summary"不访问实例数据，可标记为 static
 
 同一条也适用于 `RuntimeInformation.FrameworkDescription`、`Environment.IsPrivilegedProcess` 这类"启动后不会再变"的值：**取一次存进自动属性**，别每次渲染调一遍 API。
 
+## 二十二、计划任务「每次重写」会重置登录触发器（守卫沉默失效）
+
+**症状**：开机登录 → 打开管理端，守卫当天一次都没跑；任务计划程序里「上次运行时间」是管理端重写任务的时刻、「下次运行时间」卡在昨天。guard.log 自上次手动运行后零记录。
+
+**根因**：守卫触发器是 `LogonTrigger + InitialDelay`（登录后 N 分钟、一次性）。登录事件在会话里**只能消费一次**；`CreateOrUpdate` 每次都用全新 `LogonTrigger` 替换定义，而此时登录事件已过去，新触发器在本会话内永远等不到下一次登录 → 该次巡检被静默丢弃。周期模式同理（重复序列锚在触发器激活上）。
+
+**做（D112 / F1）**：写入前**逐字段比对现有任务定义**（action 路径与工作目录、Principal 三项、触发器 Delay/Repetition.Interval/UserId、六项 Settings、`RegistrationInfo.Description`），全部一致就跳过 `RegisterTaskDefinition`、保留已武装的触发器；只有定义确实变了（档位调整 / 安装目录迁移 / 任务被改坏）才重写。D74「缺失即补建 / 关闭即删除」语义全部保留。**判定"一致"只比我们显式写入的字段，不比未设置的默认值**（库版本差异会让默认值漂移，误判成需要重写）。
+
+**反模式**：把 `RegisterTaskDefinition(CreateOrUpdate)` 的"幂等"理解成"重写下次运行时间等统计不丢"——**错**：重写会重建触发器、并覆盖运行统计（D112 已证伪旧注释）。
+
+**验证**：同会话内第二次 `SyncWithSettings` 必须返回 `NoChange`（不是 `Updated`）；真机验收：登录后开管理端，到点守卫仍应巡检一次，且任务计划程序「下次运行时间」不再卡在过去。
+
+---
+
+## 二十三、调度计划任务「每次重写」同样会重置登录触发器（F1 调度端镜像）
+
+**症状**：`\DelayStartScheduler` 每次启动被 `SchedulerTaskBootstrap` 无条件重写（`CreateOrUpdate`），任务计划程序里「上次运行时间」等统计被覆盖成重写时刻、「下次运行时间」随之错位；虽不像守卫那样静默吞掉巡检，但统计失真且无谓触碰系统状态。
+
+**根因**：调度任务触发器也是 `LogonTrigger + InitialDelay`（登录后 N 秒、一次性）。`CreateOrUpdate` 每次都重建触发器，登录事件已过去，新触发器本会话内等不到下一次登录。调度端是固定规则、不随设置变化，相同定义下每次启动都不该重写它。
+
+**做（D113 / F1 调度端镜像）**：写入前**逐字段比对现有任务定义**（action 路径与工作目录、Principal 三项、触发器 Delay/UserId、六项 Settings、`RegistrationInfo.Description`），全部一致就跳过 `RegisterTaskDefinition`、保留已武装的触发器与运行统计；只有缺失或定义确实变了（安装目录迁移 / 任务被改坏）才重写。判定"一致"只比显式写入的字段，不比未设置的默认值（库版本差异会让默认值漂移，误判成需要重写）。
+
+**反模式**：把 `RegisterTaskDefinition(CreateOrUpdate)` 的"幂等"理解成"重写下次运行时间等统计不丢"——**错**：重写会重建触发器、并覆盖运行统计（D112 已证伪旧注释，此处同源）。
+
+**验证**：`EnsureSchedulerTask_UpToDateDefinition_SkipsRewriteAndLogsNoRebuild` 必须成立——已存在且定义一致时日志出现"已是最新，无需重建"、且 `WriteCount` 不增长；真机验收：登录后开管理端，任务计划程序「上次运行时间」不再被重写时刻覆盖。
+
+---
+
+## 二十四、任务计划程序把账户名落成 SID，库读回却是裸名 —— 账户字段比对必须归一化
+
+**症状**：F1 修复（D112 / D113）真机首验：管理端每次启动都打「调度计划任务定义已变更，已自动重新创建」/「已注册守卫计划任务」，**从不出现**「跳过重写」——逐字段比对形同虚设，触发器仍被每次重置。
+
+**取证**：`Export-ScheduledTask` 导出 XML，`<Principal><UserId>S-1-5-21-…</UserId></Principal>` 是 **SID**；再用同一个库（TaskScheduler 2.12.2）读回同一任务：`Principal.UserId = "guyue"`（**裸账户名，丢了域前缀**；完整名 `MSI\guyue` 在 `Principal.Account` 属性里）。而写入时传的是 `WindowsIdentity.GetCurrent().Name` = `MSI\guyue`。其余字段（Delay、Repetition、ExecutionTimeLimit=PT0S、Settings 六项、Action 路径/工作目录、Description）读写往返全部保真。
+
+**根因**：任务计划程序服务在注册时把 Principal 账户名解析成 SID 存储；库读回时把 SID 反解成**不带域的**账户名。写 `MSI\guyue` → 读 `guyue`，`OrdinalIgnoreCase` 字符串比对永远不等 → `IsDefinitionUpToDate` 每次判"变更" → 每次重写，F1 被整体架空。单测与 Fake 全绿照不到这里——这是系统服务端的规范化行为（方法论 3 的又一例）。
+
+**做（D114 真机首验修正）**：账户字段（`Principal.UserId`、触发器 `UserId`）一律经 `ScheduledTaskGateway.SameAccount` 比较：先字符串等值短路；不等时两侧都 `Translate` 成 SID 再比；任一侧无法映射（`IdentityNotMappedException` / `ArgumentException`）按不等处理。用例锁在 `ScheduledTaskGatewayTests`（用 Everyone / BUILTIN\Administrators 等 WellKnown 账户，不依赖本机用户名）。
+
+**做（通用）**：
+- 凡与任务计划程序交换的账户字符串，**不要假设形态**：全名（`MSI\guyue`）、裸名（`guyue`）、SID（`S-1-5-…`）三种都可能出现，取决于哪个组件在哪个环节做了规范化。
+- 比对前归一化成 SID，别比较原始字符串。
+- 诊断这类问题要**双视角**：`Export-ScheduledTask` 看 XML 落盘形态 + 用同一版本的库读回 API 层形态，缺一不可。
+
+**验证**：构建 0 警告 0 错误；`scripts/test.ps1` 652/0（新增 `SameAccount_NormalizesSidAndNameForms` 8 例）；真机复跑应出现「定义未变化，跳过重写」且不再出现「定义已变更」。
+
 ---
 
 ## 教训方法论

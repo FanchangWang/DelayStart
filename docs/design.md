@@ -94,7 +94,7 @@
 
 ### FR-11 计划任务注册
 
-`TaskService` API 创建/更新（FR-11.3）；`SchedulerTaskBootstrap` 每次启动自检自愈（D68）；卸载清理路径（FR-11.4，`--restore-all`）。
+`TaskService` API 创建/更新（FR-11.3）；`SchedulerTaskBootstrap` 每次启动自检自愈（D68）；卸载清理路径（FR-11.4，`--restore-all`）。守卫与调度两条任务的注册机制统一在 `ScheduledTaskGateway`（纯数据 `ScheduledTaskSpec` + 单份的逐字段比对 / 写入 / 删除，D114）；守卫按档位变化同步（D74 / D112），调度为固定规则（D39 / D113）。
 
 ### FR-12 配置迁移与备份
 
@@ -596,7 +596,7 @@ Shell：用户点击 → 读 HKCU\Software\Classes\delaystart → 启动 DelaySt
 
 **任务身份与 `Settings` 六项**与调度任务**逐项一致**：`Interactive` + `RunLevel=Highest`（提权不弹 UAC），`ExecutionTimeLimit=0`、`DisallowStartIfOnBatteries=false`、`StopIfGoingOnBatteries=false`、`MultipleInstances=IgnoreNew`、`RunOnlyIfIdle=false`、`RunOnlyIfNetworkAvailable=false`。默认 `DisallowStartIfOnBatteries=true` 会让笔记本拔电时守卫**静默不跑**；缺 `IgnoreNew` 则两轮巡检可能叠在一起（全量扫描 + 改写注册表/任务库，叠着跑没有任何好处）。改一处必须改两处。
 
-**管理端每次启动同步**（`GuardTaskBootstrap`，语义对齐 `SchedulerTaskBootstrap`）：启用 ⇒ 缺失即补建、已存在也**按当前档位重写**（`CreateOrUpdate` 幂等、保留统计；与调度任务"已存在就不动"不同，因为档位是用户可调的设置）；关闭 ⇒ **删除任务**；同步失败**不抛异常**，只记日志并把原因交给总览页守卫区呈现 + 重试。
+**管理端每次启动同步**（`GuardTaskBootstrap`，语义对齐 `SchedulerTaskBootstrap`）：启用 ⇒ 缺失即补建；已存在时先逐字段比对现有定义，**档位/定义确实变了才按当前档位重写、完全一致则跳过**（`CreateOrUpdate` 会重置登录触发器，故 F1 / D112 改为先比对再决定是否写）；关闭 ⇒ **删除任务**；同步失败**不抛异常**，只记日志并把原因交给总览页守卫区呈现 + 重试。调度任务 `\DelayStartScheduler` 走同样的"定义一致就跳过重写"机制（D113，它不随设置变化，故一般只会在缺失或安装目录迁移时重写）。
 
 ### 11.8 发布形态
 

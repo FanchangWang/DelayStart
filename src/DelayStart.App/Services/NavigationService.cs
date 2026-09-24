@@ -24,7 +24,7 @@ namespace DelayStart.App.Services;
 /// </para>
 /// <para>
 /// ⚠️ **只挂已经实现的模块。** Phase 0 删掉模板页时就定了这条：不预置死链
-/// （<c>D25</c>）。总览 / 系统启动项 / 运行日志 / 设置四个模块随各自的页面一起加进来，
+/// （<c>D25</c>）。总览 / 系统启动项 / 调度日志 / 设置四个模块随各自的页面一起加进来，
 /// 所以 <c>MainWindow.xaml</c> 里的 <c>MenuItems</c> 会分阶段增长 —— 这是刻意的，
 /// 不是遗漏。
 /// </para>
@@ -67,8 +67,11 @@ public sealed class NavigationService
     /// <summary>「系统启动项 · 组策略」的导航标签（D2：替换原「登录脚本」分区）。</summary>
     public const string SysGpoTag = "sys-gpo";
 
-    /// <summary>「运行日志」模块的导航标签（FR-8）。</summary>
+    /// <summary>「调度日志」模块的导航标签（FR-8）。</summary>
     public const string RunsTag = "runs";
+
+    /// <summary>「守卫日志」模块的导航标签（D115：菜单紧挨调度日志下方）。</summary>
+    public const string GuardRunsTag = "guard-runs";
 
     /// <summary>「设置」模块的导航标签（FR-9）。</summary>
     public const string SettingsTag = "settings";
@@ -101,6 +104,7 @@ public sealed class NavigationService
             [SysWinlogonTag] = typeof(Views.SystemPage),
             [SysGpoTag] = typeof(Views.SystemPage),
             [RunsTag] = typeof(Views.RunsPage),
+            [GuardRunsTag] = typeof(Views.GuardRunsPage),
             [SettingsTag] = typeof(Views.SettingsPage),
             [AboutTag] = typeof(Views.AboutPage),
         };

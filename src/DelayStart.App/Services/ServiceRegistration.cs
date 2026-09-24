@@ -61,9 +61,14 @@ internal static class ServiceRegistration
         // ── 配置 ─────────────────────────────────────────────────────────────
         services.AddSingleton<IAppConfigStore, ConfigService>();
 
-        // 运行状态（Phase 5 总览页 / 运行日志页读它；调度端经同一实现写它）。
+        // 运行状态（Phase 5 总览页 / 调度日志页读它；调度端经同一实现写它）。
         // 状态文件是全局共享的，GUI 与 headless CLI 必须看到同一份 —— 单例。
         services.AddSingleton<IRunStateStore, RunStateService>();
+
+        // 旧目录一次性迁移（D116）：state\ / runs\ → scheduler\。单例只为少 new 一个对象，
+        // 它无状态；调用点在两个宿主入口（App.OnLaunched / CliHost.TryExecute），
+        // 必须发生在任何读写 current-run.json 与归档之前 —— 见 RuntimeDataMigrator 的 remarks。
+        services.AddSingleton<RuntimeDataMigrator>();
 
         // ── 快捷方式解析（启动文件夹的两个来源要用）──────────────────────────
         services.AddSingleton<IShellLinkResolver, ShellLinkResolver>();
@@ -116,7 +121,9 @@ internal static class ServiceRegistration
         // 守卫巡检本体（D74）：扫描 → 纠正 → 新增/失效 → 更新基线。
         // 基线存储单例 —— 它只是一个文件读写器，多份实例没有意义；
         // GuardService 单例与 ScanService 一致（两者都无状态）。
+        // 巡检归档存储（D116）：守卫日志页与总览卡读它（守卫进程自己 new，不走容器）。
         services.AddSingleton<GuardBaselineStore>();
+        services.AddSingleton<GuardInspectionStore>();
         services.AddSingleton<GuardService>();
 
         // 应用内右下角通知（2026-09-21 批复）：成功类提示经它广播到主窗口的通知面板。
@@ -154,6 +161,7 @@ internal static class ServiceRegistration
         services.AddTransient<OverviewViewModel>();
         services.AddTransient<SystemViewModel>();
         services.AddTransient<RunsViewModel>();
+        services.AddTransient<GuardRunsViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<AboutViewModel>();
 
@@ -168,6 +176,7 @@ internal static class ServiceRegistration
         services.AddTransient<OverviewPage>();
         services.AddTransient<SystemPage>();
         services.AddTransient<RunsPage>();
+        services.AddTransient<GuardRunsPage>();
         services.AddTransient<SettingsPage>();
         services.AddTransient<AboutPage>();
 

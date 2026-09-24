@@ -101,9 +101,15 @@
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
-                <NavigationViewItem Content="运行日志" Tag="runs">
+                <NavigationViewItem Content="调度日志" Tag="runs">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE81C;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <!-- 守卫日志（D115）：与调度日志是一对"结果记录"入口，紧挨着放 -->
+                <NavigationViewItem Content="守卫日志" Tag="guard-runs">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE72E;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="设置" Tag="settings">

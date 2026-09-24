@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="DelayStart.App.Views.GuardRunsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:conv="using:DelayStart.App.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:DelayStart.App.ViewModels"
+    mc:Ignorable="d">
+
+    <!-- 「守卫日志」页（D115 引入 / D116 改版）：按次分组的守卫巡检记录，最新在前，保留最近 30 次 -->
+    <Page.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <conv:BoolToBrushConverter x:Key="BoolToBrush" />
+
+        <!-- 与调度日志页同一套行容器归零规则（2026-09-23 批复 26）：
+             左右内缩只由卡片 Border + 行 Grid 的 Padding 决定。 -->
+        <Style x:Key="GuardRowStyle" TargetType="ListViewItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="32,20,32,24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页头 -->
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="守卫日志" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
+        </StackPanel>
+
+        <!-- 工具栏：筛选 + 打开日志目录 -->
+        <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ComboBox
+                Grid.Column="0"
+                MinWidth="130"
+                VerticalAlignment="Center"
+                SelectedIndex="{x:Bind ViewModel.LevelFilterIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="全部巡检" />
+                <ComboBoxItem Content="仅含变化与异常" />
+            </ComboBox>
+
+            <Button
+                Grid.Column="2"
+                Command="{x:Bind ViewModel.OpenLogsCommand}"
+                Content="打开日志文件" />
+        </Grid>
+
+        <ProgressBar Grid.Row="2" IsIndeterminate="True" Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay}" />
+
+        <!-- 分组列表：一次巡检 = 一组（D3 批复）。列头与行都在这层之内，容器归零后
+             内缩基线与调度日志页同一条规则（卡片 8 + 行 12）。 -->
+        <Border
+            Grid.Row="3"
+            Padding="8,4"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="7">
+            <ListView
+                ItemContainerStyle="{StaticResource GuardRowStyle}"
+                ItemsSource="{x:Bind ViewModel.Groups}"
+                SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="vm:GuardInspectionGroupRow">
+                        <!-- IsExpanded：进入页面时最新一组默认展开；随筛选重填重新生成容器，OneTime 求值。 -->
+                        <Expander
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            IsExpanded="{x:Bind IsExpanded, Mode=OneTime}">
+                            <Expander.Header>
+                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" />
+                            </Expander.Header>
+                            <StackPanel>
+                                <!-- 表头 + 明细表：只在有明细时渲染（D117 批复：纠正 / 新增 / 失效 /
+                                     来源失败全为 0 的组，展开后只给一行描述文字，不摆空表格）。
+                                     表头左右内缩 = 行 Grid 的 12（规则与调度日志页一致）。 -->
+                                <Grid
+                                    Padding="12,8,12,2"
+                                    ColumnSpacing="12"
+                                    Visibility="{x:Bind HasNoItems, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneTime}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="70" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="类别" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="名称" />
+                                    <TextBlock
+                                        Grid.Column="2"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="说明" />
+                                </Grid>
+
+                                <ListView
+                                    ItemContainerStyle="{StaticResource GuardRowStyle}"
+                                    ItemsSource="{x:Bind Items}"
+                                    SelectionMode="None"
+                                    Visibility="{x:Bind HasNoItems, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneTime}">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:GuardInspectionItemRow">
+                                            <Grid Padding="12,5" ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock
+                                                    Grid.Column="0"
+                                                    VerticalAlignment="Center"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                    Text="{x:Bind KindText}" />
+
+                                                <TextBlock
+                                                    Grid.Column="1"
+                                                    Text="{x:Bind Name}"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    ToolTipService.ToolTip="{x:Bind Name}" />
+
+                                                <!-- 说明列：异常（纠正失败 / 来源失败）标红（两份互斥的
+                                                     TextBlock，非警示那份不设 Foreground —— D42）。 -->
+                                                <TextBlock
+                                                    Grid.Column="2"
+                                                    VerticalAlignment="Center"
+                                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                    Text="{x:Bind DetailText}"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    ToolTipService.ToolTip="{x:Bind DetailText}"
+                                                    Visibility="{x:Bind IsWarning, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneTime}" />
+                                                <TextBlock
+                                                    Grid.Column="2"
+                                                    VerticalAlignment="Center"
+                                                    Foreground="{x:Bind IsWarning, Converter={StaticResource BoolToBrush}, Mode=OneTime}"
+                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                    Text="{x:Bind DetailText}"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    ToolTipService.ToolTip="{x:Bind DetailText}"
+                                                    Visibility="{x:Bind IsWarning, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+
+                                <!-- 纯扫描轮：没有任何明细时只给一行描述文字（D117 批复口径） -->
+                                <TextBlock
+                                    Padding="12,5"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="本次巡检没有变化：没有需要纠正、新增或失效的条目。"
+                                    Visibility="{x:Bind HasNoItems, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
+                            </StackPanel>
+                        </Expander>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Border>
+
+        <!-- 空状态 -->
+        <StackPanel
+            Grid.Row="3"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="6"
+            Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay}">
+            <TextBlock
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextAlignment="Center"
+                Text="还没有巡检记录" />
+            <TextBlock
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                TextAlignment="Center"
+                Text="守卫第一次巡检后，每次巡检的结果都会出现在这里" />
+        </StackPanel>
+    </Grid>
+</Page>

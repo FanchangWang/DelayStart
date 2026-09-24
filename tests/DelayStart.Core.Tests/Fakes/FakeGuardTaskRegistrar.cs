@@ -25,6 +25,12 @@ internal sealed class FakeGuardTaskRegistrar : IGuardTaskRegistrar
     /// <summary>当前是否处于"已注册"状态。</summary>
     public bool Registered { get; private set; }
 
+    /// <summary>ExecAction 是否指向期望的 exe；用于区分 Exists 与 Matches。</summary>
+    public bool ExecutableMatches { get; set; } = true;
+
+    /// <summary>当前定义是否与期望定义一致；用于模拟任务被外部改坏。</summary>
+    public bool DefinitionUpToDate { get; set; } = true;
+
     /// <summary>最近一次 <see cref="RegisterOrUpdate"/> 收到的模式。</summary>
     public GuardMode? LastMode { get; private set; }
 
@@ -50,11 +56,11 @@ internal sealed class FakeGuardTaskRegistrar : IGuardTaskRegistrar
     /// <summary>非空时 <see cref="Delete"/> 抛出它，用于模拟删除失败。</summary>
     public Exception? DeleteException { get; init; }
 
-    /// <summary>非空时 <see cref="IsRegistered"/> 抛出它，用于模拟状态查询失败。</summary>
+    /// <summary>非空时 Exists / Matches 查询抛出它，用于模拟状态查询失败。</summary>
     public Exception? QueryException { get; init; }
 
     /// <inheritdoc />
-    public bool IsRegistered()
+    public bool Exists()
     {
         if (QueryException is not null)
         {
@@ -62,6 +68,17 @@ internal sealed class FakeGuardTaskRegistrar : IGuardTaskRegistrar
         }
 
         return Registered;
+    }
+
+    /// <inheritdoc />
+    public bool Matches()
+    {
+        if (QueryException is not null)
+        {
+            throw QueryException;
+        }
+
+        return Registered && ExecutableMatches;
     }
 
     /// <inheritdoc />
@@ -76,11 +93,14 @@ internal sealed class FakeGuardTaskRegistrar : IGuardTaskRegistrar
             throw RegisterException;
         }
 
-        // F1 / D112：与"上一次实际写入"同模式同档位时，视为"定义已最新"而跳过（返回 false）。
-        // 真实注册端是靠逐字段比对 TaskDefinition 判断，这里用 (mode, minutes) 作等价代理——
-        // 这两个值决定触发器的 InitialDelay / RepeatInterval，其余字段（action 路径 / 身份 /
-        // 六项 Settings）在同一次安装同用户下恒定。
-        if (WrittenMode == mode && WrittenMinutes == minutes)
+        // F1 / D112：与"上一次实际写入"同模式同档位且定义未被改坏时，视为"定义已最新"而跳过。
+        // 真实注册端是靠逐字段比对 TaskDefinition 判断，这里用模式 / 档位和
+        // DefinitionUpToDate 作等价代理。
+        if (Registered
+            && DefinitionUpToDate
+            && ExecutableMatches
+            && WrittenMode == mode
+            && WrittenMinutes == minutes)
         {
             return false;
         }
@@ -88,6 +108,8 @@ internal sealed class FakeGuardTaskRegistrar : IGuardTaskRegistrar
         WrittenMode = mode;
         WrittenMinutes = minutes;
         Registered = true;
+        ExecutableMatches = true;
+        DefinitionUpToDate = true;
         return true;
     }
 

@@ -96,6 +96,21 @@ public sealed class GuardTaskBootstrapTests
     }
 
     [Fact]
+    public void SyncWithSettings_DisabledAndTaskExistsButActionMismatched_StillDeletes()
+    {
+        var harness = new Harness(GuardMode.Disabled, minutes: 0);
+        harness.Registrar.RegisterOrUpdate(GuardMode.Periodic, DefaultMinutes);
+        harness.Registrar.ExecutableMatches = false;
+        harness.Registrar.ResetCounters();
+
+        var outcome = harness.Service.SyncWithSettings();
+
+        Assert.Equal(GuardTaskSyncResult.Deleted, outcome.Result);
+        Assert.Equal(1, harness.Registrar.DeleteCount);
+        Assert.Equal(0, harness.Registrar.RegisterCount);
+    }
+
+    [Fact]
     public void SyncWithSettings_CalledTwiceInSameSession_SkipsRewriteWhenUpToDate()
     {
         var harness = new Harness(GuardMode.OnceAfterLogin, DefaultMinutes);

@@ -62,8 +62,12 @@ public sealed class GuardTaskRegistrar : IGuardTaskRegistrar
     public string TaskPath => TaskPathConstant;
 
     /// <inheritdoc />
-    public bool IsRegistered()
-        => _gateway.IsRegistered(TaskPathConstant, _paths.GuardExecutablePath, DisplayName);
+    public bool Exists()
+        => _gateway.Exists(TaskPathConstant, DisplayName);
+
+    /// <inheritdoc />
+    public bool Matches()
+        => _gateway.Matches(TaskPathConstant, _paths.GuardExecutablePath, DisplayName);
 
     /// <inheritdoc />
     /// <returns>是否真正写入了任务定义（<see langword="false"/> 表示现有定义已与期望一致、已跳过重写）。</returns>
@@ -86,7 +90,8 @@ public sealed class GuardTaskRegistrar : IGuardTaskRegistrar
             LogonDelay: trigger.InitialDelay,
             RepeatInterval: trigger.RepeatInterval,
             DisplayName: DisplayName,
-            ScheduleDescription: DescribeMode(mode, minutes)));
+            ScheduleDescription: DescribeMode(mode, minutes),
+            Arguments: null));
     }
 
     /// <inheritdoc />

@@ -58,7 +58,7 @@ public sealed class SchedulerTaskBootstrap
             // 与守卫 F1（D112）同一思路：先判断任务是否存在，再让他决定要不要写。
             // RegisterOrUpdate 内部会比对完整定义，完全一致则返回 false 跳过重写，
             // 保留触发器的"已武装"状态与「上次运行时间」等统计；只有缺失或定义确实变了才写。
-            var existed = _registrar.IsRegistered();
+            var existed = _registrar.Exists();
             var changed = _registrar.RegisterOrUpdate();
 
             _log.Info((existed, changed) switch

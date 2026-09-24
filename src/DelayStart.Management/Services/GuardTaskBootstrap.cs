@@ -109,7 +109,7 @@ public sealed class GuardTaskBootstrap
 
         try
         {
-            var existed = _registrar.IsRegistered();
+            var existed = _registrar.Exists();
 
             if (mode is GuardMode.Disabled)
             {

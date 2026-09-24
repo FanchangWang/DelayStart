@@ -1,4 +1,7 @@
+using DelayStart.Management.Models;
 using DelayStart.Management.Services;
+
+using Microsoft.Win32.TaskScheduler;
 
 namespace DelayStart.Core.Tests;
 
@@ -25,4 +28,125 @@ public class ScheduledTaskGatewayTests
     [InlineData("", "S-1-1-0", false)]                  // 空串 ⇒ 不等
     public void SameAccount_NormalizesSidAndNameForms(string? left, string? right, bool expected)
         => Assert.Equal(expected, ScheduledTaskGateway.SameAccount(left, right));
+
+    [Fact]
+    public void DefinitionUpToDate_AllExpectedFieldsMatch_ReturnsTrue()
+    {
+        using var service = new TaskService();
+        using var definition = CreateDefinition(service, Spec(), "Everyone");
+
+        Assert.True(ScheduledTaskGateway.IsDefinitionUpToDate(
+            taskEnabled: true,
+            definition,
+            Spec(),
+            "Everyone"));
+    }
+
+    [Fact]
+    public void DefinitionUpToDate_TaskDisabled_ReturnsFalse()
+    {
+        using var service = new TaskService();
+        using var definition = CreateDefinition(service, Spec(), "Everyone");
+
+        Assert.False(ScheduledTaskGateway.IsDefinitionUpToDate(
+            taskEnabled: false,
+            definition,
+            Spec(),
+            "Everyone"));
+    }
+
+    [Fact]
+    public void DefinitionUpToDate_TriggerDisabled_ReturnsFalse()
+    {
+        using var service = new TaskService();
+        using var definition = CreateDefinition(service, Spec(), "Everyone", triggerEnabled: false);
+
+        Assert.False(ScheduledTaskGateway.IsDefinitionUpToDate(
+            taskEnabled: true,
+            definition,
+            Spec(),
+            "Everyone"));
+    }
+
+    [Fact]
+    public void DefinitionUpToDate_ActionArgumentsChanged_ReturnsFalse()
+    {
+        using var service = new TaskService();
+        using var definition = CreateDefinition(
+            service,
+            Spec(),
+            "Everyone",
+            actionArguments: "-changed");
+
+        Assert.False(ScheduledTaskGateway.IsDefinitionUpToDate(
+            taskEnabled: true,
+            definition,
+            Spec(),
+            "Everyone"));
+    }
+
+    [Fact]
+    public void DefinitionUpToDate_NullAndEmptyArgumentsAreEquivalent()
+    {
+        using var service = new TaskService();
+        using var definition = CreateDefinition(
+            service,
+            Spec(),
+            "Everyone",
+            actionArguments: string.Empty);
+
+        Assert.True(ScheduledTaskGateway.IsDefinitionUpToDate(
+            taskEnabled: true,
+            definition,
+            Spec(),
+            "Everyone"));
+    }
+
+    private static ScheduledTaskSpec Spec(string? arguments = null) => new(
+        TaskName: "TestTask",
+        TaskPath: @"\TestTask",
+        Description: "DelayStart test task",
+        ExecutablePath: @"C:\DelayStart\Test.exe",
+        WorkingDirectory: @"C:\DelayStart",
+        LogonDelay: TimeSpan.FromSeconds(3),
+        RepeatInterval: null,
+        DisplayName: "测试",
+        ScheduleDescription: "登录后 3 秒",
+        Arguments: arguments);
+
+    private static TaskDefinition CreateDefinition(
+        TaskService service,
+        ScheduledTaskSpec spec,
+        string userId,
+        bool triggerEnabled = true,
+        string? actionArguments = null)
+    {
+        var definition = service.NewTask();
+        definition.RegistrationInfo.Description = spec.Description;
+        definition.Principal.LogonType = TaskLogonType.InteractiveToken;
+        definition.Principal.RunLevel = TaskRunLevel.Highest;
+        definition.Principal.UserId = userId;
+
+        var logonTrigger = new LogonTrigger
+        {
+            Delay = spec.LogonDelay,
+            UserId = userId,
+            Enabled = triggerEnabled,
+        };
+        definition.Triggers.Add(logonTrigger);
+
+        definition.Actions.Add(new ExecAction(
+            spec.ExecutablePath,
+            arguments: actionArguments,
+            workingDirectory: spec.WorkingDirectory));
+
+        definition.Settings.ExecutionTimeLimit = TimeSpan.Zero;
+        definition.Settings.DisallowStartIfOnBatteries = false;
+        definition.Settings.StopIfGoingOnBatteries = false;
+        definition.Settings.MultipleInstances = TaskInstancesPolicy.IgnoreNew;
+        definition.Settings.RunOnlyIfIdle = false;
+        definition.Settings.RunOnlyIfNetworkAvailable = false;
+
+        return definition;
+    }
 }

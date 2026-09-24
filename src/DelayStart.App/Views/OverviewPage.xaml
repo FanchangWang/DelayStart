@@ -13,16 +13,6 @@
         <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
         <conv:BoolToBrushConverter x:Key="BoolToBrush" />
 
-        <!-- 🔴 列表行容器：不挂样式就会落到 WinUI 默认 ListViewItem
-             （Padding 12,0、MinHeight 40）—— 行内容比列头多缩 12，行高也被撑到 40。
-             容器固定 0 之后，行与列头的左右内缩都只剩 4（= 行 Grid 的左右内缩，
-             卡片 Border 的 16 两边共同吃掉；批复 26）。 -->
-        <Style x:Key="RowItemStyle" TargetType="ListViewItem">
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="MinHeight" Value="0" />
-        </Style>
-
         <!-- 分节标题（参考 PowerToys 子标题字号，SubtitleTextBlockStyle 的 20px 太大） -->
         <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="14" />
@@ -43,17 +33,29 @@
         <Style x:Key="ChipContentStyle" TargetType="StackPanel">
             <Setter Property="HorizontalAlignment" Value="Center" />
         </Style>
+        <!-- D117：卡片标题行（后台任务 / 最近记录两区的卡都长这样） -->
+        <Style x:Key="CardTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <!-- D117：卡片说明行（左侧第二行，最多两行的第二条） -->
+        <Style
+            x:Key="CardDescStyle"
+            BasedOn="{StaticResource CaptionTextBlockStyle}"
+            TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
     </Page.Resources>
 
     <!--
-        「总览」页 UI v3（2026-09-21 批复）：
-        ① 「最大延时」分节删除 —— 意义不大；
-        ② 顶部「上次运行有失败」InfoBar 删除 —— 失败信息由「最近一次开机调度」结果列的红色承担；
-        ③ 「开机调度任务」从开关改为**状态卡**：本软件强依赖调度器，任务缺失即自动补建
-           （App 启动时 SchedulerTaskBootstrap 先做一轮），失败态红字强提示 +「重试创建」按钮；
-        ④ 分节顺序：延时启动 → 开机调度任务 → 系统自启动项 → 最近一次开机调度；
-        ⑤ 最近调度卡片：有记录时底部是「查看运行日志 →」跳转，无记录时居中空状态；
-        ⑥ 各分节不再摆描述文字（信息量不足的描述直接删）。
+        「总览」页 UI v3（2026-09-21 批复）+ v4（D115）+ v5（D117，2026-09-24 批复）：
+        ① 「最大延时」分节删除；顶部「上次运行有失败」InfoBar 删除 —— 失败由记录卡红字承担；
+        ② 开机调度任务从开关改为**状态卡**（缺失自动补建，失败红字 +「重试创建」）；
+        ③ D115：上次记录从逐条目小表换成汇总卡片；
+        ④ D117：四张卡合并为两个分节 ——
+           「后台任务」= 开机调度卡 + 自启动项守卫卡（左两行文字，右 = 状态 / 按钮 / 下拉）；
+           「最近记录」= 调度卡 + 守卫卡（左 = 汇总 + 时间，右 = 直达链接；空态左两行提示，
+           右侧链接保留）。各卡左侧最多两行文字；档位说明行与任务注册细节删除。
     -->
     <ScrollView>
         <StackPanel Padding="32,8,32,40" HorizontalAlignment="Stretch" MaxWidth="1000">
@@ -64,7 +66,7 @@
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Style="{StaticResource BodyTextBlockStyle}"
-                    Text="延时启动的整体状态：条目分布、调度任务与最近一次运行结果。" />
+                    Text="延时启动的整体状态：条目分布、后台任务与最近一次调度、巡检的结果。" />
             </StackPanel>
 
             <!-- ── 延时启动 ── -->
@@ -107,13 +109,14 @@
                 </Button>
             </StackPanel>
 
-            <!-- ── 开机调度任务：状态卡（2026-09-21 批复：开关删除，缺失自动补建） ── -->
+            <!-- ── 后台任务（D117：原「开机调度任务」+「自启动项守卫」合并） ── -->
             <TextBlock
                 Margin="0,32,0,2"
                 Style="{StaticResource SectionHeaderStyle}"
-                Text="开机调度任务" />
+                Text="后台任务" />
 
-            <!-- 正常态 -->
+            <!-- 调度卡 · 正常态：左两行（标题 + 说明），右 = 状态（2026-09-21 批复：缺失自动补建，
+                 所以"已启用"是常态；失败态见下一张卡）。 -->
             <Border
                 Margin="0,10,0,0"
                 Padding="16,12"
@@ -122,24 +125,25 @@
                 BorderThickness="1"
                 CornerRadius="7"
                 Visibility="{x:Bind ViewModel.TaskReady, Mode=OneWay}">
-                <StackPanel Spacing="2">
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock FontWeight="SemiBold" Text="调度任务已就绪" VerticalAlignment="Center" />
-                        <TextBlock
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource SystemFillColorSuccessBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="✓ 已启用" />
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="3">
+                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="开机调度" />
+                        <TextBlock Style="{StaticResource CardDescStyle}" Text="每次登录后按延时计划自动启动接管的条目。" />
                     </StackPanel>
                     <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource SystemFillColorSuccessBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        TextWrapping="Wrap"
-                        Text="{x:Bind ViewModel.TaskStatusDetail, Mode=OneWay}" />
-                </StackPanel>
+                        Text="✓ 已启用" />
+                </Grid>
             </Border>
 
-            <!-- 失败态：红字强提示 + 重试 -->
+            <!-- 调度卡 · 失败态：说明让位给失败原因，右侧红标 + 重试 -->
             <Border
                 Margin="0,10,0,0"
                 Padding="16,12"
@@ -153,40 +157,35 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Spacing="2">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <TextBlock
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                FontWeight="SemiBold"
-                                Text="调度任务创建失败" />
-                            <TextBlock
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="✕ 未就绪" />
-                        </StackPanel>
+                    <StackPanel Grid.Column="0" Spacing="3">
+                        <TextBlock
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                            Style="{StaticResource CardTitleStyle}"
+                            Text="开机调度" />
                         <TextBlock
                             Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            TextWrapping="Wrap"
-                            Text="{x:Bind ViewModel.TaskStatusDetail, Mode=OneWay}" />
+                            Text="{x:Bind ViewModel.TaskStatusDetail, Mode=OneWay}"
+                            TextWrapping="Wrap" />
                     </StackPanel>
-                    <Button
-                        Grid.Column="1"
-                        VerticalAlignment="Center"
-                        Command="{x:Bind ViewModel.EnsureTaskCommand, Mode=OneWay}"
-                        Content="重试创建"
-                        Style="{StaticResource AccentButtonStyle}" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="✕ 未就绪" />
+                        <Button
+                            VerticalAlignment="Center"
+                            Command="{x:Bind ViewModel.EnsureTaskCommand, Mode=OneWay}"
+                            Content="重试创建"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- ── 自启动项守卫（D74，2026-09-22 用户批复）── -->
-            <TextBlock
-                Margin="0,32,0,2"
-                Style="{StaticResource SectionHeaderStyle}"
-                Text="自启动项守卫" />
-
+            <!-- 守卫卡：左两行（标题 + 说明；说明在同步失败时让位给红字错误），右 = 重试 + 档位下拉。
+                 回灌（LoadAsync 设 GuardSelectedIndex）会触发一次 SelectionChanged，
+                 由 code-behind 的 _initialized 守卫挡掉，不会误落盘。 -->
             <Border
                 Margin="0,10,0,0"
                 Padding="16,12"
@@ -199,51 +198,33 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-
-                    <!-- 左：说明 + 档位释义 + 失败提示（说明要一句话讲完，
-                         机制细节（写回怎么发生 / 周期怎么排）放在 docs/design.md 十一，不占界面）。 -->
-                    <StackPanel Grid.Column="0" Spacing="4">
+                    <StackPanel Grid.Column="0" Spacing="3">
+                        <TextBlock Style="{StaticResource CardTitleStyle}" Text="自启动项守卫" />
+                        <!-- 🔴 两份互斥的 TextBlock（D42 教训）：非警示那份不显式设 Foreground。 -->
                         <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            TextWrapping="Wrap"
-                            Text="应用重新打开自启动项时自动禁用；出现新增 / 失效条目时提示。" />
-
+                            Style="{StaticResource CardDescStyle}"
+                            Text="应用重新打开自启动项时自动禁用；出现新增或失效条目时提醒。"
+                            Visibility="{x:Bind ViewModel.GuardHasError, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}" />
                         <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{x:Bind ViewModel.GuardError, Mode=OneWay}"
                             TextWrapping="Wrap"
-                            Text="{x:Bind ViewModel.GuardStatusDetail, Mode=OneWay}" />
-
-                        <!-- 同步失败：红字 + 重试（与上方调度任务失败态同一形态） -->
-                        <StackPanel
-                            Margin="0,2,0,0"
-                            Orientation="Horizontal"
-                            Spacing="12"
-                            Visibility="{x:Bind ViewModel.GuardHasError, Converter={StaticResource BoolToVisibility}, Mode=OneWay}">
-                            <TextBlock
-                                VerticalAlignment="Center"
-                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                TextWrapping="Wrap"
-                                Text="{x:Bind ViewModel.GuardError, Mode=OneWay}" />
-                            <Button
-                                VerticalAlignment="Center"
-                                Command="{x:Bind ViewModel.RetryGuardCommand, Mode=OneWay}"
-                                Content="重试" />
-                        </StackPanel>
+                            Visibility="{x:Bind ViewModel.GuardHasError, Converter={StaticResource BoolToVisibility}, Mode=OneWay}" />
                     </StackPanel>
-
-                    <!-- 右：档位下拉。7 个预设，顺序即 GuardPresets.Options，索引可持久化。
-                         回灌（LoadAsync 设 GuardSelectedIndex）会触发一次 SelectionChanged，
-                         由 code-behind 的 _initialized 守卫挡掉，不会误落盘。 -->
-                    <ComboBox
-                        Grid.Column="1"
-                        MinWidth="220"
-                        VerticalAlignment="Center"
-                        ItemsSource="{x:Bind ViewModel.GuardOptions}"
-                        SelectedIndex="{x:Bind ViewModel.GuardSelectedIndex, Mode=OneWay}"
-                        SelectionChanged="OnGuardModeChanged" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
+                        <Button
+                            VerticalAlignment="Center"
+                            Command="{x:Bind ViewModel.RetryGuardCommand, Mode=OneWay}"
+                            Content="重试"
+                            Visibility="{x:Bind ViewModel.GuardHasError, Converter={StaticResource BoolToVisibility}, Mode=OneWay}" />
+                        <ComboBox
+                            MinWidth="220"
+                            VerticalAlignment="Center"
+                            ItemsSource="{x:Bind ViewModel.GuardOptions}"
+                            SelectedIndex="{x:Bind ViewModel.GuardSelectedIndex, Mode=OneWay}"
+                            SelectionChanged="OnGuardModeChanged" />
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -280,130 +261,113 @@
                 </Button>
             </StackPanel>
 
-            <!-- ── 最近一次开机调度 ── -->
+            <!-- ── 最近记录（D117：原「上次开机调度」+「上次守卫巡检」合并。
+                 卡片身份由右侧链接文字表达；空态 = 左两行提示，右侧链接保留 ——
+                 点进去只是空列表页，不影响功能。） ── -->
             <TextBlock
                 Margin="0,32,0,2"
                 Style="{StaticResource SectionHeaderStyle}"
-                Text="最近一次开机调度" />
+                Text="最近记录" />
 
-            <!-- 有记录：小表（列头一律左对齐，与行内文字同一条左基线）+ 底部跳转 -->
+            <!-- 调度卡：左两行（结果口径 / 时间；含失败项或未正常完成时标红），右 = 直达调度日志 -->
             <Border
                 Margin="0,10,0,0"
-                Padding="16,6"
+                Padding="16,12"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
-                CornerRadius="7"
-                Visibility="{x:Bind ViewModel.RecentRunEmpty, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}">
-                <StackPanel>
-                    <!-- 列宽与行一致：110/*/90/70；左右内缩也一致 ——
-                         列头 4 = 行 Grid 的 4（行容器 Padding 已归零，批复 26） -->
-                    <Grid Padding="4,6,4,4" ColumnSpacing="16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                            <ColumnDefinition Width="70" />
-                        </Grid.ColumnDefinitions>
+                CornerRadius="7">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- 有记录：汇总 + 时间。🔴 汇总行是两份互斥的 TextBlock（D42 教训），
+                         非警示那份不显式设 Foreground。 -->
+                    <StackPanel
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Spacing="3"
+                        Visibility="{x:Bind ViewModel.RecentRunEmpty, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}">
                         <TextBlock
-                            Grid.Column="0"
+                            Style="{StaticResource CardTitleStyle}"
+                            Text="{x:Bind ViewModel.RecentRunSummary, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.RecentRunHasFailure, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}" />
+                        <TextBlock
+                            Foreground="{x:Bind ViewModel.RecentRunHasFailure, Converter={StaticResource BoolToBrush}, Mode=OneWay}"
+                            Style="{StaticResource CardTitleStyle}"
+                            Text="{x:Bind ViewModel.RecentRunSummary, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.RecentRunHasFailure, Converter={StaticResource BoolToVisibility}, Mode=OneWay}" />
+                        <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="时间" />
+                            Text="{x:Bind ViewModel.RecentRunTimeText, Mode=OneWay}" />
+                    </StackPanel>
+                    <!-- 无记录：提示两行 -->
+                    <StackPanel
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Spacing="3"
+                        Visibility="{x:Bind ViewModel.RecentRunEmpty, Mode=OneWay}">
+                        <TextBlock Style="{StaticResource CardDescStyle}" Text="还没有调度记录" />
                         <TextBlock
-                            Grid.Column="1"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="程序" />
-                        <TextBlock
-                            Grid.Column="2"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="延时" />
-                        <TextBlock
-                            Grid.Column="3"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="结果" />
-                    </Grid>
-
-                    <ListView
-                        ItemContainerStyle="{StaticResource RowItemStyle}"
-                        ItemsSource="{x:Bind ViewModel.RecentRunRows}"
-                        SelectionMode="None">
-                    <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="vm:RunItemRow">
-                            <Grid Padding="4,3" ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="110" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="90" />
-                                    <ColumnDefinition Width="70" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock
-                                    Grid.Column="0"
-                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind LaunchedAtText}" />
-                                <TextBlock
-                                    Grid.Column="1"
-                                    Text="{x:Bind Name}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Grid.Column="2"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind DelayText}" />
-                                <!-- 🔴 结果列刻意放**两份**互斥的 TextBlock，不用「转换器返回 null」的写法：
-                                     显式把 Foreground 绑成 null 会切断前景的继承链，文字变成不可见
-                                     （真机表现：成功项整列空白，失败项因为拿到红刷反而看得见）。
-                                     非失败那份不设 Foreground，沿用控件默认前景，明暗主题都正确。 -->
-                                <TextBlock
-                                    Grid.Column="3"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind StateText}"
-                                    Visibility="{x:Bind IsFailed, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneTime}" />
-                                <TextBlock
-                                    Grid.Column="3"
-                                    Foreground="{x:Bind IsFailed, Converter={StaticResource BoolToBrush}, Mode=OneTime}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind StateText}"
-                                    Visibility="{x:Bind IsFailed, Converter={StaticResource BoolToVisibility}, Mode=OneTime}" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
-
-                    <!-- 底部跳转（2026-09-21 批复：替代原"完整历史见…"的说明文字） -->
+                            Text="接管条目并重启后，启动结果会出现在这里。" />
+                    </StackPanel>
                     <HyperlinkButton
-                        Padding="0,4,0,6"
-                        HorizontalAlignment="Right"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
                         Click="OnGoRuns"
-                        Content="查看运行日志 →" />
-                </StackPanel>
+                        Content="查看调度日志 →" />
+                </Grid>
             </Border>
 
-            <!-- 无记录：居中空状态 -->
+            <!-- 守卫卡：左两行（巡检汇总 / 完成时间），右 = 直达守卫日志 -->
             <Border
                 Margin="0,10,0,0"
-                Padding="16,36"
+                Padding="16,12"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
-                CornerRadius="7"
-                Visibility="{x:Bind ViewModel.RecentRunEmpty, Mode=OneWay}">
-                <StackPanel HorizontalAlignment="Center" Spacing="4">
-                    <TextBlock
-                        HorizontalAlignment="Center"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="还没有调度记录" />
-                    <TextBlock
-                        HorizontalAlignment="Center"
-                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        TextAlignment="Center"
-                        Text="接管条目并重启后，每次登录的启动结果都会出现在这里" />
-                </StackPanel>
+                CornerRadius="7">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- 有记录：汇总 + 时间 -->
+                    <StackPanel
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Spacing="3"
+                        Visibility="{x:Bind ViewModel.RecentGuardEmpty, Converter={StaticResource BoolToVisibility}, ConverterParameter=Negate, Mode=OneWay}">
+                        <TextBlock
+                            Style="{StaticResource CardTitleStyle}"
+                            Text="{x:Bind ViewModel.RecentGuardSummary, Mode=OneWay}" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{x:Bind ViewModel.RecentGuardTimeText, Mode=OneWay}" />
+                    </StackPanel>
+                    <!-- 无记录：提示两行 -->
+                    <StackPanel
+                        Grid.Column="0"
+                        VerticalAlignment="Center"
+                        Spacing="3"
+                        Visibility="{x:Bind ViewModel.RecentGuardEmpty, Mode=OneWay}">
+                        <TextBlock Style="{StaticResource CardDescStyle}" Text="还没有守卫巡检记录" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="守卫档位开启后，巡检结论会出现在这里。" />
+                    </StackPanel>
+                    <HyperlinkButton
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Click="OnGoGuardRuns"
+                        Content="查看守卫日志 →" />
+                </Grid>
             </Border>
         </StackPanel>
     </ScrollView>

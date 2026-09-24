@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+using System.Globalization;
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -6,14 +6,16 @@ using CommunityToolkit.Mvvm.Input;
 using DelayStart.App.Services;
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
+using DelayStart.Core.Services;
 using DelayStart.Management.Abstractions;
+using DelayStart.Management.Models;
 using DelayStart.Management.Services;
 
 namespace DelayStart.App.ViewModels;
 
 /// <summary>
-/// 总览页 ViewModel（UI v3，2026-09-21 批复）：
-/// 延时列表来源计数 / 开机调度任务状态卡 / 扫描来源计数 / 最近一次开机调度。
+/// 总览页 ViewModel（UI v3，2026-09-21 批复；D115 两张"上次记录"卡片；D117 分节合并）：
+/// 延时列表来源计数 / 后台任务两卡（调度 + 守卫）/ 扫描来源计数 / 最近记录两卡。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,22 +26,28 @@ namespace DelayStart.App.ViewModels;
 /// </para>
 /// <para>
 /// D1（A）：模拟调度已删除。「上次运行有失败」横幅已删 —— 失败信息在
-/// 「最近一次开机调度」的结果列里用红色呈现，不再重复摆一个提示框。
+/// 「最近记录」的调度卡里用红色呈现，不再重复摆一个提示框。
+/// </para>
+/// <para>
+/// D115：原来的「最近一次开机调度」小表（逐条目 ListView）换成两张汇总卡片 ——
+/// 列表页已经在调度日志页了，总览只回答"上次怎么样"；守卫此前没有对应的
+/// 状态位，补一张「上次守卫巡检」。
+/// </para>
+/// <para>
+/// D117（2026-09-24 批复）：「开机调度任务」+「自启动项守卫」合并为「后台任务」分节，
+/// 「上次开机调度」+「上次守卫巡检」合并为「最近记录」分节；各卡**左侧最多两行文字**，
+/// 卡片身份由右侧的操作 / 链接表达。档位说明行与任务注册细节删除（信息量不足，
+/// 档位本身就在下拉里、状态就在右侧徽标上）。
 /// </para>
 /// </remarks>
 public partial class OverviewViewModel : ObservableObject
 {
-    private const string TaskReadyDetail =
-        "登录时由计划任务拉起调度器，按延时依次启动条目。任务缺失时会自动重新创建，无需手动维护。";
-
-    private const string TaskFailDetail =
-        "没有调度任务，延时启动不会生效。点击右侧按钮重试；若反复失败，请查看运行日志中的错误详情。";
-
     private readonly IAppConfigStore _configStore;
     private readonly IRunStateStore _runState;
     private readonly ISchedulerTaskRegistrar _registrar;
     private readonly ScanCacheService _scanCache;
     private readonly GuardTaskBootstrap _guardBootstrap;
+    private readonly GuardInspectionStore _guardInspections;
 
     /// <summary>
     /// 回灌守卫：<see cref="LoadAsync"/> 里把配置值写进 <see cref="GuardSelectedIndex"/> 时，
@@ -55,24 +63,28 @@ public partial class OverviewViewModel : ObservableObject
     /// <param name="registrar">调度计划任务注册端（检测 / 补建）。</param>
     /// <param name="scanCache">扫描缓存（来源计数，启动后已有）。</param>
     /// <param name="guardBootstrap">守卫计划任务同步端（档位变更 / 启动检测，D74）。</param>
+    /// <param name="guardInspections">守卫巡检归档读取端（「上次守卫巡检」卡，D116）。</param>
     public OverviewViewModel(
         IAppConfigStore configStore,
         IRunStateStore runState,
         ISchedulerTaskRegistrar registrar,
         ScanCacheService scanCache,
-        GuardTaskBootstrap guardBootstrap)
+        GuardTaskBootstrap guardBootstrap,
+        GuardInspectionStore guardInspections)
     {
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(runState);
         ArgumentNullException.ThrowIfNull(registrar);
         ArgumentNullException.ThrowIfNull(scanCache);
         ArgumentNullException.ThrowIfNull(guardBootstrap);
+        ArgumentNullException.ThrowIfNull(guardInspections);
 
         _configStore = configStore;
         _runState = runState;
         _registrar = registrar;
         _scanCache = scanCache;
         _guardBootstrap = guardBootstrap;
+        _guardInspections = guardInspections;
     }
 
     // ── 延时启动（来源计数 chips）──────────────────────────────────────────
@@ -104,9 +116,9 @@ public partial class OverviewViewModel : ObservableObject
     [ObservableProperty]
     public partial bool TaskReady { get; set; } = true;
 
-    /// <summary>状态卡里的描述文字（正常态固定文案；失败态带失败原因）。</summary>
+    /// <summary>失败态卡片里的失败原因（正常态不显示，留空即可）。</summary>
     [ObservableProperty]
-    public partial string TaskStatusDetail { get; set; } = TaskReadyDetail;
+    public partial string TaskStatusDetail { get; set; } = string.Empty;
 
     /// <summary>检测 / 补建是否正在进行（防止连点）。</summary>
     [ObservableProperty]
@@ -125,11 +137,6 @@ public partial class OverviewViewModel : ObservableObject
     /// <summary>当前选中的守卫档位索引（即 <see cref="GuardPresets.Options"/> 的下标）。</summary>
     [ObservableProperty]
     public partial int GuardSelectedIndex { get; set; }
-
-    /// <summary>守卫设置区的说明文字（随档位变化）。</summary>
-    [ObservableProperty]
-    public partial string GuardStatusDetail { get; set; } =
-        DescribeGuard(GuardMode.OnceAfterLogin, GuardPresets.DefaultMinutes);
 
     /// <summary>守卫设置保存 / 任务同步失败时的红字提示；空字符串表示正常。</summary>
     /// <remarks>
@@ -166,20 +173,47 @@ public partial class OverviewViewModel : ObservableObject
     [ObservableProperty]
     public partial int ScannedUwp { get; set; }
 
-    // ── 最近一次开机调度 ──────────────────────────────────────────────────
-
-    /// <summary>「最近一次开机调度」的条目行；从未运行过为空集合。</summary>
-    public ObservableCollection<RunItemRow> RecentRunRows { get; } = [];
+    // ── 上次开机调度（D115：小表换成汇总卡片）────────────────────────────
 
     /// <summary>是否没有可展示的最近运行记录。</summary>
     /// <remarks>
-    /// 🔴 必须是 <c>[ObservableProperty]</c> 而不是 <c>=&gt; Rows.Count == 0</c> 计算属性：
+    /// 🔴 必须是 <c>[ObservableProperty]</c> 而不是 <c>=&gt; …</c> 计算属性：
     /// x:Bind 的 OneWay 要求路径上有通知源，get-only 计算属性会让 XamlCompiler 报
     /// "OneWay bindings require ..."（增量 pass-2 下按错误处理，构建失败）。
     /// 在 <see cref="FillRecentRun"/> 里显式赋值。
     /// </remarks>
     [ObservableProperty]
     public partial bool RecentRunEmpty { get; set; } = true;
+
+    /// <summary>卡片第一行：调度结果口径（成功 / 失败 / 跳过计数）。</summary>
+    /// <remarks>
+    /// 🔴 生成逻辑与调度日志页的分组标题（<see cref="RunGroupRow.Title"/>）是**同一份** ——
+    /// 「成功 N · 跳过 N」不能读成"出事了"（FR-15.26）这类口径修正都留在那一处，卡片白拿。
+    /// </remarks>
+    [ObservableProperty]
+    public partial string RecentRunSummary { get; set; } = string.Empty;
+
+    /// <summary>卡片第二行：这次调度的开始时间。</summary>
+    [ObservableProperty]
+    public partial string RecentRunTimeText { get; set; } = string.Empty;
+
+    /// <summary>这次调度是否要标红（含失败项，或上次调度未正常完成）。</summary>
+    [ObservableProperty]
+    public partial bool RecentRunHasFailure { get; set; }
+
+    // ── 上次守卫巡检（D115：守卫此前没有任何状态位，补一张同构卡片）──────
+
+    /// <summary>是否没有守卫巡检记录（从未巡检，或守卫一直处于关闭状态）。</summary>
+    [ObservableProperty]
+    public partial bool RecentGuardEmpty { get; set; } = true;
+
+    /// <summary>卡片第一行：巡检汇总（与 guard.log「巡检完成」行、守卫日志页组标题同一口径）。</summary>
+    [ObservableProperty]
+    public partial string RecentGuardSummary { get; set; } = string.Empty;
+
+    /// <summary>卡片第二行：这次巡检完成的时间。</summary>
+    [ObservableProperty]
+    public partial string RecentGuardTimeText { get; set; } = string.Empty;
 
     /// <summary>刷新全部数据。页面进入时调用（全部读缓存 / 小文件，秒回）。</summary>
     /// <returns>异步任务。</returns>
@@ -208,7 +242,6 @@ public partial class OverviewViewModel : ObservableObject
         try
         {
             GuardSelectedIndex = GuardPresets.ToIndex(config.Settings.GuardMode, config.Settings.GuardMinutes);
-            GuardStatusDetail = DescribeGuard(config.Settings.GuardMode, config.Settings.GuardMinutes);
         }
         finally
         {
@@ -221,6 +254,7 @@ public partial class OverviewViewModel : ObservableObject
 
         await EnsureTaskAsync().ConfigureAwait(true);
         await FillRecentRun().ConfigureAwait(true);
+        await FillRecentGuard().ConfigureAwait(true);
     }
 
     /// <summary>检测调度计划任务，缺失即补建；失败切到失败态（用户可点「重试创建」再来一遍）。</summary>
@@ -246,19 +280,19 @@ public partial class OverviewViewModel : ObservableObject
                 if (registered)
                 {
                     TaskReady = true;
-                    TaskStatusDetail = TaskReadyDetail;
+                    TaskStatusDetail = string.Empty;
                     return;
                 }
 
                 await Task.Run(_registrar.RegisterOrUpdate).ConfigureAwait(true);
                 TaskReady = true;
-                TaskStatusDetail = TaskReadyDetail;
+                TaskStatusDetail = string.Empty;
             }
             catch (Exception ex)
             {
                 // 查询 / 注册失败都进失败态：原因原样摆出来，修复路径交给「重试创建」。
                 TaskReady = false;
-                TaskStatusDetail = $"{TaskFailDetail}\n失败原因：{ex.Message}";
+                TaskStatusDetail = ex.Message;
             }
         }
         finally
@@ -318,7 +352,6 @@ public partial class OverviewViewModel : ObservableObject
             // 让 VM 与控件状态一致。同值时 ComboBox 不会再次触发 SelectionChanged，
             // 因此不会回环（且上面已有 IsWorkingOnGuard 兜底）。
             GuardSelectedIndex = index;
-            GuardStatusDetail = DescribeGuard(preset.Mode, preset.Minutes);
 
             SyncGuardTask();
         }
@@ -348,37 +381,55 @@ public partial class OverviewViewModel : ObservableObject
         _ => string.Empty,
     };
 
-    /// <summary>档位说明文字（下拉下方那一行）。</summary>
-    /// <remarks>
-    /// 只讲"这个档位什么时候跑"，不讲机制 —— 界面上的说明文字越短越好读，
-    /// "关闭意味着什么"用一句后果带过即可。
-    /// </remarks>
-    private static string DescribeGuard(GuardMode mode, int minutes) => mode switch
-    {
-        GuardMode.Disabled => "已关闭：不巡检，被写回的项不会自动禁用，也没有变动提示。",
-        GuardMode.OnceAfterLogin => $"登录后 {minutes} 分钟巡检一次，之后不再重复。",
-        GuardMode.Periodic => $"登录后 {minutes} 分钟开始巡检，之后每 {minutes} 分钟一次。",
-        _ => string.Empty,
-    };
-
-    /// <summary>把「最近一次运行」灌进日志区（读文件放后台，行灌入留在 UI 线程）。</summary>
+    /// <summary>把「上次开机调度」的汇总灌进卡片（读归档放后台，赋值留在 UI 线程）。</summary>
     /// <returns>异步任务。</returns>
+    /// <remarks>
+    /// 数据取**最近一次已归档**的运行（<see cref="IRunStateStore.ReadRecent"/>)，
+    /// 而不是实时状态 —— 卡片的语义是"上次怎么样"；一次还在进行中的调度，
+    /// 等它归档了自然会顶上来。仅当从来没有归档（刚装好、第一次调度还在跑）时
+    /// 回落读实时状态，避免"明明在跑、卡片却说没有"。
+    /// </remarks>
     private async Task FillRecentRun()
     {
-        var current = await Task.Run(_runState.ReadCurrent).ConfigureAwait(true);
+        var records = await Task.Run(() => _runState.ReadRecent(1)).ConfigureAwait(true);
+        var record = records.Count > 0
+            ? records[0]
+            : await Task.Run(_runState.ReadCurrent).ConfigureAwait(true);
 
-        RecentRunRows.Clear();
-        if (current is null)
+        if (record is null || record.Items.Count == 0)
         {
             RecentRunEmpty = true;
             return;
         }
 
-        foreach (var item in current.Items)
+        var group = new RunGroupRow(record);
+        RecentRunSummary = group.Title;
+        RecentRunTimeText = record.StartedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        RecentRunHasFailure = group.HasFailure || !record.CompletedNormally;
+        RecentRunEmpty = false;
+    }
+
+    /// <summary>把「上次守卫巡检」的汇总灌进卡片（读巡检归档放后台）。</summary>
+    /// <returns>异步任务。</returns>
+    /// <remarks>
+    /// 数据 = 最近一次巡检归档（<see cref="GuardInspectionStore.ReadRecent"/>，D116），
+    /// 汇总行与守卫日志页组标题同源（<see cref="GuardRunSummaryText.Build"/>）。
+    /// 没有归档（从未巡检 / 守卫一直关闭）就给空态 —— 守卫档位的状态由页面上方
+    /// 「自启动项守卫」设置卡负责，这张卡只回答"上次巡检怎么样"。
+    /// </remarks>
+    private async Task FillRecentGuard()
+    {
+        var reports = await Task.Run(() => _guardInspections.ReadRecent(1)).ConfigureAwait(true);
+
+        if (reports.Count == 0)
         {
-            RecentRunRows.Add(new RunItemRow(item));
+            RecentGuardEmpty = true;
+            return;
         }
 
-        RecentRunEmpty = RecentRunRows.Count == 0;
+        var report = reports[0];
+        RecentGuardSummary = GuardRunSummaryText.Build(report);
+        RecentGuardTimeText = report.CompletedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        RecentGuardEmpty = false;
     }
 }

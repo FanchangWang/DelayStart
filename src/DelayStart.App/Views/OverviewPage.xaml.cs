@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 namespace DelayStart.App.Views;
 
 /// <summary>
-/// 「总览」页（UI v3，2026-09-21 批复）。
+/// 「总览」页（UI v3，2026-09-21 批复；D117 分节合并为「后台任务」+「最近记录」）。
 /// </summary>
 /// <remarks>
 /// 2026-09-21 批复：开机调度任务从开关改为状态卡（缺失自动补建、失败给重试按钮），
@@ -61,8 +61,11 @@ public sealed partial class OverviewPage : Page
     /// <summary>「手动添加」chip：手动条目只存在于延时列表，跳延时启动页。</summary>
     private void OnGoDelay(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.DelayTag);
 
-    /// <summary>「查看运行日志 →」：跳运行日志页（2026-09-21 批复）。</summary>
+    /// <summary>「查看调度日志 →」：跳调度日志页（2026-09-21 批复）。</summary>
     private void OnGoRuns(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.RunsTag);
+
+    /// <summary>「查看守卫日志 →」：跳守卫日志页（D115）。</summary>
+    private void OnGoGuardRuns(object sender, RoutedEventArgs e) => _navigator.Navigate(NavigationService.GuardRunsTag);
 
     /// <summary>守卫档位被用户改变：立即落盘并同步计划任务。⚠️ 回灌事件在这里被挡掉。</summary>
     private void OnGuardModeChanged(object sender, SelectionChangedEventArgs e)

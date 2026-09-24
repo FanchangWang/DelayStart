@@ -26,6 +26,7 @@ namespace DelayStart.Management.Models;
 /// </param>
 /// <param name="DisplayName">日志与异常消息里的中文简称（"守卫" / "调度"），保证文案与旧版逐字一致。</param>
 /// <param name="ScheduleDescription">写入成功日志里括号内的调度说明（如"登录后 3 秒"）。</param>
+/// <param name="Arguments">传给 exe 的命令行参数；当前两条任务均为 <see langword="null"/>。</param>
 public sealed record ScheduledTaskSpec(
     string TaskName,
     string TaskPath,
@@ -35,4 +36,5 @@ public sealed record ScheduledTaskSpec(
     TimeSpan LogonDelay,
     TimeSpan? RepeatInterval,
     string DisplayName,
-    string ScheduleDescription);
+    string ScheduleDescription,
+    string? Arguments = null);

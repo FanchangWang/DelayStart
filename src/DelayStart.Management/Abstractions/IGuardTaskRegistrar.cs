@@ -22,9 +22,13 @@ public interface IGuardTaskRegistrar
     /// <summary>守卫计划任务的完整路径。</summary>
     string TaskPath { get; }
 
-    /// <summary>计划任务当前是否存在且指向本程序安装目录下的守卫程序。</summary>
+    /// <summary>计划任务当前是否存在，不检查 action 是否指向当前安装目录。</summary>
     /// <returns>存在则为 <see langword="true"/>。</returns>
-    bool IsRegistered();
+    bool Exists();
+
+    /// <summary>计划任务是否存在且至少一个 ExecAction 指向本程序安装目录下的守卫程序。</summary>
+    /// <returns>存在且 action 路径匹配则为 <see langword="true"/>。</returns>
+    bool Matches();
 
     /// <summary>
     /// 按档位幂等注册或更新守卫计划任务；<paramref name="mode"/> 为

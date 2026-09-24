@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D119）
+# DelayStart — 决策记录（D1–D120）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -1083,6 +1083,18 @@
 
 ---
 
+### D120 计划任务定义比对纳入启用状态与参数，拆分 Exists / Matches
+
+**结论**：`ScheduledTaskGateway.IsDefinitionUpToDate` 同时比较 `Task.Enabled`、`LogonTrigger.Enabled`、`ExecAction.Arguments` 以及原有定义字段；`Exists` 只回答任务是否存在，`Matches` 保留“任务存在且 action 指向期望 exe”的旧语义，完整定义匹配仍由 `IsDefinitionUpToDate` 负责。
+
+**为什么**：任务级 / 触发器级开关被外部禁用时，任务仍存在但不会按预期运行；action 参数被改写时，路径和工作目录比对仍可能通过。Bootstrap 若继续用旧的 `IsRegistered` 判断存在性，还会把“已存在但定义已变更”误报成“缺失”，守卫关闭时甚至可能不删除错误任务。
+
+**范围**：本条只改计划任务机制层、两个注册接口、Bootstrap、状态查询和测试；不涉及 B1.1b、B3 或任务来源业务。
+
+**验证**：`build.ps1` 0 警告 0 错误；`test.ps1` 711/0；发布及 NativeAOT 成功。
+
+---
+
 ### 附表：R1–R13 技术风险与去向（已全部闭环）
 
 | # | 风险 | 怎么闭环的 |
@@ -1101,7 +1113,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D119 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D120 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

@@ -96,7 +96,7 @@
 
 ### FR-11 计划任务注册
 
-`TaskService` API 创建/更新（FR-11.3）；`SchedulerTaskBootstrap` 每次启动自检自愈（D68）；卸载清理路径（FR-11.4，`--restore-all`）。守卫与调度两条任务的注册机制统一在 `ScheduledTaskGateway`（纯数据 `ScheduledTaskSpec` + 单份的逐字段比对 / 写入 / 删除，D114）；守卫按档位变化同步（D74 / D112），调度为固定规则（D39 / D113）。
+`TaskService` API 创建/更新（FR-11.3）；`SchedulerTaskBootstrap` 每次启动自检自愈（D68）；卸载清理路径（FR-11.4，`--restore-all`）。守卫与调度两条任务的注册机制统一在 `ScheduledTaskGateway`（纯数据 `ScheduledTaskSpec` + 单份的逐字段比对 / 写入 / 删除，D114）；定义最新判定同时比较 `Task.Enabled`、`LogonTrigger.Enabled`、`ExecAction.Arguments` 及原有字段；任务存在性（`Exists`）与 action 路径匹配性（`Matches`）分开表达；守卫按档位变化同步（D74 / D112），调度为固定规则（D39 / D113）。
 
 ### FR-12 配置迁移与备份
 

@@ -75,8 +75,12 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
     public string TaskPath => TaskPathConstant;
 
     /// <inheritdoc />
-    public bool IsRegistered()
-        => _gateway.IsRegistered(TaskPathConstant, _paths.SchedulerExecutablePath, DisplayName);
+    public bool Exists()
+        => _gateway.Exists(TaskPathConstant, DisplayName);
+
+    /// <inheritdoc />
+    public bool Matches()
+        => _gateway.Matches(TaskPathConstant, _paths.SchedulerExecutablePath, DisplayName);
 
     /// <inheritdoc />
     /// <returns>是否真正写入了任务定义（<see langword="false"/> 表示现有定义已与期望一致、已跳过重写）。</returns>
@@ -97,5 +101,6 @@ public sealed class TaskRegistrationService : ISchedulerTaskRegistrar
         LogonDelay: TimeSpan.FromSeconds(LogonDelaySeconds),
         RepeatInterval: null,
         DisplayName: DisplayName,
-        ScheduleDescription: $"登录后 {LogonDelaySeconds} 秒");
+        ScheduleDescription: $"登录后 {LogonDelaySeconds} 秒",
+        Arguments: null);
 }

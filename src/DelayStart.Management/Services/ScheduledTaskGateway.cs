@@ -57,15 +57,36 @@ internal sealed class ScheduledTaskGateway
         _log = log;
     }
 
+    /// <summary>判断任务路径是否存在，不检查 action 是否指向当前安装目录。</summary>
+    /// <param name="taskPath">任务根路径（如 <c>\DelayStartGuard</c>）。</param>
+    /// <param name="displayName">日志里的中文简称（"守卫" / "调度"）。</param>
+    /// <returns>任务存在则为 <see langword="true"/>。</returns>
+    public bool Exists(string taskPath, string displayName)
+    {
+        try
+        {
+            using var service = new TaskService();
+            return service.GetTask(taskPath) is not null;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(ex, $"查询{displayName}计划任务是否存在失败，按不存在处理");
+            return false;
+        }
+    }
+
     /// <summary>
-    /// 判断任务是否存在且动作指向给定的 exe。"存在"不够：安装目录变化后旧任务会指向一个
-    /// 不存在的 exe；这里只判断可读性，具体更新交给 <see cref="RegisterOrUpdate"/> 的幂等写入。
+    /// 判断任务是否存在且至少有一个 ExecAction 指向给定的 exe。
     /// </summary>
+    /// <remarks>
+    /// 这是旧 <c>IsRegistered</c> 的兼容语义，不等于完整定义匹配；完整定义由
+    /// <see cref="IsDefinitionUpToDate"/> 判定。
+    /// </remarks>
     /// <param name="taskPath">任务根路径（如 <c>\DelayStartGuard</c>）。</param>
     /// <param name="executablePath">期望的动作 exe 路径。</param>
     /// <param name="displayName">日志里的中文简称（"守卫" / "调度"）。</param>
-    /// <returns>存在且动作匹配则为 <see langword="true"/>。</returns>
-    public bool IsRegistered(string taskPath, string executablePath, string displayName)
+    /// <returns>存在且 action 路径匹配则为 <see langword="true"/>。</returns>
+    public bool Matches(string taskPath, string executablePath, string displayName)
     {
         try
         {
@@ -81,7 +102,7 @@ internal sealed class ScheduledTaskGateway
         }
         catch (Exception ex)
         {
-            _log.Warn(ex, $"查询{displayName}计划任务失败，按未注册处理");
+            _log.Warn(ex, $"查询{displayName}计划任务 action 是否匹配失败，按不匹配处理");
             return false;
         }
     }
@@ -223,7 +244,7 @@ internal sealed class ScheduledTaskGateway
         using (var existingTask = service.GetTask(spec.TaskPath))
         {
             if (existingTask is not null
-                && IsDefinitionUpToDate(existingTask.Definition, spec, userId))
+                && IsDefinitionUpToDate(existingTask.Enabled, existingTask.Definition, spec, userId))
             {
                 return false;
             }
@@ -254,7 +275,7 @@ internal sealed class ScheduledTaskGateway
 
         definition.Actions.Add(new ExecAction(
             spec.ExecutablePath,
-            arguments: null,
+            arguments: spec.Arguments,
             workingDirectory: spec.WorkingDirectory));
 
         var settings = definition.Settings;
@@ -287,12 +308,23 @@ internal sealed class ScheduledTaskGateway
     /// <remarks>
     /// 只比"我们显式写入的字段"，不比未设置的默认值（避免库版本差异造成的默认值漂移误判）。
     /// 任一字段不符即视为"需要重写"。账户字段经 <see cref="SameAccount"/> 归一化（见类注释）。
+    /// 任务级 / 触发器级 Enabled 与 ExecAction arguments 也属于显式语义，必须比对。
     /// </remarks>
+    /// <param name="taskEnabled">任务级启用状态。</param>
     /// <param name="existing">任务计划程序里的现有定义。</param>
     /// <param name="spec">期望的定义。</param>
     /// <param name="userId">注册时使用的交互用户（比对 Principal 与触发器的 UserId）。</param>
-    private static bool IsDefinitionUpToDate(TaskDefinition existing, ScheduledTaskSpec spec, string userId)
+    internal static bool IsDefinitionUpToDate(
+        bool taskEnabled,
+        TaskDefinition existing,
+        ScheduledTaskSpec spec,
+        string userId)
     {
+        if (!taskEnabled)
+        {
+            return false;
+        }
+
         if (!string.Equals(existing.RegistrationInfo.Description, spec.Description, StringComparison.Ordinal))
         {
             return false;
@@ -306,7 +338,8 @@ internal sealed class ScheduledTaskGateway
         var exec = existing.Actions.OfType<ExecAction>().FirstOrDefault();
         if (exec is null
             || !string.Equals(exec.Path, spec.ExecutablePath, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(exec.WorkingDirectory, spec.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(exec.WorkingDirectory, spec.WorkingDirectory, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(exec.Arguments ?? string.Empty, spec.Arguments ?? string.Empty, StringComparison.Ordinal))
         {
             return false;
         }
@@ -325,7 +358,7 @@ internal sealed class ScheduledTaskGateway
             return false;
         }
         var logon = existing.Triggers.OfType<LogonTrigger>().FirstOrDefault();
-        if (logon is null)
+        if (logon is null || !logon.Enabled)
         {
             return false;
         }

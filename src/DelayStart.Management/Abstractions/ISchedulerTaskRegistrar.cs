@@ -21,9 +21,13 @@ public interface ISchedulerTaskRegistrar
     /// <summary>调度端计划任务的完整路径（形如 <c>\DelayStart\Scheduler</c>）。</summary>
     string TaskPath { get; }
 
-    /// <summary>计划任务当前是否存在且指向本程序安装目录下的调度端。</summary>
+    /// <summary>计划任务当前是否存在，不检查 action 是否指向当前安装目录。</summary>
     /// <returns>存在则为 <see langword="true"/>。</returns>
-    bool IsRegistered();
+    bool Exists();
+
+    /// <summary>计划任务是否存在且至少一个 ExecAction 指向本程序安装目录下的调度端。</summary>
+    /// <returns>存在且 action 路径匹配则为 <see langword="true"/>。</returns>
+    bool Matches();
 
     /// <summary>
     /// 幂等注册或更新计划任务：已存在则视情况更新，不存在则创建（FR-3.3 / FR-11.2）。

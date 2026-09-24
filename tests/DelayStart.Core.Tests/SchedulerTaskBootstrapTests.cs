@@ -77,6 +77,23 @@ public sealed class SchedulerTaskBootstrapTests
         Assert.Equal(1, harness.Registrar.WriteCount);
     }
 
+    [Fact]
+    public void EnsureSchedulerTask_ExistingDefinitionChanged_RewritesAndReportsChanged()
+    {
+        var harness = new Harness();
+        harness.Registrar.RegisterOrUpdate();
+        harness.Registrar.DefinitionUpToDate = false;
+        harness.Registrar.ExecutableMatches = false;
+        Assert.False(harness.Registrar.Matches());
+        var before = harness.Registrar.WriteCount;
+
+        harness.Service.EnsureSchedulerTask();
+
+        Assert.Equal(before + 1, harness.Registrar.WriteCount);
+        Assert.True(harness.Registrar.Matches());
+        Assert.True(harness.Log.Contains(LogLevel.Info, "定义已变更"));
+    }
+
     // ── 失败路径 ────────────────────────────────────────────────────────────
 
     [Fact]

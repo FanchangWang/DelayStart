@@ -305,7 +305,7 @@ public partial class OverviewViewModel : ObservableObject
         {
             try
             {
-                var registered = await Task.Run(_registrar.IsRegistered).ConfigureAwait(true);
+                var registered = await Task.Run(_registrar.Matches).ConfigureAwait(true);
                 if (registered)
                 {
                     TaskReady = true;

@@ -381,6 +381,16 @@ error CA1822: 成员"Summary"不访问实例数据，可标记为 static
 
 ---
 
+## 二十七、计划任务的“存在”不等于“定义匹配”
+
+**症状**：把“任务路径存在且 action 指向旧 exe”叫作 `IsRegistered`，会把任务存在、action 路径匹配、完整定义最新三种状态压成一个布尔值。用户把任务或触发器禁用、修改 action 参数后，系统可能仍报告“已注册”；守卫关闭时还可能因此跳过删除。
+
+**做**：分开表达 `Exists`（只查路径）、`Matches`（查 action 路径）和 `IsDefinitionUpToDate`（查完整定义，含 `Task.Enabled` / `LogonTrigger.Enabled` / `ExecAction.Arguments`）。Bootstrap 用 `Exists` 区分“缺失 / 已存在但变更”，状态卡用 `Matches` 决定是否可直接显示就绪。
+
+**验证**：B2 增加任务级 / 触发器级禁用、action 参数变化以及 Exists / Matches 分支测试，全部使用内存定义和 Fakes，不写真实任务库。
+
+---
+
 ## 教训方法论
 
 1. **先取证再改**：报错框是证据不是结论——"读到 A 要求 B、本机只有 C"要直接调一次探针验证（D64 的 DDLM 假铁证）。

@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D121）
+# DelayStart — 决策记录（D1–D123）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -941,23 +941,19 @@
 - 🔴 **静默卸载会弹一次 UAC**：卸载器 `InitializeUninstall` 里的 `ShellExec('runas', … --restore-all)`（D61 定的 —— 不还原就中止卸载），而验证流水线把"UAC 弹窗阻塞进度"列为失败条件。**本轮刻意不改**：那条失败分支有 `SuppressibleMsgBox(Default=IDYES)` 兜底、卸载最终仍会完成；先看验证结果，真被拦了再单独评估 —— 顺手改它会牵连 D61/D84/D85 逐轮真机验过的卸载路径。
 - 🔴 **PUA 是一票否决**（政策原文：不看应用是否正当）。本程序的核心行为（改写其他程序的自启动项、注册计划任务、常驻托盘、注册协议处理器）在自动扫描里属高风险特征，**结果只能提了才知道**。
 - `PackageIdentifier` 一旦合并 *基本不可变*（目录名就是标识），`FanchangWang` 这个命名空间是长期承诺。
-- **`ProductCode` 按 Inno 的形状写**（2026-09-24 更正）：`AppsAndFeaturesEntries.ProductCode` 填**卸载注册表键名** `{8F4C0B6A-…-DELAYSTART001}_is1`（= Inno 的 `AppId` + `_is1`）。
+- **`ProductCode` 是 Inno 派生值**（2026-09-24 确认）：`AppsAndFeaturesEntries.ProductCode` 是**卸载注册表键名**，= Inno 的 `AppId` + `_is1`（原为 `{8F4C0B6A-…-DELAYSTART001}_is1`；**2026-09-25 起 `AppId` 改为合法 GUID，见 D122**，示例随之更新为 `{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1`）。
   ⚠️ 本处原先写的是"`ProductCode` 要求 GUID 形状、所以不写" —— **是错的**：winget 1.12 的 installer schema 对 `ProductCode` 只声明 `type: string`，**没有任何 GUID pattern**；社区源里 Inno 包的惯例就是 `<AppId>_is1`，官方 `JRSoftware.InnoSetup` 6.7.3 写的正是 `ProductCode: Inno Setup 6_is1`。写它比只靠 `DisplayName` 匹配更硬（`Update` 的已装检测直接命中注册表键）。
 - **未改什么**：本轮不动 C#、不加 workflow 作业；`DelayStart.iss` 只改 `AppPublisher` 一行（D6）。
 
 **D6 已批（2026-09-24）**：`installer/DelayStart.iss` 的 `#define AppPublisher` 由 `DelayStart` 改为 `FanchangWang` ——「设置 → 应用」的发布者、manifest 的 `Publisher`、包标识前缀三处口径统一。代价是老用户升级后该处显示名变化（纯显示，无功能影响）。
 
-### D111 Inno `AppId` 保持原值（2026-09-24 用户询问后定案）
+### D111 Inno `AppId` 保持原值 —— **已作废（2026-09-25，由 D122 取代）**
 
-**结论**：`installer/DelayStart.iss` 的 `AppId={{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}` **保持不变**。
+**原结论**：`installer/DelayStart.iss` 的 `AppId={{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}}` **保持不变**。
 
-**背景**：上架 winget 牵出发布者口径（D6），顺带被问到"这个不是 GUID 的 `AppId` 当初怎么来的、要不要一起换掉"。
+**原论证**：Inno 对 `AppId` 只要求"任意字符串、≤127 字符、不要中途改"，**没有"必须是 GUID"**；中途改会被当成全新产品 → 「设置 → 应用」出现两个条目、旧卸载器仍指向同一目录；而 winget 不要求 `ProductCode` 是 GUID，**收益为零**。
 
-**当初怎么来的**：2026-09-19 首版安装器脚本**手写**的仿 GUID 串（`commit 2ca0129`）。Inno 对 `AppId` 的要求只有"任意字符串、≤127 字符、不要中途改"，**没有"必须是 GUID"** —— 规范形状的 GUID 只是社区惯例（VS 的安装项目模板会给一个）。
-
-**为什么能改但选择不改**：`AppId` 决定两件事 —— ① 卸载注册表键名（`AppId` + `_is1`）；② 写进 `unins000.dat`，后续安装据此判断能否**追加到同一个**卸载记录。中途改的后果（Inno 官方 FAQ 口径）：安装程序不再认得旧版本 → "设置 → 应用"里出现**两个条目**，并生成一份新的卸载记录文件，而旧条目的卸载器仍指向同一个安装目录。**收益是零**：winget 不要求 `ProductCode` 是 GUID（见上），不换也能把 `ProductCode` 写全。
-
-**未生效的备选**：换成真 GUID（`New-Guid` 生成）并同步 manifest 的 `ProductCode` —— 只在"尚无任何公开装机量"时才值得做（现在 v0.2.0–v0.3.1 已经发出去过）。
+**🔴 作废原因**：本条的核心前提是"装机量已发出去、改 `AppId` 的代价大于收益"。该前提在 2026-09-25 不成立 —— 用户明确要求**下一个版本作为配置不兼容版本、必须先卸载旧版再安装**（D121）。既然本来就要走"先卸载"，本条担心的"旧卸载器不被识别"就不再是阻碍，改成合规 GUID 的收益（工具链识别、manifest 与注册表逐字对应、去掉"靠首字符区分大小写"的歪规则）反而成了真收益。**编号保留不删除**，以免后续引用 D111 的地方指向虚空。详见 D122。
 
 ### D112 守卫任务「每次启动重写」会吞掉本次会话的巡检（2026-09-24 用户上报后定案）
 
@@ -977,7 +973,7 @@
 
 ### D113 调度计划任务「每次启动重写」同样会重置登录触发器（F1 调度端镜像，2026-09-24 用户要求）
 
-**结论**：把守卫 F1（D112）的"定义一致就跳过重写"机制**原样应用到调度端** —— `TaskRegistrationService.RegisterOrUpdate` 在写入前先逐字段比对 `\DelayStartScheduler` 的现有定义，完全一致则跳过 `RegisterTaskDefinition`，保留已武装的登录触发器与运行统计；只有缺失或定义确实变了才重写。
+**结论**：把守卫 F1（D112）的"定义一致就跳过重写"机制**原样应用到调度端** —— `TaskRegistrationService.RegisterOrUpdate` 在写入前先逐字段比对 `\DelayStart\Scheduler` 的现有定义，完全一致则跳过 `RegisterTaskDefinition`，保留已武装的登录触发器与运行统计；只有缺失或定义确实变了才重写。
 
 **背景**：用户明确指示"调度器的任务计划也应该同样处理，已经存在并且一模一样的情况下，也不要重建调度器计划任务"。守卫因重写而静默吞掉巡检（D112）是这轮修复的起因；调度任务的触发器同样是 `LogonTrigger + InitialDelay`（登录后 N 秒、一次性），重写会重置该窗口并覆盖「上次运行时间」等统计——虽不像守卫那样直接吞掉一次巡检，但统计失真、且毫无必要地触碰系统状态。
 
@@ -1021,9 +1017,11 @@
 
 ---
 
-### D116 运行时数据按进程归堆 + 守卫巡检结构化归档（2026-09-24 用户批复）
+### D116 运行时数据按进程归堆 + 守卫巡检结构化归档（2026-09-24 用户批复）—— **迁移部分已作废（2026-09-25）**
 
 **结论**：三件事一次落地 —— ① 目录重构：`state\`、`runs\` 撤销，调度端数据收进 `scheduler\`（`current-run.json` 与 `archive\<runId>.json`），守卫巡检新增结构化归档 `guard\inspections\<yyyyMMdd-HHmmss>.json`（保留 30 份）；② 守卫日志页数据源从 guard.log 文本解析切换为巡检归档，按次分组（D3），总览守卫卡切归档（D5），guard.log 文本双轨保留（D4）；③ 旧数据由管理端启动时一次性迁移（`RuntimeDataMigrator`），几个版本后移除。
+
+> **🔴 第 ③ 条（一次性迁移）已作废（2026-09-25）**：`RuntimeDataMigrator` 整个类已删除，调用点（`App.OnLaunched` / `CliHost.TryExecute`）与 DI 注册一并移除。理由与 D121 一致 —— 本项目无历史包袱，且下一个版本已是配置不兼容版本、要求先卸载旧版（D122），"把旧目录搬进新结构"这件事不再有人需要。**代价**：`state\` 与 `runs\` 里的历史调度日志不再被读取，目录会残留在磁盘上（程序不再碰它，可手工删除）。目录重构（①）与巡检归档（②）继续有效。
 
 **取舍**：
 - **按进程归堆**（用户提议）：目录名即进程名，与 `logs\` 下文件名对得上；`holidays\` 与 `ui-request.json` 不动（前者自成体系、后者是瞬时跨进程信号，无迁移价值）。
@@ -1143,13 +1141,53 @@
 - `LegacyConfigV1` / `LegacyItemV1` 两个 v1 DTO 与 `JsonContext` 注册；
 - `MigrateFromV1` / `ConvertLegacyItem` / `ParseLegacySource` / `InferLegacyScope`（含"从位置描述字符串推断 hive"的一次性逻辑）；
 - `ReadVersion`（"`version` 字段缺失 = v1"的判别）；
-- 11 个 v1 迁移单测。
+- 11 个 v1 迁移单测；
+- `RuntimeDataMigrator` 整个类（运行时数据目录 `state\` / `runs\` → `scheduler\` 的一次性迁移，2026-09-25 追加删除）及其两处调用点、DI 注册与 6 条单测；
+- `HolidayCheckThrottle` 对中间那代 `"ok"` 结局标记的兼容读取（改为只认 `updated` / `nopublish` / `fail`）。
 
-配置文件损坏时用户直接删掉重建即可。
+配置与运行时数据损坏时用户直接删掉重建即可。
+
+**配置版本的处理随之收紧**：`AppConfig.Version` 的默认值由 `CurrentVersion` 改为 `0`，并由 `Normalize` 统一补齐。这样**缺失 `version` 字段的文件会落到 0**，被 `Parse` 与"低于当前版本"一起判为损坏 —— 默认给当前版本等于替一份来路不明的文件背书。仍保留前向保护：版本**高于**当前值时以 `ConfigVersionUnsupported` 拒绝加载（那是防未来版本互踩，不是历史兼容）。
 
 **同时确立的协作原则**：不因为某个方法"已经被调用"就保留它。设计错误时直接推翻重写，包括改签名、删接口成员、改调用点 —— 这些都是允许的正常成本，不需要为"少改一点"而留下补丁。
 
 > 适用范围：本条只约束**本项目的历史包袱**。仍需保留的前向保护见 D119（版本高于本程序时拒绝加载）—— 那是防未来版本互踩，不是历史兼容。
+
+---
+
+### D122 Inno `AppId` 改为合法 GUID
+
+**日期**：2026-09-25　**状态**：已采纳（取代 D111）
+
+**背景**：原 `AppId` 是 2026-09-19 首版安装器脚本**手写**的仿 GUID 串 `{8F4C0B6A-2C1D-4E3B-9A5F-DELAYSTART001}` —— 末段 13 个字符且含 `L`/`Y`/`S`/`T` 等非十六进制字符，**它不是 GUID**。Inno 仍会接受它，靠的是"首字符非数字 ⇒ 视为 `{` 转义"这条歪打正着的规则；winget 侧则要求 manifest 的 `ProductCode` 与实际注册表卸载键逐字对应。
+
+**决策**：改为 `New-Guid` 生成的合法 GUID `{48BC0E34-50D1-4D82-908C-4A5C11AC5690}`，并同步 `docs/winget.md` 四份清单模板里的 `ProductCode`（= `AppId` + `_is1`）。
+
+**为什么现在做**（D111 当初反对的理由已不成立）：D111 认为"改 `AppId` 会被当成全新产品 → 旧卸载器不被识别 → 无法干净升级"，所以判定收益为零。但用户已明确要求**下一个版本作为配置不兼容版本、必须先卸载旧版再安装**（与 D121 同源），"先卸载"这条流程本来就要走，D111 担心的阻碍不再存在。改动的真实收益：工具链能正确识别安装标识、manifest 与注册表逐字对应、不再依赖"首字符区分大小写"这种隐式规则。
+
+**代价与配套**：改 `AppId` 后，**旧版本（v0.4.0 及以前）的卸载器不会被新版识别** —— 必须先用旧安装包卸载，再装新版。这与 D121 的"先卸载"要求是同一条流程，不额外增加成本。`unins000.dat` 与卸载注册表键均以 `AppId` 为准，不做任何迁移。
+
+---
+
+### D123 两个自有计划任务收进 `DelayStart` 文件夹
+
+**日期**：2026-09-25　**状态**：已采纳（用户指定路径）
+
+**背景**：两条自有任务原先直接躺在任务计划程序的**根目录**：`\DelayStartScheduler` 与 `\DelayStartGuard`。而 Windows 的任务计划程序根目录下有上百个第三方任务（Defrag、WindowsUpdate、Edge 更新、OEM 预装…），用户要在一片杂乱里找自己的两条。
+
+**决策**：改为 `\DelayStart\Scheduler` 与 `\DelayStart\Guard` —— 同一个 `DelayStart` 文件夹下放两条任务，任务计划程序里一眼可见。任务名相应简化为 `Scheduler` / `Guard`（路径里已有 `DelayStart` 前缀，任务名不必重复）。
+
+**机制层改动**（`ScheduledTaskGateway`）：原先 `RegisterTaskDefinition` 与 `DeleteTask` 都硬编码走 `service.RootFolder`，现在改为经 `EnsureFolder` 逐级取/建文件夹后操作；删除任务后额外调 `TryDeleteFolderIfEmpty`，守卫关闭或卸载后不留空壳文件夹（删不掉只记 Warn —— 残留一个空文件夹是观感问题，绝不能因此让"删除任务"这个已经成功的操作报失败）。
+
+**扫描时的排除判据也随之改为「文件夹归属」**：`ScheduledTaskSource.IsOwnedTask` 原先拿两条任务的完整路径做**精确匹配**（列举式白名单），现改为对 `OwnedTaskFolder.Prefix` 做**前缀匹配**。理由：程序自己创建这个文件夹、空时自己删掉，里面的任何任务都是本程序的——枚举式白名单会在"将来加了第三条任务却忘了改判据"时漏掉一条，让它混进用户的自启动项列表，那正是 B3 要防的问题复发。
+
+配套把文件夹前缀提为**单一来源** `OwnedTaskFolder.Prefix`：两条任务的完整路径（`Prefix + "Guard"` / `Prefix + "Scheduler"`）与扫描时的过滤前缀都从它派生，三者不会各改各的漏掉一处。前缀**必须带尾部分隔符** —— 少了它 `\DelayStartExtra\Foo` 会被误判成自有任务而凭空消失，与 `IsProtectedFolderPath` 踩过的坑同源（`pitfalls.md` 二）。
+
+根级旧路径（`\DelayStartScheduler` / `\DelayStartGuard`）**不在**该判据内：本项目不做兼容清理，它们由旧版卸载器负责（D121 / D122 已要求跨版本先卸载）。因此若用户跳过卸载直接装新版，旧任务会作为第三方任务被列出来 —— 这是"必须先卸载"这条规则的可见后果，而不是过滤漏了。
+
+**与 D41 的关系**：D41（2026-09-20）曾删掉 D38 遗留的任务文件夹清理代码，理由是"本程序不再创建任何任务文件夹"。本条**重新引入文件夹支持**，但只针对本程序自己的 `DelayStart` 文件夹，不涉及任何第三方目录。D41 那条"不清理第三方遗留"的判断继续有效。
+
+**代价**：旧路径上的两条任务不会被自动删除（不做兼容迁移，见 D121）。由于 D122 已要求"先卸载旧版再安装"，旧任务由**旧版卸载器**负责清理。
 
 ---
 
@@ -1171,7 +1209,7 @@
 | R12 | NativeAOT 无 built-in COM | 由 D28（`shell:AppsFolder` 零 COM）消解 |
 | R13 | `InvariantGlobalization` 使计划任务注册必崩 | 改回 `false`（Windows 用系统 `icu.dll`，省体积的论据本就不成立） |
 
-> **现状**：D1–D121 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
+> **现状**：D1–D123 中仅 **D26** 待决策（只影响测试命令，不阻塞编码）。
 
 ---
 

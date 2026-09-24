@@ -30,7 +30,7 @@
 | 注册表 HKLM 32 位 | `HKLM\Software\WOW6432Node\...\Run` | ✅ | ✅ | 标记写 `StartupApproved\Run32` |
 | 用户启动文件夹 | `%APPDATA%\...\Startup` | ✅ | ✅ | 只认 `.lnk`（`.url` 是 Internet 快捷方式、调度端无启动路由，扫出来必然启动失败）；解析真实目标与图标 |
 | 系统启动文件夹 | `%PROGRAMDATA%\...\Startup` | ✅ | ✅ | |
-| 计划任务 | 带 Logon/Boot 触发器、排除 `\Microsoft\` 文件夹（判据带尾分隔符，见 pitfalls 二） | ✅ | ✅ | 禁用粒度细分任务级/触发器级（D67） |
+| 计划任务 | 带 Logon/Boot 触发器；排除 `\Microsoft\` 文件夹（判据带尾分隔符，见 pitfalls 二）与本程序独占的 `\DelayStart\` 文件夹（D123） | ? | ? | 禁用粒度细分任务级/触发器级（D67） |
 | UWP / Store 应用 | `AppModel\SystemAppData\<PFN>\<TaskId>` | ✅ | ⚠️ 受限 | 见下 |
 | 手动添加 | exe / lnk / bat / cmd / ps1（`LaunchTargetTypes` 白名单，**无 .msi**，D47） | — | ✅ | 不进"自启动项"页 |
 
@@ -121,13 +121,13 @@
 
 静默的破坏比明确的失败危险得多（硬约束 7：失败必须可见）。各调用方按语义分别处理：**调度端**整体不调度（记 Error、退出码 0）；**守卫**跳过巡检并返回非 0（新增 `GuardRunReport.ConfigUnavailable`，与"用户关闭守卫"严格分开，否则日志会把一次故障记成用户设置）；**扫描**标记 `ScanResult.ConfigUnavailable`，界面据此**拒绝提供任何接管 / 释放入口**；**UI** 读路径把异常转成可见提示；**CLI** 打印错误并非 0 退出。
 
-唯一保留的前向保护：反序列化后 `config.Version > AppConfig.CurrentVersion` 即拒绝加载（防旧程序把新字段写丢）。缺失版本视为当前版本。
+版本号只有两种合法结果：**等于** `AppConfig.CurrentVersion`（正常），**高于**它（前向保护：以 `ConfigVersionUnsupported` 拒绝加载，防旧程序把新字段写丢）。**低于当前值或缺失该字段一律按损坏处理**（`AppConfig.Version` 的默认值是 `0`，由 `Normalize` 补齐，因此缺字段会落到 0）—— 本项目没有迁移逻辑去补它，硬解析出来的多半是字段名对不上的半截数据，写回去就是毁掉用户配置（D121）。
 
 导入导出不受影响。
 
 ### FR-13 自启动项守卫
 
-独立进程 `DelayStart.Guard.exe`，由登录触发的计划任务 `\DelayStartGuard` 拉起，跑一次巡检即退出（D74）。一次巡检 = **写回纠正**（把被应用写回启用的已接管项重新软禁用并复读确认，FR-13.1）→ **新增检测**（与基线差集，FR-13.2）→ **失效检测**（孤儿 / 目标已失效，FR-13.3）→ **更新基线**（用纠正后的结果，FR-13.4）。有变化且通知策略为「有变化时通知」时，发一条**系统通知**（右下角横幅 + 停留通知中心，标题显示 `DelayStart`）；点击经 `delaystart:` 协议拉起管理端并定位到对应来源页 /「延时启动」页（FR-13.5，D79/D80）。无变化（或策略为「从不通知」）静默退出，但**每次都写一行巡检汇总**（FR-13.6，守卫唯一的可审计痕迹；计数文案由 `GuardRunSummaryText.Build` 统一，D116）并**落一份结构化归档**（FR-13.10，D116 / D1=A 批复：`guard\inspections\<yyyyMMdd-HHmmss>.json`，内容 = `GuardRunReport` 原样序列化，含纠正明细 / 新增 / 失效条目名 —— 此前条目名只在系统通知里出现过；保留 30 份，写入失败只记 Warn 不阻塞巡检）。档位 `GuardMode`（`Disabled`/`OnceAfterLogin`/`Periodic`）+ `GuardMinutes`（10/30/60），默认 `OnceAfterLogin` + 30（FR-13.7）；通知策略 `GuardNotifyMode`（`OnChange`/`Never`），默认 `OnChange`（D80）。入口自检：非管理员 / 守卫已关闭 / 已有实例 → 写日志后静默退出（FR-13.8，D78）。管理端每次启动按当前设置同步 / 补建 / 删除守卫任务（FR-13.9）。
+独立进程 `DelayStart.Guard.exe`，由登录触发的计划任务 `\DelayStart\Guard` 拉起，跑一次巡检即退出（D74）。一次巡检 = **写回纠正**（把被应用写回启用的已接管项重新软禁用并复读确认，FR-13.1）→ **新增检测**（与基线差集，FR-13.2）→ **失效检测**（孤儿 / 目标已失效，FR-13.3）→ **更新基线**（用纠正后的结果，FR-13.4）。有变化且通知策略为「有变化时通知」时，发一条**系统通知**（右下角横幅 + 停留通知中心，标题显示 `DelayStart`）；点击经 `delaystart:` 协议拉起管理端并定位到对应来源页 /「延时启动」页（FR-13.5，D79/D80）。无变化（或策略为「从不通知」）静默退出，但**每次都写一行巡检汇总**（FR-13.6，守卫唯一的可审计痕迹；计数文案由 `GuardRunSummaryText.Build` 统一，D116）并**落一份结构化归档**（FR-13.10，D116 / D1=A 批复：`guard\inspections\<yyyyMMdd-HHmmss>.json`，内容 = `GuardRunReport` 原样序列化，含纠正明细 / 新增 / 失效条目名 —— 此前条目名只在系统通知里出现过；保留 30 份，写入失败只记 Warn 不阻塞巡检）。档位 `GuardMode`（`Disabled`/`OnceAfterLogin`/`Periodic`）+ `GuardMinutes`（10/30/60），默认 `OnceAfterLogin` + 30（FR-13.7）；通知策略 `GuardNotifyMode`（`OnChange`/`Never`），默认 `OnChange`（D80）。入口自检：非管理员 / 守卫已关闭 / 已有实例 → 写日志后静默退出（FR-13.8，D78）。管理端每次启动按当前设置同步 / 补建 / 删除守卫任务（FR-13.9）。
 
 🔴 **首扫不完整时不落基线**（2026-09-25）。更新基线时：本次整体失败的来源，其条目沿用**旧基线**里的记录（否则它们会从基线消失，等来源恢复时整批老条目被报成"新增"）；而**首次巡检**（没有旧基线可沿用）且有来源失败时，**本次不写基线**——那份残缺结果一旦成为正式基线，失败来源里的条目就永久消失：既不在基线里，也永远等不到被扫到，守卫从此对它们完全失明。代价是"下一轮等同首次运行、少一轮新增通知"（`GuardNewItemPolicy` 在无基线时本来就不报新增），换来的是不会永久失明。
 
@@ -328,13 +328,13 @@ Tests ──> Core (+ Management)
 | 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**只读**；四类 exe 同目录（D75） |
 | 配置 | `%APPDATA%\DelayStart\config.json` | Roaming，原子写 |
 | 日志 | `%LOCALAPPDATA%\DelayStart\logs\{scheduler,manager,launchbroker,guard}.log` | 2MB 轮转 |
-| 调度实时状态 | `%LOCALAPPDATA%\DelayStart\scheduler\current-run.json` | 每次状态变化原子重写（D116 起从 `state\` 迁入，`RuntimeDataMigrator`） |
+| 调度实时状态 | `%LOCALAPPDATA%\DelayStart\scheduler\current-run.json` | 每次状态变化原子重写（D116 起的新路径） |
 | 调度运行归档 | `%LOCALAPPDATA%\DelayStart\scheduler\archive\<runId>.json` | 保留 30 次（D116 起从 `runs\` 迁入） |
 | 守卫基线 | `%LOCALAPPDATA%\DelayStart\guard\baseline.json` | 上一轮扫描快照，原子写（D74） |
 | 守卫巡检归档 | `%LOCALAPPDATA%\DelayStart\guard\inspections\<yyyyMMdd-HHmmss>.json` | 每次巡检一份（D1=A 批复，D116），保留 30 次 |
 | UI 定位请求 | `%LOCALAPPDATA%\DelayStart\ui-request.json` | 守卫 → 管理端的跨进程载荷（读后即删，D74） |
 
-🔴 **运行时数据按进程归堆（D116）**：调度端的实时状态与归档收在 `scheduler\`、守卫的数据收在 `guard\`，目录名即进程名。旧布局（`state\`、`runs\`）由 `RuntimeDataMigrator` 在**管理端启动**（CLI / GUI 共用组合根，任何读写之前）一次性迁入；迁移幂等、失败只记 Warn 不阻塞启动、几个版本后整体移除。
+🔴 **运行时数据按进程归堆（D116）**：调度端的实时状态与归档收在 `scheduler\`、守卫的数据收在 `guard\`，目录名即进程名。本项目不做旧布局迁移（D121）：`state\` 与 `runs\` 是 v0.4.0 及以前的路径，跨此版本需先卸载旧版（D122），旧目录不再被读取，残留目录可手工删除。
 
 调试覆盖：`DELAYSTART_LOCAL_DIR` / `DELAYSTART_CONFIG_DIR`（仅开发测试用）。计划任务身份必须是交互用户——SYSTEM 下 `%APPDATA%` 解析到 systemprofile 且不报错。
 
@@ -364,7 +364,7 @@ Tests ──> Core (+ Management)
 6a. **uiAccess 目标（D70）**：预检目标 RT_MANIFEST（`LoadLibraryEx` AS_DATAFILE 只读资源）判 `uiAccess="true"`（Quicker 类）——这类目标 CPWT 直启必 740（`TokenUIAccess` 需 SeTcbPrivilege，仅 SYSTEM 有）。改走**降权中转器链**：调度端 A（High）写作业 JSON → CPWT 降权拉起 `DelayStart.LaunchBroker.exe` B（Medium，AOT 单文件，与调度端同目录部署）→ B 对目标 C `ShellExecuteEx`（AppInfo 校验签名+安全位置+清单声明后赋 UIAccess、按调用方身份抬 IL：受限管理员 → High，与手动双击一致）→ B 把 **C 的**启动状态（PID/秒退/Win32 错误）经结果 JSON 回写（写 `.tmp` + 原子改名），调度端轮询读取；B 自身退出码只表达回写是否成功。作业/结果契约 = `BrokerLaunchJob`/`BrokerLaunchResult`（Core，`BrokerJsonContext` 源生成）。
 7. **成功判定**：创建成功 + 1500ms 后复查 `HasExited`；退出码 0 = 成功（拉起已有实例的必要宽容）；UWP 无 PID 收到 `null` 快照直接判成功（D28）。
 8. **原子写**：`<name>.tmp` → `File.Replace`（目标不存在则 `File.Move(overwrite:true)`）。
-9. **单实例**：`Local\DelayStartScheduler` / `Local\DelayStartManager` Mutex，重复触发立即退出零副作用。
+9. **单实例**：`Local\DelayStart\Scheduler` / `Local\DelayStartManager` Mutex，重复触发立即退出零副作用。
 
 ### 7.4 数据契约与来源接口
 
@@ -463,7 +463,7 @@ Core 纯逻辑抛标准异常；系统操作统一包 `StartupOperationException
 
 **成功判定与失败策略（D17=D）**：软件不自动处理——保持接管，把失败事实通过系统通知 + 调度日志告诉用户，**不统计连续失败次数、不做提醒升级**（2026-09-25 废除，见 FR-6）。状态机 `waiting → launching → done/failed(→重试→failed 最终)`，另有 `waiting → skipped`（用户主动跳过 / 防双启动命中 / 今天不在启动周期内，均不计失败）。
 
-**跨进程状态**：调度端每次状态变化原子重写 `scheduler/current-run.json`（含 pid；D116 起从 `state/` 迁来，旧路径由 `RuntimeDataMigrator` 迁移）；管理端用 `Process.GetProcessById` 探测判"进行中"（D19）。点击通知 → `DelayStart.exe --goto-log --run=<runId>`。
+**跨进程状态**：调度端每次状态变化原子重写 `scheduler/current-run.json`（含 pid；D116 起用 `scheduler/` 路径）；管理端用 `Process.GetProcessById` 探测判"进行中"（D19）。点击通知 → `DelayStart.exe --goto-log --run=<runId>`。
 
 **设置项**：托盘开关 / 通知三档 / 重试次数 / 托盘保留时长；短任务（<15s）不显示图标为固定行为。
 
@@ -532,7 +532,7 @@ scripts\publish.ps1 [-Rid] # AOT 发布调度端并同步进管理端 bin
 
 ### 11.1 定位与入口
 
-`DelayStart.Guard.exe` 是第四个进程：**不常驻、无窗口、跑一次巡检即退出**。它有且只有两个入口 —— 计划任务 `\DelayStartGuard`（唯一正常路径）与用户 / 调试手动运行；后者会被入口自检挡掉（D78）。
+`DelayStart.Guard.exe` 是第四个进程：**不常驻、无窗口、跑一次巡检即退出**。它有且只有两个入口 —— 计划任务 `\DelayStart\Guard`（唯一正常路径）与用户 / 调试手动运行；后者会被入口自检挡掉（D78）。
 
 | 入口自检（按序） | 不满足时 |
 |---|---|
@@ -628,7 +628,7 @@ Shell：用户点击 → 读 HKCU\Software\Classes\delaystart → 启动 DelaySt
 
 **任务身份与 `Settings` 六项**与调度任务**逐项一致**：`Interactive` + `RunLevel=Highest`（提权不弹 UAC），`ExecutionTimeLimit=0`、`DisallowStartIfOnBatteries=false`、`StopIfGoingOnBatteries=false`、`MultipleInstances=IgnoreNew`、`RunOnlyIfIdle=false`、`RunOnlyIfNetworkAvailable=false`。默认 `DisallowStartIfOnBatteries=true` 会让笔记本拔电时守卫**静默不跑**；缺 `IgnoreNew` 则两轮巡检可能叠在一起（全量扫描 + 改写注册表/任务库，叠着跑没有任何好处）。改一处必须改两处。
 
-**管理端每次启动同步**（`GuardTaskBootstrap`，语义对齐 `SchedulerTaskBootstrap`）：启用 ⇒ 缺失即补建；已存在时先逐字段比对现有定义，**档位/定义确实变了才按当前档位重写、完全一致则跳过**（`CreateOrUpdate` 会重置登录触发器，故 F1 / D112 改为先比对再决定是否写）；关闭 ⇒ **删除任务**；同步失败**不抛异常**，只记日志并把原因交给总览页守卫区呈现 + 重试。调度任务 `\DelayStartScheduler` 走同样的"定义一致就跳过重写"机制（D113，它不随设置变化，故一般只会在缺失或安装目录迁移时重写）。
+**管理端每次启动同步**（`GuardTaskBootstrap`，语义对齐 `SchedulerTaskBootstrap`）：启用 ⇒ 缺失即补建；已存在时先逐字段比对现有定义，**档位/定义确实变了才按当前档位重写、完全一致则跳过**（`CreateOrUpdate` 会重置登录触发器，故 F1 / D112 改为先比对再决定是否写）；关闭 ⇒ **删除任务**；同步失败**不抛异常**，只记日志并把原因交给总览页守卫区呈现 + 重试。调度任务 `\DelayStart\Scheduler` 走同样的"定义一致就跳过重写"机制（D113，它不随设置变化，故一般只会在缺失或安装目录迁移时重写）。
 
 ### 11.8 发布形态
 

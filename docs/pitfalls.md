@@ -330,7 +330,7 @@ error CA1822: 成员"Summary"不访问实例数据，可标记为 static
 
 ## 二十三、调度计划任务「每次重写」同样会重置登录触发器（F1 调度端镜像）
 
-**症状**：`\DelayStartScheduler` 每次启动被 `SchedulerTaskBootstrap` 无条件重写（`CreateOrUpdate`），任务计划程序里「上次运行时间」等统计被覆盖成重写时刻、「下次运行时间」随之错位；虽不像守卫那样静默吞掉巡检，但统计失真且无谓触碰系统状态。
+**症状**：`\DelayStart\Scheduler` 每次启动被 `SchedulerTaskBootstrap` 无条件重写（`CreateOrUpdate`），任务计划程序里「上次运行时间」等统计被覆盖成重写时刻、「下次运行时间」随之错位；虽不像守卫那样静默吞掉巡检，但统计失真且无谓触碰系统状态。
 
 **根因**：调度任务触发器也是 `LogonTrigger + InitialDelay`（登录后 N 秒、一次性）。`CreateOrUpdate` 每次都重建触发器，登录事件已过去，新触发器本会话内等不到下一次登录。调度端是固定规则、不随设置变化，相同定义下每次启动都不该重写它。
 

@@ -453,6 +453,195 @@ public sealed class TakeoverServiceTests
         Assert.Equal(1, outcome.ExitCode);
     }
 
+    // ── G2：源已丢失 vs 看不真切（FR-12.4）─────────────────────────────────
+
+    [Fact]
+    public void Release_SourceGone_SkipsSystemRestoreButRemovesConfig_AndSucceeds()
+    {
+        // 🔴 这条修的是卸载路径上一个真实缺陷：计划任务 / UWP 来源在源已消失时
+        // Enable 抛「已不存在」⇒ Release 失败 ⇒ 配置删不掉 ⇒ RestoreAll 非 0 ⇒
+        // 卸载器弹"仍要强行卸载吗"。而那次弹窗的理由是假的：那个启动项早被软件自己卸载了。
+        var harness = new Harness(missingSourceKeys: ["Weixin"]);
+        harness.Config.Seed(new AppConfig { Items = [Item()] });
+
+        var outcome = harness.Service.Release(Item());
+
+        Assert.True(outcome.Succeeded);
+        Assert.True(outcome.SourceWasMissing);
+        Assert.Empty(harness.Config.Snapshot().Items);
+
+        // 系统侧一个字节都不动：没有可恢复的对象。
+        Assert.Equal(0, harness.Source.EnableCount);
+        Assert.Equal(1, harness.Source.ExistsCount);
+    }
+
+    [Fact]
+    public void Release_SourceGone_ItemDisabledBeforeTakeover_DoesNotResurrectIt()
+    {
+        // 🔴 G2.3：WasEnabled == false 的分叉也必须跳过。
+        // 源都没了还去"重新写回禁用标记"是纯副作用 —— 而且写的是系统里根本不存在的键。
+        var harness = new Harness(missingSourceKeys: ["Weixin"]);
+        var item = Item(wasEnabled: false);
+        harness.Config.Seed(new AppConfig { Items = [item] });
+
+        var outcome = harness.Service.Release(item);
+
+        Assert.True(outcome.Succeeded);
+        Assert.True(outcome.SourceWasMissing);
+        Assert.Equal(0, harness.Source.DisableCount);
+    }
+
+    [Fact]
+    public void Release_CannotTellWhetherSourceExists_KeepsConfigAndFails()
+    {
+        // 🔴 G2.2：这才是那条绝不能错的分支。Exists 抛异常 = 看不真切（ACL 拒绝 /
+        // 任务计划服务没起来），不是"源没了"。当成后者就会删掉配置，而系统的软禁用标记
+        // 留在原地 —— 用户的程序再也回不到原状，而且我们已经忘了自己动过它。
+        var harness = new Harness(existsException: new UnauthorizedAccessException("拒绝访问"));
+        harness.Config.Seed(new AppConfig { Items = [Item()] });
+
+        var outcome = harness.Service.Release(Item());
+
+        Assert.False(outcome.Succeeded);
+        Assert.False(outcome.SourceWasMissing);
+        Assert.Single(harness.Config.Snapshot().Items);
+
+        // 连 Enable 都不能碰：既然还不确定源在不在，就不该对系统做任何改动。
+        Assert.Equal(0, harness.Source.EnableCount);
+    }
+
+    [Fact]
+    public void Release_CannotTell_BecauseOfComException_AlsoKeepsConfig()
+    {
+        // 刻意用 TaskScheduler 真实会抛的 TargetInvocationException（内层是 COMException）：
+        // 只测 UnauthorizedAccessException 的话，"漏抓异常类型 → 把看不真切当成源没了"就测不出来。
+        // 只测一种异常类型的话，"漏抓异常类型 → 把看不真切当成源没了"就测不出来。
+        var harness = new Harness(existsException: new System.Reflection.TargetInvocationException(new TaskServiceUnavailableException()));
+        harness.Config.Seed(new AppConfig { Items = [Item()] });
+
+        var outcome = harness.Service.Release(Item());
+
+        Assert.False(outcome.Succeeded);
+        Assert.Single(harness.Config.Snapshot().Items);
+    }
+
+    [Fact]
+    public void Release_ManualItem_NeverProbesExists()
+    {
+        // 手动条目在系统里没有锚点，探测存在性没有意义（也必然是"没有"）。
+        var harness = new Harness(missingSourceKeys: ["whatever"]);
+        var manual = new DelayedItem
+        {
+            Id = "manual:none:abc",
+            Name = "手动添加的程序",
+            Source = StartupSource.Manual,
+            Scope = StartupScope.None,
+        };
+        harness.Config.Seed(new AppConfig { Items = [manual] });
+
+        var outcome = harness.Service.Release(manual);
+
+        Assert.True(outcome.Succeeded);
+        Assert.False(outcome.SourceWasMissing);
+        Assert.Equal(0, harness.Source.ExistsCount);
+    }
+
+    [Fact]
+    public void Release_SourcePresent_ProbesExistsAndRestoresNormally()
+    {
+        // 对照组：Exists 答 true 时行为与改动前完全一致（恢复 → 删配置 → 成功）。
+        var harness = new Harness();
+        harness.Config.Seed(new AppConfig { Items = [Item()] });
+
+        var outcome = harness.Service.Release(Item());
+
+        Assert.True(outcome.Succeeded);
+        Assert.False(outcome.SourceWasMissing);
+        Assert.Equal(1, harness.Source.ExistsCount);
+        Assert.Equal(1, harness.Source.EnableCount);
+        Assert.Empty(harness.Config.Snapshot().Items);
+    }
+
+    [Fact]
+    public void RestoreAll_SourceGone_CountsAsSkipped_AndExitCodeStaysZero()
+    {
+        // 🔴 G2.4：跳过恢复的条目计入 SkippedCount 而**不是** FailedCount，
+        // 所以退出码仍是 0 —— 卸载不被无谓地拦下。
+        var harness = new Harness(missingSourceKeys: ["Weixin"]);
+        harness.Config.Seed(new AppConfig { Items = [Item()] });
+
+        var outcome = harness.Service.RestoreAll();
+
+        Assert.Equal(1, outcome.SkippedCount);
+        Assert.Equal(0, outcome.RestoredCount);
+        Assert.Equal(0, outcome.FailedCount);
+        Assert.Empty(outcome.Failures);
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.True(outcome.Succeeded);
+        Assert.True(outcome.TaskDeleted);
+    }
+
+    [Fact]
+    public void RestoreAll_MixedGoneAndPresent_CountsEachSeparately()
+    {
+        // 一个源没了、一个还在：两类必须分开计数，退出码只看真正失败的那些。
+        // 刻意让两条的 SourceKey 各不相同 —— Exists 的判据只有 SourceKey，
+        // 两条共用同一个就分不出谁该被跳过了。
+        var gone = Item("registry:hkcu:gone");
+        gone.Name = "已卸载的程序";
+        gone.SourceKey = "gone";
+
+        var present = Item("registry:hkcu:present");
+        present.Name = "还在的程序";
+        present.SourceKey = "present";
+
+        var harness = new Harness(missingSourceKeys: ["gone"]);
+        harness.Config.Seed(new AppConfig { Items = [gone, present] });
+
+        var outcome = harness.Service.RestoreAll();
+
+        Assert.Equal(1, outcome.SkippedCount);
+        Assert.Equal(1, outcome.RestoredCount);
+        Assert.Equal(0, outcome.FailedCount);
+        Assert.Equal(0, outcome.ExitCode);
+    }
+
+    [Fact]
+    public void RestoreAll_RealFailureStillReturnsNonZero_EvenAlongsideSkipped()
+    {
+        // 🔴 反向护栏：不能因为"跳过"这一档的存在就把真失败也放过 ——
+        // 那正是本项目最严重的潜在缺陷（NFR-6.4：卸载后程序永久失去自启动且毫不知情）。
+        var gone = Item("registry:hkcu:gone");
+        var failing = Item("registry:hkcu:failing");
+        failing.Name = "恢复会失败";
+        failing.SourceKey = "failing";
+
+        var harness = new Harness(
+            existsException: new UnauthorizedAccessException("拒绝访问"),
+            missingSourceKeys: ["gone"]);
+        harness.Config.Seed(new AppConfig { Items = [gone, failing] });
+
+        var outcome = harness.Service.RestoreAll();
+
+        // existsException 是全局的，两条都"看不真切"，所以本用例退化为"全部失败"。
+        Assert.Equal(2, outcome.FailedCount);
+        Assert.Equal(0, outcome.SkippedCount);
+        Assert.Equal(1, outcome.ExitCode);
+    }
+
+    /// <summary>
+    /// 模拟"任务计划服务不可用"。真实场景下 TaskScheduler 会抛
+    /// <c>TargetInvocationException</c> 包着 <c>COMException</c>，这里用自定义类型避开
+    /// CA2201（COMException 是运行时保留类型）而保留同一条"非 UnauthorizedAccess 路径"的覆盖。
+    /// </summary>
+    private sealed class TaskServiceUnavailableException : Exception
+    {
+        public TaskServiceUnavailableException()
+            : base("任务计划服务不可用")
+        {
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     private static StartupEntry Entry(
@@ -497,12 +686,18 @@ public sealed class TakeoverServiceTests
             Exception? enableException = null,
             Exception? registerException = null,
             Exception? deleteException = null,
-            Exception? saveException = null)
+            Exception? saveException = null,
+            Exception? existsException = null,
+            IEnumerable<string>? missingSourceKeys = null)
         {
             Source = new FakeStartupSource
             {
                 DisableException = disableException,
                 EnableException = enableException,
+                ExistsException = existsException,
+                MissingSourceKeys = missingSourceKeys is null
+                    ? new HashSet<string>(StringComparer.Ordinal)
+                    : new HashSet<string>(missingSourceKeys, StringComparer.Ordinal),
             };
 
             Registrar = new FakeSchedulerTaskRegistrar

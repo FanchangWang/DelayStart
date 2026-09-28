@@ -144,6 +144,29 @@ public sealed class StartupFolderSource : IStartupSource
         StartupApprovedStore.Enable(Kind, Scope, entry.SourceKey);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🔴 <see cref="FolderPath"/> 为空说明这个启动文件夹本身不存在（用户 / 系统都没建），
+    /// 答 <see langword="false"/> 是确定的；而"文件夹在、某个文件读不了"这种情形
+    /// <see cref="File.Exists"/> 一律答 <see langword="false"/> —— 这里没有权限维度的疑问，
+    /// 文件存不存在就是事实，不需要再抛。
+    /// </remarks>
+    public bool Exists(StartupEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        if (string.IsNullOrWhiteSpace(FolderPath))
+        {
+            return false;
+        }
+
+        // 三级候选名而不是只查原名（坑 1 的同一份列表）：
+        // 错答 false 会让 G2 删掉配置却把系统的软禁用留在原地，可逆性就断在这里了。
+        // 保守一点只多一次无副作用的空操作恢复。
+        return StartupApprovedStore.GetCandidateNames(entry.SourceKey)
+            .Any(candidate => File.Exists(Path.Combine(FolderPath, candidate)));
+    }
+
     private StartupEntry BuildEntry(string filePath, IReadOnlySet<string> takenOverKeys)
     {
         var fileName = Path.GetFileName(filePath);

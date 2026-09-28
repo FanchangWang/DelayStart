@@ -98,6 +98,30 @@ public sealed class UwpStartupSource : IStartupSource
     /// <inheritdoc />
     public void Enable(StartupEntry entry) => WriteState(entry, StateEnabled);
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🔴 与 <see cref="WriteState"/> 用的是**同一个 <c>subKeyPath</c> 拼法**（依赖
+    /// <c>SourceDetail</c> 里的 PackageFamilyName 与 <c>SourceKey</c> 里的 TaskId，机制 4），
+    /// 两处各写一遍的话，改了一处就会让"写得进去"与"查得到"分叉 —— 而症状是
+    /// <c>Exists</c> 恒答 false，于是 G2 把配置全删了却什么都没恢复。
+    /// </remarks>
+    public bool Exists(StartupEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+
+        // 只读打开：探测存在性不需要写权限（用 writable:true 会把"能读不能写"也变成异常）。
+        // 返回 null = 子键不存在 = UWP 自启动项已被系统删除（应用卸载 / 系统清理），答 false。
+        // 抛 UnauthorizedAccessException = 看不真切，原样向上传播。
+        using var key = baseKey.OpenSubKey(BuildStateSubKeyPath(entry), writable: false);
+        return key is not null;
+    }
+
+    /// <summary>拼出该条目在 <c>SystemAppData</c> 下的状态子键路径（<c>WriteState</c> 与 <c>Exists</c> 共用）。</summary>
+    private static string BuildStateSubKeyPath(StartupEntry entry)
+        => $@"{SystemAppDataSubKey}\{entry.SourceDetail}\{entry.SourceKey}";
+
     private void CollectPackageEntries(
         RegistryKey root,
         string packageFamilyName,
@@ -323,7 +347,7 @@ public sealed class UwpStartupSource : IStartupSource
             using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
 
             // PackageFamilyName 存在 SourceDetail 里（机制 4），TaskId 在 SourceKey 里。
-            var subKeyPath = $@"{SystemAppDataSubKey}\{entry.SourceDetail}\{entry.SourceKey}";
+            var subKeyPath = BuildStateSubKeyPath(entry);
             using var key = baseKey.OpenSubKey(subKeyPath, writable: true)
                 ?? throw new StartupOperationException(
                     StartupFailureReason.ScheduledTaskFailed,

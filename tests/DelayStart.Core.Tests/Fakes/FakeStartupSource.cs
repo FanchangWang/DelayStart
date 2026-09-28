@@ -51,6 +51,26 @@ internal sealed class FakeStartupSource : IStartupSource
     public Exception? EnableException { get; init; }
 
     /// <summary>
+    /// 非空时 <see cref="Exists"/> 抛出它，用于模拟"看不真切"（ACL 拒绝 / 服务没起来）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这个开关存在的理由是 <see cref="Exists"/> 约定里最要紧的那条：
+    /// <c>false</c>（源真的没了）与"抛异常"（看不真切）必须能被测试**分别**触发。
+    /// 没有它，"抛异常 ⇒ 保留配置 + 报失败"这条分支根本没法测 ——
+    /// 而那正是可逆性不断掉的那条分支。
+    /// </remarks>
+    public Exception? ExistsException { get; init; }
+
+    /// <summary>
+    /// <see cref="Exists"/> 答 <see langword="false"/> 的主键集合（"这些源已经没了"）。
+    /// </summary>
+    /// <remarks>
+    /// 默认空 = 一律答 <see langword="true"/>。取保守方向是为了不影响既有 <c>TakeoverService</c> 用例
+    /// —— 那些用例并不关心 <c>Exists</c>，而默认答 <c>true</c> 时 G2 会照旧走原来的恢复流程。
+    /// </remarks>
+    public ISet<string> MissingSourceKeys { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// <see langword="true"/> 时 <see cref="Disable"/> 会真正改变后续 <see cref="Scan"/> 的结果
     /// （该条目被报成禁用态）。
     /// </summary>
@@ -74,6 +94,9 @@ internal sealed class FakeStartupSource : IStartupSource
 
     /// <summary><see cref="Enable"/> 被调用的次数。回滚断言全靠它。</summary>
     public int EnableCount { get; private set; }
+
+    /// <summary><see cref="Exists"/> 被调用的次数。</summary>
+    public int ExistsCount { get; private set; }
 
     /// <summary>最后一次 <see cref="Scan"/> 收到的已接管主键集合。</summary>
     public IReadOnlySet<string>? LastTakenOverKeys { get; private set; }
@@ -135,6 +158,21 @@ internal sealed class FakeStartupSource : IStartupSource
         {
             throw EnableException;
         }
+    }
+
+    /// <inheritdoc />
+    public bool Exists(StartupEntry entry)
+    {
+        ExistsCount++;
+
+        // 顺序要紧：异常优先于返回值。"看不真切"时我们并不知道它还在不在，
+        // 先答一个 false 就等于把两种结论混成一种 —— 那正是这条约定要防的事。
+        if (ExistsException is not null)
+        {
+            throw ExistsException;
+        }
+
+        return !MissingSourceKeys.Contains(entry.SourceKey);
     }
 
     private static StartupEntry Rebuild(StartupEntry entry, bool takenOver, bool isEnabled) => new()

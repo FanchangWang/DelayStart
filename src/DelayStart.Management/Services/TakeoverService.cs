@@ -247,7 +247,39 @@ public sealed class TakeoverService
                 $"无法识别『{stored.Name}』的来源（{stored.Source} / {stored.Scope}），已保留配置，未执行系统恢复。");
         }
 
+        // 🔴 Exists 探测放在系统恢复**之前**，且与"来源识别失败"严格区分：
+        //   false = 系统里真的没有那个启动项了（软件卸载 / 用户清理 / 系统重置），
+        //           此时 RestoreToOriginalState 只会抛"已不存在"，把一次本该成功的释放变成失败；
+        //   抛异常 = 看不真切（ACL 拒绝 / 任务服务没起来），那必须保留配置并报失败 ——
+        //           删掉配置就等于永久丢失"该怎么恢复"的答案（4.1），而系统的软禁用标记留在原地。
+        var sourceWasMissing = false;
         if (source is not null)
+        {
+            try
+            {
+                if (!source.Exists(ToEntry(stored)))
+                {
+                    sourceWasMissing = true;
+                    _log.Info(
+                        $"释放『{item.Name}』：系统启动项已不存在（{stored.Source} / {stored.Scope} / "
+                        + $"{stored.SourceKey}），无可恢复对象，跳过系统恢复并删除配置");
+                }
+            }
+            catch (Exception ex)
+            {
+                // 刻意抓全部异常而不是只抓 StartupOperationException：
+                // 各来源"打不开"时的异常类型不一（UnauthorizedAccessException /
+                // SecurityException / COMException / IOException），逐个列举必然漏，
+                // 而漏掉的后果就是把"看不真切"当成"源没了"—— 可逆性就断在这里了。
+                _log.Error(ex, $"释放『{item.Name}』失败：无法确认系统启动项是否存在，已保留延时配置");
+                return TakeoverOutcome.Failure(
+                    item.Id,
+                    StartupFailureReason.Unknown,
+                    $"无法确认系统启动项是否存在，已保留延时配置（未执行任何系统改动），可稍后重试：{ex.Message}");
+            }
+        }
+
+        if (source is not null && !sourceWasMissing)
         {
             try
             {
@@ -297,7 +329,11 @@ public sealed class TakeoverService
         }
 
         _log.Info($"已释放『{item.Name}』（{item.Id}）");
-        return TakeoverOutcome.Success(item.Id);
+        return sourceWasMissing
+            ? TakeoverOutcome.Skipped(
+                item.Id,
+                $"『{item.Name}』的系统启动项已不存在，无可恢复对象，已直接移出延时启动。")
+            : TakeoverOutcome.Success(item.Id);
     }
 
     /// <summary>
@@ -365,17 +401,25 @@ public sealed class TakeoverService
 
         var failures = new List<string>();
         var restored = 0;
+        var skipped = 0;
 
         foreach (var item in config.Items.ToList())
         {
             var outcome = Release(item);
-            if (outcome.Succeeded)
+            if (!outcome.Succeeded)
             {
-                restored++;
+                failures.Add($"{item.Name}：{outcome.Message}");
+            }
+            else if (outcome.SourceWasMissing)
+            {
+                // 计入 skipped 而非 restored：那一条**没有**发生系统恢复，
+                // 说"还原成功"会虚报。也不进 failures（见 RestoreOutcome.SkippedCount）。
+                skipped++;
+                _log.Info($"还原『{item.Name}』：系统启动项已不存在，跳过系统恢复（{outcome.Message}）");
             }
             else
             {
-                failures.Add($"{item.Name}：{outcome.Message}");
+                restored++;
             }
         }
 
@@ -391,10 +435,11 @@ public sealed class TakeoverService
             _log.Error(ex, "还原全部时删除计划任务失败");
         }
 
-        _log.Info($"还原完成：成功 {restored} 项，失败 {failures.Count} 项");
+        _log.Info($"还原完成：成功 {restored} 项，源已丢失跳过 {skipped} 项，失败 {failures.Count} 项");
         return new RestoreOutcome
         {
             RestoredCount = restored,
+            SkippedCount = skipped,
             FailedCount = failures.Count,
             Failures = failures,
             TaskDeleted = taskDeleted,

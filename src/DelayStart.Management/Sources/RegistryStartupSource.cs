@@ -136,6 +136,40 @@ public sealed class RegistryStartupSource : IStartupSource
         StartupApprovedStore.Enable(Kind, Scope, entry.SourceKey);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 整个 Run 键打不开（返回 <see langword="null"/>）时答 <see langword="false"/> 是安全的：
+    /// 键没了，它下面的值必然也没了。而 ACL 拒绝会**抛** <see cref="UnauthorizedAccessException"/>，
+    /// 按约定向上传播 —— 那不是"源没了"，是"看不真切"，两者绝不能混。
+    /// </remarks>
+    public bool Exists(StartupEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        using var baseKey = RegistryKey.OpenBaseKey(ResolveHive(), RegistryView.Registry64);
+
+        // 🔴 用只读打开：探测存在性不需要写权限。用 writable:true 会把"能读不能写"
+        // 也变成异常，那是无谓的 —— 而按约定异常意味着"看不真切"，
+        // 会让本来能确定的问题白白升级成失败。
+        using var runKey = baseKey.OpenSubKey(RegistrySubKeyPath, writable: false);
+        if (runKey is null)
+        {
+            return false;
+        }
+
+        // 三级候选名而不是只查 SourceKey 原名（坑 1 的同一份列表）：
+        // 错答 false 的代价是永久丢失还原依据，保守一点只多一次无副作用的空操作恢复。
+        foreach (var candidate in StartupApprovedStore.GetCandidateNames(entry.SourceKey))
+        {
+            if (runKey.GetValueNames().Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private StartupEntry BuildEntry(RegistryKey runKey, string valueName, IReadOnlySet<string> takenOverKeys)
     {
         // -- 原始命令行：GetValue 对 REG_EXPAND_SZ 会自动展开环境变量，正是我们要的。

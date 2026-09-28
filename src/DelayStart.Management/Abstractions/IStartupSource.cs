@@ -55,4 +55,41 @@ public interface IStartupSource
     /// <param name="entry">要恢复的条目。</param>
     /// <exception cref="StartupOperationException">删除被拒绝时抛出。</exception>
     void Enable(StartupEntry entry);
+
+    /// <summary>
+    /// 该源条目当前是否**仍然存在**于系统里（FR-12.4 / G2）。
+    /// </summary>
+    /// <param name="entry">要探测的条目，其 <see cref="StartupEntry.SourceKey"/> 是唯一判据。</param>
+    /// <returns>确认还在时为 <see langword="true"/>；确认已被删除时为 <see langword="false"/>。</returns>
+    /// <exception cref="StartupOperationException">
+    /// 🔴 **看不真切时必须抛异常，绝不能返回 <see langword="false"/>。** 典型情形是
+    /// ACL 拒绝、任务计划服务没起来、UWP 包在另一个用户下。
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b><see langword="false"/> 与"抛异常"是两种完全不同的结论，调用方必须严格区分：</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><b><c>false</c></b> = 源真的没了 ⇒ 系统里**没有可恢复的对象**，
+    /// 继续调 <see cref="Enable"/> 只会抛"已不存在"，而配置必须照常删掉（否则它永远删不掉）。
+    /// 这正是 G2 要修的缺陷：计划任务 / UWP 来源在源已消失时 <c>Enable</c> 抛错 ⇒
+    /// <c>Release</c> 失败 ⇒ 配置保留 ⇒ <c>RestoreAll</c> 非 0 ⇒ 卸载器弹"仍要强行卸载吗"。</description></item>
+    /// <item><description><b>抛异常</b> = 看不真切 ⇒ 必须按"保留配置 + 报失败"处理。
+    /// 把它当成"源没了"就会删掉配置、而系统的软禁用标记留在原地 ——
+    /// 用户的那个程序从此再也回不到原状，而且我们**已经忘了自己动过它**。
+    /// 这是比"删不掉"坏得多的方向：可逆性断在这里。</description></item>
+    /// </list>
+    /// <para>
+    /// 🔴 由此得出实现上的**偏保守**方向：宁可答 <see langword="true"/> 也不要错答
+    /// <see langword="false"/>。答 <c>true</c> 的最坏后果是一次无副作用的空操作恢复
+    /// （<c>Enable</c> 本来就只是删标记，标记不在就是空操作）；
+    /// 错答 <c>false</c> 的后果是永久丢失还原依据。
+    /// </para>
+    /// <para>
+    /// 各来源的判据：注册表 / 启动文件夹查 <see cref="StartupEntry.SourceKey"/> 的三级候选名
+    /// （<c>StartupApprovedStore.GetCandidateNames</c>，坑 1 的同一份）；
+    /// 计划任务取该路径的任务对象；UWP 查 <c>State</c> 子键。
+    /// </para>
+    /// </remarks>
+    bool Exists(StartupEntry entry);
 }

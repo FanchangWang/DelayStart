@@ -112,6 +112,34 @@ public sealed class ScheduledTaskSource : IStartupSource
         SetEnabled(entry, enabled: true);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🔴 任务计划服务没起来时 <c>TaskService</c> 连枚举都会失败（COMException 之类），
+    /// 那属于"看不真切"，**让它原样抛出**而不是被 catch 成 <see langword="false"/> ——
+    /// 一次服务抖动不该让 G2 把整份配置当成"源都没了"删掉。
+    /// </remarks>
+    public bool Exists(StartupEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        using var service = new TaskService();
+        return TryGetTask(service, entry.SourceKey) is not null;
+    }
+
+    /// <summary>按路径取任务；找不到返回 <see langword="null"/>，**不**吞异常。</summary>
+    private static TaskSchedulerTask? TryGetTask(TaskService service, string taskPath)
+    {
+        foreach (var task in service.AllTasks)
+        {
+            if (string.Equals(task.Path, taskPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return task;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// 把「禁用 / 启用」落到正确的层级上（D67）。
     /// </summary>

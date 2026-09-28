@@ -34,11 +34,35 @@ public sealed class TakeoverOutcome
     /// </remarks>
     public bool RolledBack { get; init; } = true;
 
+    /// <summary>
+    /// 本次释放是否因为"系统里的源已经不存在"而**跳过了系统恢复**（FR-12.4）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 这是成功（<see cref="Succeeded"/> 为 <see langword="true"/>）的一个**子分类**，
+    /// 不是第三种结局 —— 条目确实被释放了、配置确实被删掉了，只是没什么可恢复的对象。
+    /// </para>
+    /// <para>
+    /// 之所以要单独标出来：<c>TakeoverService.RestoreAll</c> 需要据此把它计入
+    /// <see cref="RestoreOutcome.SkippedCount"/> 而<b>不是</b> <c>FailedCount</c>。
+    /// 混进失败会让卸载器弹"仍要强行卸载吗"，而那次弹窗的理由是假的 ——
+    /// 系统里那个启动项早就被软件自己卸载掉了，本来就没什么可还原的。
+    /// </para>
+    /// </remarks>
+    public bool SourceWasMissing { get; init; }
+
     /// <summary>构造成功结果。</summary>
     /// <param name="itemId">条目主键。</param>
     /// <returns>成功结果。</returns>
     public static TakeoverOutcome Success(string itemId)
         => new() { Succeeded = true, ItemId = itemId };
+
+    /// <summary>构造成功结果，但注明"源已丢失、系统恢复被跳过"。</summary>
+    /// <param name="itemId">条目主键。</param>
+    /// <param name="message">说明性文案（记日志与卸载汇总用；不是错误）。</param>
+    /// <returns>成功且标记了 <see cref="SourceWasMissing"/> 的结果。</returns>
+    public static TakeoverOutcome Skipped(string itemId, string message)
+        => new() { Succeeded = true, ItemId = itemId, SourceWasMissing = true, Message = message };
 
     /// <summary>构造失败结果。</summary>
     /// <param name="itemId">条目主键。</param>

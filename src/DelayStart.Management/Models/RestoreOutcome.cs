@@ -22,6 +22,17 @@ public sealed class RestoreOutcome
     /// <summary>还原失败的条目数。</summary>
     public int FailedCount { get; init; }
 
+    /// <summary>
+    /// 因"系统里的源已不存在"而跳过系统恢复、**仅删掉配置**的条目数（FR-12.4）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 刻意<b>不计入 <see cref="FailedCount"/></b>。那类条目的启动项早被软件卸载或
+    /// 用户清理掉了，系统里**本来就没有可恢复的对象** —— 把它们算成失败会让卸载器
+    /// 弹"仍要强行卸载吗"，而那次弹窗的理由是假的；更糟的是用户为了绕过它点了"强行卸载"，
+    /// 于是那些**真正**还原失败的项被一起放过去。
+    /// </remarks>
+    public int SkippedCount { get; init; }
+
     /// <summary>失败项的「名称：原因」描述，用于日志与卸载中止时的提示。</summary>
     public IReadOnlyList<string> Failures { get; init; } = [];
 
@@ -29,8 +40,13 @@ public sealed class RestoreOutcome
     public bool TaskDeleted { get; init; }
 
     /// <summary>
-    /// 进程退出码：全部成功（含"本来就没有接管项"）为 <c>0</c>，任一项失败为 <c>1</c>。
+    /// 进程退出码：全部成功（含"本来就没有接管项"与"源已丢失因而跳过恢复"）为 <c>0</c>，
+    /// 任一项**真正**失败为 <c>1</c>。
     /// </summary>
+    /// <remarks>
+    /// 🔴 判据里刻意不含 <see cref="SkippedCount"/>：跳过恢复的条目没有留下任何未还原的东西，
+    /// 为它们中止卸载是假警报（详见 <see cref="SkippedCount"/>）。
+    /// </remarks>
     public int ExitCode => FailedCount == 0 ? 0 : 1;
 
     /// <summary>是否全部成功。</summary>

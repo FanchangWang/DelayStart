@@ -183,11 +183,19 @@ public sealed class DelayRow : ObservableObject
     /// </remarks>
     public bool IsNormal => StaleKind is null;
 
-    /// <summary>失效原因的一句话（同时用作「已失效」文字的 Tooltip）。</summary>
+    /// <summary>失效原因的一句话（用作失效徽标的 Tooltip）。</summary>
+    /// <remarks>
+    /// 🔴 两档的措辞必须说清**还会不会启动它**：源丢失那档照常启动，只标"源已丢失"；
+    /// 目标丢失那档才真的不再启动。旧文案把孤儿说成"无人可启动"是错的 ——
+    /// 源没了但程序还在时，它每天都在被启动。
+    /// </remarks>
     public string StaleReason => StaleKind switch
     {
-        Core.Services.StaleKind.Orphan => "原本接管的系统启动项已被删除（软件卸载或被手动清理），无处可还原、也无人可启动。",
-        Core.Services.StaleKind.Missing => $"目标程序已不存在：{Item.Path}",
+        Core.Services.StaleKind.SourceLost =>
+            "原本接管的系统启动项已被删除（软件卸载或被手动清理），但目标程序仍在，"
+            + "所以仍会按你的设置启动它。如需恢复接管关系，请在对应的自启动项页重新接管。",
+        Core.Services.StaleKind.TargetLost =>
+            $"目标程序已不存在，本次不再启动它：{Item.Path}。装回后会自动恢复；也可在此删除或转为手动。",
         _ => string.Empty,
     };
 

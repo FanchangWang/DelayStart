@@ -66,6 +66,6 @@ internal static class StaleEntryFakes
 
     public static StaleEntry NewStaleEntry() => new(
         new DelayedItem { Id = "registry:hkcu:b", Name = "乙", Source = StartupSource.Registry, Scope = StartupScope.Hkcu },
-        StaleKind.Missing,
+        StaleKind.TargetLost,
         null);
 }

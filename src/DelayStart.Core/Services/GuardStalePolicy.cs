@@ -3,51 +3,76 @@ using DelayStart.Core.Models;
 namespace DelayStart.Core.Services;
 
 /// <summary>失效条目的类型。</summary>
+/// <remarks>
+/// 🔴 两档是**互斥且穷尽**的，判定顺序是**先目标、后源**（见 <see cref="GuardStalePolicy"/>）。
+/// 顺序不能反：先判源的话，"源没了 + 目标也没了"会被归成"源丢失"，于是继续尝试启动一个
+/// 不存在的程序 —— 那正是这个判定要消除的行为。
+/// </remarks>
 public enum StaleKind
 {
-    /// <summary>接管清单里有它，但系统启动项已被整个删除 —— 无处可还原，也无人可启动。</summary>
-    Orphan,
-
     /// <summary>
-    /// 目标程序已不存在（<see cref="StartupEntry.IsMissing"/>，FR-1.10）。
+    /// 源丢失：系统启动项已被删除，但**目标程序还在**（FR-12.4）。
     /// </summary>
     /// <remarks>
-    /// 两个来源：已接管条目由**扫描结果**给出（<see cref="StartupEntry.IsMissing"/>），
-    /// 手动条目则由 <see cref="TargetFileProbe"/> 直接查文件系统得出 ——
-    /// 前者有对应的 <see cref="StartupEntry"/>，后者没有（<see cref="StaleEntry.Entry"/> 为 null）。
+    /// 🔴 **继续启动**。理由：用户要的是"这个程序被延时启动"，而"它在哪个启动项里被登记"
+    /// 只是实现手段。启动项被清理工具/优化软件删掉不等于用户不要它了 ——
+    /// 此时把它一起停掉，是在替用户做决定。
+    /// 标记出来是为了让用户知道"接管关系已经断了"，可以在来源页重新接管。
     /// </remarks>
-    Missing,
+    SourceLost,
+
+    /// <summary>
+    /// 目标丢失：目标程序已不存在（<see cref="StartupEntry.IsMissing"/> / <see cref="TargetFileProbe"/>，FR-1.10）。
+    /// </summary>
+    /// <remarks>
+    /// **不再启动**。源在不在都算这一档：源在也只是"还留着一个指向已删除程序的启动项"，
+    /// 那同样启动不了，标成"源丢失"会诱导用户去重新接管一个永远跑不起来的东西。
+    /// </remarks>
+    TargetLost,
 }
 
 /// <summary>一条待通报的失效条目。</summary>
 /// <param name="Item">接管清单里的原始条目。</param>
 /// <param name="Kind">失效类型。</param>
 /// <param name="Entry">
-/// 扫描到的对应项；孤儿条目与"手动条目目标文件消失"时为 <see langword="null"/>。
+/// 扫描到的对应项。源丢失时必为 <see langword="null"/>（源已经不在了，没有可返回的对象）；
+/// 目标丢失时可能为 <see langword="null"/> —— 手动条目与"源和目标都没了"的情形。
 /// </param>
 public sealed record StaleEntry(DelayedItem Item, StaleKind Kind, StartupEntry? Entry);
 
 /// <summary>
-/// 失效条目检测（D77）：接管清单里"已经没意义了"的条目。
+/// 失效条目检测（D77 / FR-12.4）：接管清单里"已经没意义了"的条目。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 存在的理由：调度端会照着接管清单**无条件尝试启动**每一项。清单里留下已被删除的启动项
-/// （软件卸载、用户手动清掉自启动），结果就是每次登录都失败一次 —— 而管理端此前只显示
-/// 扫描结果（按主键与配置关联），孤儿条目用户根本看不见，也就无从清理。
+/// 存在的理由：调度端会照着接管清单**尝试启动**每一项。清单里留下已被删除的程序，
+/// 结果就是每次登录都失败一次 —— 而管理端此前只显示扫描结果（按主键与配置关联），
+/// 这类条目用户根本看不见，也就无从清理。
 /// </para>
 /// <para>
-/// 两类归并成一份通报：<see cref="StaleKind.Orphan"/>（启动项没了）与
-/// <see cref="StaleKind.Missing"/>（程序文件没了）。对用户而言"这一条已经没用了"是同一件事。
+/// 🔴 <b>判定顺序：先目标、后源</b>。这是本策略唯一容易写错的地方：
+/// </para>
+/// <list type="bullet">
+/// <item><description>目标不在 ⇒ <see cref="StaleKind.TargetLost"/>，<b>无论源在不在</b>。源在也只是"留着一个指向已删除程序的启动项"，照样启动不了；标成"源丢失"会诱导用户去重新接管一个永远跑不起来的东西。</description></item>
+/// <item><description>目标在 + 源不在 ⇒ <see cref="StaleKind.SourceLost"/>，<b>继续启动</b>。启动项被清理工具删掉不等于用户不要这个程序了。</description></item>
+/// </list>
+/// <para>
+/// 🔴 源不在时没有 <see cref="StartupEntry"/> 可用，<c>IsMissing</c> 拿不到 ⇒ 改用
+/// <see cref="TargetFileProbe"/> 直接查文件系统。这正是"先判目标"必须重排的原因：
+/// 旧顺序（先判源）根本走不到这一步，直接把条目判成孤儿，就再也没人问过"目标还在不在"。
 /// </para>
 /// <para>
-/// 🔴 <b>手动条目也参与判定，但只参与"目标文件没了"这一半</b>：它们在系统里没有锚点，
-/// 所以"扫描结果里找不到"不是孤儿；而目标文件是否存在与来源无关 ——
+/// 🔴 <b>手动条目只参与"目标"这一半</b>：它们在系统里没有锚点，
+/// "扫描结果里找不到"是正常状态而非"源丢失"；而目标文件是否存在与来源无关 ——
 /// 手动条目同样会让调度端每次登录都失败一次（2026-09-22 用户回报的漏判）。
 /// </para>
 /// <para>
+/// 🔴 <b>来源整体失败 ⇒ 一律不判</b>：一次整体失败（服务未启动 / 键被 ACL 拒绝）
+/// 绝不能把整份清单报成失效，那会诱导用户把好好的条目清理掉。
+/// </para>
+/// <para>
 /// 判定动作出口在用户手上：守卫只通报，清理（删除 / 转为手动）由管理端「延时启动」页
-/// 里那些被标成"已失效"的行确认后执行（D81 —— 失效条目已不再是独立页面）。
+/// 里那些被标成失效的行确认后执行（D81 —— 失效条目已不再是独立页面）。
 /// </para>
 /// </remarks>
 public static class GuardStalePolicy
@@ -58,7 +83,7 @@ public static class GuardStalePolicy
     /// <param name="managedItems">接管清单。</param>
     /// <param name="scannedEntries">本次全量扫描结果。</param>
     /// <param name="failedScopes">本次整体扫描失败的来源实例。</param>
-    /// <returns>失效条目（孤儿 + 已失效）；没有则为空列表。</returns>
+    /// <returns>失效条目（源丢失 + 目标丢失）；没有则为空列表。</returns>
     /// <exception cref="ArgumentNullException">任一参数为 <see langword="null"/>。</exception>
     public static IReadOnlyList<StaleEntry> SelectStaleItems(
         IReadOnlyList<DelayedItem> managedItems,
@@ -83,33 +108,41 @@ public static class GuardStalePolicy
         {
             if (item.IsManual)
             {
-                // 手动条目在系统中没有锚点，"扫描结果里找不到"是它的正常状态，不是孤儿 ——
-                // 所以**只跳过孤儿判定**，目标文件还在不在与来源无关（它连扫描都不需要），
-                // 必须照判：2026-09-22 用户回报"手动添加的 exe 等文件不存在之后，守卫不会检测"。
+                // 手动条目在系统中没有锚点，"扫描结果里找不到"是它的正常状态而非源丢失 ——
+                // 所以**只判目标**，且它连扫描都不需要。
                 if (TargetFileProbe.IsMissing(item.Path))
                 {
-                    stale.Add(new StaleEntry(item, StaleKind.Missing, Entry: null));
+                    stale.Add(new StaleEntry(item, StaleKind.TargetLost, Entry: null));
                 }
 
                 continue;
             }
 
-            // 来源不可用 ≠ 条目消失：一次整体失败（服务未启动 / 键被 ACL 拒绝）绝不能把
-            // 整份清单报成"已失效"，那会诱导用户把好好的条目清理掉。
+            // 来源不可用 ≠ 条目消失：一次整体失败绝不能把整份清单报成失效。
             if (failures.Contains(new ScanScope(item.Source, item.Scope)))
             {
                 continue;
             }
 
-            if (!byId.TryGetValue(item.Id, out var entry))
+            var found = byId.TryGetValue(item.Id, out var entry);
+
+            // ① 先判目标。源不在时没有 StartupEntry 可问 IsMissing，直接查文件系统 ——
+            //    TargetFileProbe 对 UWP / 协议 / 相对路径一律返回 false（"在"），
+            //    兜底方向与 D87/D90 一致：只能更宽松，绝不更严格。
+            var targetLost = found
+                ? entry!.IsMissing
+                : TargetFileProbe.IsMissing(item.Path);
+
+            if (targetLost)
             {
-                stale.Add(new StaleEntry(item, StaleKind.Orphan, Entry: null));
+                stale.Add(new StaleEntry(item, StaleKind.TargetLost, entry));
                 continue;
             }
 
-            if (entry.IsMissing)
+            // ② 目标还在、源没了 ⇒ 继续启动，只做标记。
+            if (!found)
             {
-                stale.Add(new StaleEntry(item, StaleKind.Missing, entry));
+                stale.Add(new StaleEntry(item, StaleKind.SourceLost, Entry: null));
             }
         }
 

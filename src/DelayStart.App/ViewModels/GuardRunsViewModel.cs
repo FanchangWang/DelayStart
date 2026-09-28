@@ -224,8 +224,10 @@ public sealed class GuardInspectionGroupRow
 
     private static string DescribeStale(StaleKind kind) => kind switch
     {
-        StaleKind.Orphan => "系统启动项已被删除",
-        StaleKind.Missing => "目标程序已不存在",
+        // 括号里的半句是必须的：源丢失那一档**照常启动**，只标状态；
+        // 不说清楚的话，看守日志会让人以为"源已丢失 = 已经不启动了"。
+        StaleKind.SourceLost => "源已丢失（仍在启动）",
+        StaleKind.TargetLost => "目标已不存在（不再启动）",
         _ => string.Empty,
     };
 }

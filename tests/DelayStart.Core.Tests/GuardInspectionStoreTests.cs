@@ -43,7 +43,7 @@ public sealed class GuardInspectionStoreTests : IDisposable
             ScannedCount = 12,
             Corrections = [new GuardCorrectionOutcome("registry:hkcu:a", "甲", false, "拒绝访问")],
             NewItems = [Entry("registry:hkcu:b", "乙")],
-            StaleItems = [new StaleEntry(MakeDelayedItem("registry:hkcu:c", "丙"), StaleKind.Orphan, null)],
+            StaleItems = [new StaleEntry(MakeDelayedItem("registry:hkcu:c", "丙"), StaleKind.SourceLost, null)],
         });
 
         var reports = harness.Store.ReadRecent(10);
@@ -61,7 +61,7 @@ public sealed class GuardInspectionStoreTests : IDisposable
 
         var stale = Assert.Single(report.StaleItems);
         Assert.Equal("丙", stale.Item.Name);
-        Assert.Equal(StaleKind.Orphan, stale.Kind);
+        Assert.Equal(StaleKind.SourceLost, stale.Kind);
 
         // 文件名 = 完成时刻（yyyyMMdd-HHmmss），调度归档的 runId 同一语义。
         Assert.True(

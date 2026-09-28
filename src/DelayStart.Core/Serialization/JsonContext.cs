@@ -11,7 +11,7 @@ namespace DelayStart.Core.Serialization;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 🔴 **全部 JSON 读写必须走这里**，禁止使用
+/// 🔴 **全部 JSON 读写必须走源生成上下文**，禁止使用
 /// <c>JsonSerializer.Serialize&lt;T&gt;(value, new JsonSerializerOptions())</c> 这类反射式调用 ——
 /// 反射序列化在 NativeAOT 裁剪后会失效，而 <c>Core</c> 层的 <c>IsAotCompatible=true</c>
 /// 会让这类调用在构建期直接报 <c>IL2026</c> / <c>IL3050</c>（R5 守门）。
@@ -24,6 +24,11 @@ namespace DelayStart.Core.Serialization;
 /// 读入侧刻意宽容（允许注释与尾逗号、大小写不敏感）：用户可能手改过配置文件，
 /// 为一个小语法错误就判定"配置损坏"并重建，代价太大。写出侧则严格。
 /// </para>
+/// <para>
+/// 🔴 配置文件**不在**这里，而在 <see cref="ConfigJsonContext"/>：它多一条
+/// 「未映射字段即报错」。<see cref="RunRecord"/> 留在这里保持宽松是有原因的 ——
+/// <c>ReadRecent</c> 对解析失败是「跳过该文件」，加严会让更高版本的归档整条消失。
+/// </para>
 /// </remarks>
 [JsonSourceGenerationOptions(
     WriteIndented = true,
@@ -33,7 +38,6 @@ namespace DelayStart.Core.Serialization;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     ReadCommentHandling = JsonCommentHandling.Skip,
     AllowTrailingCommas = true)]
-[JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(RunRecord))]
 internal sealed partial class JsonContext : JsonSerializerContext
 {
@@ -86,3 +90,4 @@ public sealed partial class HolidayJsonContext : JsonSerializerContext
 public sealed partial class BrokerJsonContext : JsonSerializerContext
 {
 }
+

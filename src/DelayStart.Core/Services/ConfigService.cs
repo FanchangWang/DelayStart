@@ -27,6 +27,8 @@ namespace DelayStart.Core.Services;
 /// </para>
 /// <para>
 /// 只支持当前一种格式（v<see cref="AppConfig.CurrentVersion"/>，由本程序写出），不做旧格式迁移。
+/// <see cref="AppConfig.Version"/> 因此只是**损坏探针**：不等于当前值就是"这份文件读不懂"，
+/// 没有"从旧版本升上来"这回事。
 /// </para>
 /// </remarks>
 public sealed class ConfigService : IAppConfigStore
@@ -120,10 +122,11 @@ public sealed class ConfigService : IAppConfigStore
 
         Normalize(config);
 
+        string json;
         try
         {
             _paths.EnsureCreated();
-            var json = JsonSerializer.Serialize(config, JsonContext.Default.AppConfig);
+            json = JsonSerializer.Serialize(config, ConfigJsonContext.Default.AppConfig);
             AtomicFileWriter.WriteAllText(ConfigFilePath, json);
         }
         catch (Exception ex) when (ex is IOException
@@ -137,21 +140,112 @@ public sealed class ConfigService : IAppConfigStore
                 message: $"保存配置文件失败：{ConfigFilePath}（{ex.Message}）",
                 innerException: ex);
         }
+
+        VerifyWrite(config, json);
+    }
+
+    /// <summary>
+    /// 写盘后立刻回读校验（FR-12.3）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 这一步要抓的是「写出去的文件读不回来」：磁盘写满、杀软锁文件、同步盘中途断连，
+    /// <c>AtomicFileWriter</c> 都会成功返回，但落盘的内容可能是残缺的。
+    /// </para>
+    /// <para>
+    /// 🔴 校验失败**不抛异常**。调用方是管理端的一次普通保存（例如用户在设置页点了个开关），
+    /// 为此让整个界面报错退出不成比例。写盘本身已成功，真实后果只是「本次改动没生效」，
+    /// 下一��读时会走 Load 的 fail-closed 路径给出可见的提示 —— 那才是该报错的地方。
+    /// </para>
+    /// </remarks>
+    private void VerifyWrite(AppConfig saved, string written)
+    {
+        try
+        {
+            var roundTripped = Parse(written);
+            Normalize(roundTripped);
+
+            var mismatch = FindMismatch(saved, roundTripped);
+            if (mismatch is null)
+            {
+                return;
+            }
+
+            _log.Error(
+                $"配置文件写盘校验不一致（{mismatch}），本次改动可能未生效：{ConfigFilePath}");
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or FormatException)
+        {
+            _log.Error(ex, $"配置文件写盘后无法回读，本次改动可能未生效：{ConfigFilePath}");
+        }
+    }
+
+    /// <summary>逐字段比对配置；返回第一个不一致项的说明，全等则返回 <see langword="null"/>。</summary>
+    /// <remarks>
+    /// 🔴 刻意**不**直接比 JSON 文本：<c>Normalize</c> 补齐过的默认值在序列化时会被
+    /// <c>WhenWritingNull</c> 省略，回读出来又是 null 再补齐，文本层面必然对不上。
+    /// 比字段才有意义。
+    /// </remarks>
+    private static string? FindMismatch(AppConfig left, AppConfig right)
+    {
+        if (left.Version != right.Version)
+        {
+            return $"Version {left.Version} ≠ {right.Version}";
+        }
+
+        if (left.Items.Count != right.Items.Count)
+        {
+            return $"条目数 {left.Items.Count} ≠ {right.Items.Count}";
+        }
+
+        if (left.Cycles.Count != right.Cycles.Count)
+        {
+            return $"周期数 {left.Cycles.Count} ≠ {right.Cycles.Count}";
+        }
+
+        if (left.Settings.RetryCount != right.Settings.RetryCount
+            || left.Settings.GuardMode != right.Settings.GuardMode
+            || left.Settings.GuardMinutes != right.Settings.GuardMinutes
+            || left.Settings.NotifyMode != right.Settings.NotifyMode
+            || left.Settings.GuardNotifyMode != right.Settings.GuardNotifyMode
+            || left.Settings.Theme != right.Settings.Theme)
+        {
+            return "设置项回读后与写入前不一致";
+        }
+
+        for (var i = 0; i < left.Items.Count; i++)
+        {
+            if (!string.Equals(left.Items[i].Id, right.Items[i].Id, StringComparison.Ordinal))
+            {
+                return $"第 {i + 1} 项 Id 不一致";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
     /// 解析配置 JSON。只有一种受支持格式（v<see cref="AppConfig.CurrentVersion"/>，由本程序写出）。
     /// </summary>
     /// <remarks>
-    /// 不做任何旧格式迁移：本项目没有需要兼容的历史配置。因此版本**不等于**当前值就是"不认识" ——
-    /// 高于当前值是前向保护（旧程序遇到新配置，拒绝加载以免写丢新字段，D119）；
-    /// 低于当前值（含**缺这个字段**，此时 <c>AppConfig.Version</c> 落到默认的 0）
-    /// 则一律按损坏处理：没有迁移逻辑去补它，硬解析出来的多半是字段名对不上的半截数据，
-    /// 写回去就是把用户配置毁掉。
+    /// <para>
+    /// <see cref="AppConfig.Version"/> 的语义是**损坏探针**，不是"迁移起点"：项目不做旧格式迁移，
+    /// 于是任何"不等于当前值"的情形都只有一个正确答案 —— 这份文件本程序读不懂。
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>高于当前值 → <see cref="StartupFailureReason.ConfigVersionUnsupported"/>（前向保护：旧程序遇到新配置要拒绝加载，而不是写丢新字段）</description></item>
+    /// <item><description>低于当前值（含**缺这个字段**，此时落到默认的 0）→ 抛 <see cref="FormatException"/>，由 <see cref="Load"/> 统一转成"损坏 + 留副本"。没有迁移逻辑去补它，硬解析出来的多半是字段名对不上的半截数据，写回去就是把用户配置毁掉</description></item>
+    /// </list>
+    /// <para>
+    /// 🔴 未知字段会在这里**直接抛 <see cref="JsonException"/>**（由
+    /// <see cref="ConfigJsonContext"/> 的 <c>UnmappedMemberHandling.Disallow</c> 强制）。
+    /// 不做兼容就没有迁移兜底，少一个字段会被 <see cref="Normalize"/> 补成默认值并写回磁盘 ——
+    /// 用户配的延时静默变成默认值。立刻报错是这里唯一有意义的失败方式。
+    /// </para>
     /// </remarks>
     private static AppConfig Parse(string json)
     {
-        var config = JsonSerializer.Deserialize(json, JsonContext.Default.AppConfig)
+        var config = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.AppConfig)
             ?? throw new FormatException("配置文件内容无法解析为配置对象。");
 
         if (config.Version > AppConfig.CurrentVersion)

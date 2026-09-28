@@ -29,6 +29,61 @@ public sealed class ConfigServiceTests : IDisposable
     public void Dispose() => _temp.Dispose();
 
     [Fact]
+    public void Load_UnknownField_Throws_AndPreservesCopy()
+    {
+        // 🔴 不做兼容就没有迁移兜底：少一个字段会被 Normalize 补成默认值并写回磁盘，
+        // 用户配的延时静默变成 30 秒。拼错的字段名必须**立刻报错**，而不是被静默忽略。
+        WriteConfigFile($$"""
+        {
+          "version": {{AppConfig.CurrentVersion}},
+          "items": [],
+          "setings": { "retryCount": 2 }
+        }
+        """);
+
+        var ex = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, ex.Reason);
+        Assert.Single(Directory.GetFiles(_paths.ConfigRoot, CorruptBackupSearchPattern));
+    }
+
+    [Fact]
+    public void Load_MisspelledNestedField_Throws()
+    {
+        // 嵌套对象同样受管：settings 里拼错字段名也不能被静默忽略。
+        WriteConfigFile($$"""
+        {
+          "version": {{AppConfig.CurrentVersion}},
+          "items": [],
+          "cycles": [],
+          "settings": { "retryCont": 2 }
+        }
+        """);
+
+        var ex = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, ex.Reason);
+    }
+
+    [Fact]
+    public void Load_KnownFieldsWithCommentsAndTrailingCommas_StillLoads()
+    {
+        // 加严只针对"不认识的字段"：手改配置时留的注释与尾逗号不该变成"配置损坏"。
+        WriteConfigFile($$"""
+        {
+          // 用户手写时留下的注释
+          "version": {{AppConfig.CurrentVersion}},
+          "items": [],
+          "settings": { "retryCount": 3, },
+        }
+        """);
+
+        var config = _service.Load();
+
+        Assert.Equal(3, config.Settings.RetryCount);
+    }
+
+    [Fact]
     public void Load_ConfigFileMissing_ReturnsDefaultConfig()
     {
         // 首次运行的正常路径：不该报错，也不该记 Error

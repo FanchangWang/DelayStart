@@ -20,7 +20,7 @@ public sealed class PathService
     /// <summary>覆盖 Local 根目录的环境变量名，仅用于开发与测试。</summary>
     public const string LocalRootOverrideVariable = "DELAYSTART_LOCAL_DIR";
 
-    /// <summary>覆盖 Roaming 配置根目录的环境变量名，仅用于开发与测试。</summary>
+    /// <summary>覆盖配置根目录的环境变量名，仅用于开发与测试。</summary>
     public const string ConfigRootOverrideVariable = "DELAYSTART_CONFIG_DIR";
 
     private const string FolderName = "DelayStart";
@@ -39,15 +39,20 @@ public sealed class PathService
     /// 用显式覆盖值构造，便于测试隔离。
     /// </summary>
     /// <param name="localRoot">Local 根目录；为 <see langword="null"/> 时依次回退到环境变量、系统目录。</param>
-    /// <param name="configRoot">Roaming 配置根目录；为 <see langword="null"/> 时依次回退到环境变量、系统目录。</param>
+    /// <param name="configRoot">配置根目录；为 <see langword="null"/> 时依次回退到环境变量、系统目录。</param>
     /// <param name="installedRoot">安装目录；为 <see langword="null"/> 时取当前程序基目录。</param>
     public PathService(string? localRoot, string? configRoot, string? installedRoot = null)
     {
         InstalledRoot = NormalizeDirectory(installedRoot ?? AppContext.BaseDirectory);
         LocalRoot = NormalizeDirectory(
             ResolveRoot(localRoot, LocalRootOverrideVariable, Environment.SpecialFolder.LocalApplicationData));
+        // 🔴 配置**不**再放 Roaming（%APPDATA%）。它是漫游目录，域环境下会跟着用户同步到
+        // 另一台机器，而配置里装的是纯机器相关的东西：可执行文件绝对路径、注册表键名、
+        // 计划任务路径、接管前的原始状态。漫游过去的后果是守卫看到一堆"源已消失"的孤儿、
+        // 调度器去启动不存在的路径，而且**这些数据在源机器上已被覆盖、无法还原**。
+        // 其余数据（调度、守卫、法定日历、日志）本来就都在 Local，配置是唯一的例外。
         ConfigRoot = NormalizeDirectory(
-            ResolveRoot(configRoot, ConfigRootOverrideVariable, Environment.SpecialFolder.ApplicationData));
+            ResolveRoot(configRoot, ConfigRootOverrideVariable, Environment.SpecialFolder.LocalApplicationData));
     }
 
     /// <summary>
@@ -59,7 +64,14 @@ public sealed class PathService
     /// <summary>Local 根目录：<c>%LOCALAPPDATA%\DelayStart</c>。日志、状态、归档都放这里，不随漫游搬家。</summary>
     public string LocalRoot { get; }
 
-    /// <summary>Roaming 配置根目录：<c>%APPDATA%\DelayStart</c>。只放个人配置。</summary>
+    /// <summary>
+    /// 配置根目录：<c>%LOCALAPPDATA%\DelayStart\config.json</c>。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 刻意与 <see cref="LocalRoot"/> 同在 Local、而不是漫游目录：配置内容全是机器相关的
+    /// （绝对路径、注册表键名、计划任务路径、接管前状态），漫游到另一台机器上全部失效且无法还原。
+    /// 用户偏好（主题、上次选的延时）才适合漫游，而本项目没有那类数据。
+    /// </remarks>
     public string ConfigRoot { get; }
 
     /// <summary>日志目录。</summary>
@@ -112,8 +124,8 @@ public sealed class PathService
     /// 法定日历数据目录（FR-15）：<c>{LocalRoot}\holidays</c>，每年一个 <c>{year}.json</c>。
     /// </summary>
     /// <remarks>
-    /// 🔴 落 **Local** 而不是 Roaming：它不是个人配置，是"下载来的可复现缓存"。
-    /// 混进漫游配置会让一台机器下载的数据被同步到另一台，而另一台的用户并不知道这份数据从哪来。
+    /// 🔴 落 **Local**：它不是个人配置，是"下载来的可复现缓存"。
+    /// 放进会漫游的目录会让一台机器下载的数据被同步到另一台，而另一台的用户并不知道这份数据从哪来。
     /// 目录由写入方按需创建（<c>AtomicFileWriter.WriteAllText</c> 自带建目录），读取方目录不存在即视为"无数据"。
     /// </remarks>
     public string HolidaysRoot => Path.Combine(LocalRoot, "holidays");

@@ -29,6 +29,31 @@ public sealed class PathServiceTests : IDisposable
     }
 
     [Fact]
+    public void DefaultConfigRoot_UsesLocalAppData_NotRoaming()
+    {
+        // 🔴 配置内容全是机器相关的：可执行文件绝对路径、注册表键名、计划任务路径、
+        // 接管前的原始状态。放进漫游目录（%APPDATA%）会跟着用户同步到另一台机器，
+        // 那里这些项一个都不存在，而且源机器上的数据已被覆盖、无法还原。
+        var paths = new PathService(localRoot: null, configRoot: null, installedRoot: _temp.Path);
+
+        var expected = Path.GetFullPath(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "DelayStart"));
+
+        Assert.Equal(expected, paths.ConfigRoot, ignoreCase: true);
+
+        var roaming = Path.GetFullPath(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "DelayStart"));
+
+        Assert.False(
+            string.Equals(roaming, paths.ConfigRoot, StringComparison.OrdinalIgnoreCase),
+            "配置目录不得再落在漫游目录下");
+    }
+
+    [Fact]
     public void RootsWithTrailingSeparator_AreNormalized()
     {
         // 尾部斜杠会让后续 Path.Combine 生成双斜杠路径，干扰字符串比对与计划任务参数
@@ -42,14 +67,14 @@ public sealed class PathServiceTests : IDisposable
     [Fact]
     public void ConfigRootAndLocalRoot_AreKeptApart()
     {
-        // D23：配置走 Roaming（可漫游的个人偏好），日志与状态走 Local（机器相关）。
-        // 两者必须分家，否则漫游配置会把机器相关的日志一起搬走。
+        // 配置与日志/状态仍分家：配置可以被单独清空（卸载器的「删除配置」选项），
+        // 而日志与归档要保留。两者混在一处就没法分别处理。
         var paths = new PathService(_temp.Combine("local"), _temp.Combine("config"), _temp.Path);
 
         Assert.NotEqual(paths.LocalRoot, paths.ConfigRoot);
         Assert.True(
             paths.ConfigFilePath.StartsWith(paths.ConfigRoot, StringComparison.OrdinalIgnoreCase),
-            "config.json 必须落在 Roaming 根下");
+            "config.json 必须落在配置根下");
         Assert.True(
             paths.SchedulerLogPath.StartsWith(paths.LocalRoot, StringComparison.OrdinalIgnoreCase),
             "日志必须落在 Local 根下");

@@ -5,6 +5,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using DelayStart.Management.Models;
 using DelayStart.Management.Services;
 
+using System.Security.Cryptography;
+using System.Text;
+
 namespace DelayStart.App.ViewModels;
 
 /// <summary>「系统启动项」的四个分区（UI v2：分区即导航入口）。</summary>
@@ -103,67 +106,223 @@ public partial class SystemViewModel : ObservableObject
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
 
-    /// <summary>页头副标题（带计数）。</summary>
+    /// <summary>
+    /// 四个分区各自的进程级缓存（A3.1）。四个入口互相独立，各存各的。
+    /// </summary>
+    /// <remarks>
+    /// <b>进程内有效</b>：这一页本来就是只读展示，缓存的生命周期与应用一致就够 ——
+    /// 服务列表不会在应用运行期间被人从外面改到需要另起一份缓存的程度，
+    /// 而落盘一份服务快照的失效判断比自己实现一套更难做对。
+    /// </remarks>
+    private IReadOnlyList<ServiceInfo>? _servicesCache;
+    private IReadOnlyList<ServiceInfo>? _driversCache;
+    private IReadOnlyList<ReadOnlyEntry>? _winlogonCache;
+    private IReadOnlyList<ReadOnlyEntry>? _gpoCache;
+
+    private string? _servicesFingerprint;
+    private string? _driversFingerprint;
+    private string? _winlogonFingerprint;
+    private string? _gpoFingerprint;
+
+    /// <summary>页头副标题（分区 + 计数）。</summary>
     [ObservableProperty]
     public partial string Subtitle { get; set; } = "正在读取…";
 
     /// <summary>加载当前分区的只读数据。页面进入时调用。</summary>
-    /// <returns>异步任务。</returns>
     /// <remarks>
+    /// <para>
     /// 只拉当前分区要用的数据：四个入口各自独立，进「服务」页没必要读 Winlogon。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>两段式</b>（A3.2）：先无条件把本进程缓存里已有的内容渲染出来，再后台重查。
+    /// 查服务要 WMI、查驱动要枚举驱动对象，都是几百毫秒起步的同步调用；
+    /// 而四个分区在一次会话里会被反复进出（守卫通知可能把用户直接导航到本页）。
+    /// 没有缓存时页面会先空着，有缓存却还要等一次全量查询 —— 两种都不该发生。
+    /// </para>
+    /// <para>
+    /// 第二段的成果只在<b>指纹不同</b>时才刷（A3.1）。这一页的行模型就是数据本身
+    /// （没有包装类），所以整刷的成本为零，不需要差量同步 ——
+    /// <c>ReplaceAll</c> / <c>Clear+AddRange</c> 就够了，关键是"没变就别刷"。
+    /// </para>
     /// </remarks>
     public async Task LoadAsync()
     {
         IsBusy = true;
         try
         {
-            switch (Section)
-            {
-                case SystemSection.Services:
-                {
-                    _allServices.Clear();
-                    _allServices.AddRange(await Task.Run(_serviceQuery.QueryWin32Services).ConfigureAwait(true));
-                    RefillServiceViews();
-                    break;
-                }
+            // ── 第一段：先摆缓存（同步，微秒级）────────────────────────────────
+            RenderFromCache();
 
-                case SystemSection.Drivers:
-                {
-                    _allDrivers.Clear();
-                    _allDrivers.AddRange(await Task.Run(_serviceQuery.QueryDrivers).ConfigureAwait(true));
-                    RefillServiceViews();
-                    break;
-                }
-
-                case SystemSection.Winlogon:
-                {
-                    var winlogon = await Task.Run(SystemStartupInspector.ReadWinlogon).ConfigureAwait(true);
-                    ReplaceAll(WinlogonEntries, winlogon);
-                    Subtitle = $"Winlogon 关键值 · {WinlogonEntries.Count} 项";
-                    TextEmptyHint = winlogon.Count == 0
-                        ? "没有读到 Winlogon 自启动项。"
-                        : string.Empty;
-                    HasTextEntries = winlogon.Count > 0;
-                    break;
-                }
-
-                case SystemSection.GroupPolicy:
-                {
-                    var gpo = await Task.Run(SystemStartupInspector.ReadGroupPolicy).ConfigureAwait(true);
-                    ReplaceAll(GroupPolicyEntries, gpo);
-                    Subtitle = $"组策略启动项 · {GroupPolicyEntries.Count} 项";
-                    TextEmptyHint = GroupPolicyEntries.Count == 0
-                        ? "本机没有组策略下发的自启动项 —— 这是正常现象：只有域环境统一推送，或手动用 gpedit.msc 配置过「启动脚本 / 策略 Run」的机器，这里才会有内容。"
-                        : string.Empty;
-                    HasTextEntries = GroupPolicyEntries.Count > 0;
-                    break;
-                }
-            }
+            // ── 第二段：后台重查，指纹变了才刷 ────────────────────────────────
+            await RefreshCurrentSectionAsync().ConfigureAwait(true);
         }
         finally
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>把本进程缓存里当前分区的内容渲染出来（没有缓存就什么都不做）。</summary>
+    /// <remarks>
+    /// 🔴 "没有缓存就什么都不做"是刻意的：不要在这里 <c>Clear</c>。
+    /// 那一段是给"重查回来发现内容变了"用的；第一段若无脑清空，
+    /// 用户就会看到"有内容 → 空 → 有内容"的来回闪。
+    /// </remarks>
+    private void RenderFromCache()
+    {
+        switch (Section)
+        {
+            case SystemSection.Services when _servicesCache is { } cachedServices:
+                _allServices.Clear();
+                _allServices.AddRange(cachedServices);
+                RefillServiceViews();
+                break;
+
+            case SystemSection.Drivers when _driversCache is { } cachedDrivers:
+                _allDrivers.Clear();
+                _allDrivers.AddRange(cachedDrivers);
+                RefillServiceViews();
+                break;
+
+            case SystemSection.Winlogon when _winlogonCache is { } cachedWinlogon:
+                    ReplaceAll(WinlogonEntries, cachedWinlogon);
+                    ApplyWinlogonTextState(cachedWinlogon.Count);
+                    break;
+
+            case SystemSection.GroupPolicy when _gpoCache is { } cachedGpo:
+                    ReplaceAll(GroupPolicyEntries, cachedGpo);
+                    ApplyGroupPolicyTextState(cachedGpo.Count);
+                    break;
+        }
+    }
+
+    private async Task RefreshCurrentSectionAsync()
+    {
+        switch (Section)
+        {
+            case SystemSection.Services:
+            {
+                var services = await Task.Run(_serviceQuery.QueryWin32Services).ConfigureAwait(true);
+
+                // 指纹相同 ⇒ 一个集合通知都不发。A3 的核心收益就在这里：
+                // 自启动的服务/驱动列表在两次查询之间通常**完全一样**，
+                // 而整刷一次意味着 ListView 重建全部容器（滚动位置、展开状态全丢）。
+                if (_servicesFingerprint != FingerprintOf(services))
+                {
+                    _servicesFingerprint = FingerprintOf(services);
+                    _servicesCache = services;
+                    _allServices.Clear();
+                    _allServices.AddRange(services);
+                    RefillServiceViews();
+                }
+
+                break;
+            }
+
+            case SystemSection.Drivers:
+            {
+                var drivers = await Task.Run(_serviceQuery.QueryDrivers).ConfigureAwait(true);
+
+                if (_driversFingerprint != FingerprintOf(drivers))
+                {
+                    _driversFingerprint = FingerprintOf(drivers);
+                    _driversCache = drivers;
+                    _allDrivers.Clear();
+                    _allDrivers.AddRange(drivers);
+                    RefillServiceViews();
+                }
+
+                break;
+            }
+
+            case SystemSection.Winlogon:
+            {
+                var winlogon = await Task.Run(SystemStartupInspector.ReadWinlogon).ConfigureAwait(true);
+
+                if (_winlogonFingerprint != FingerprintOf(winlogon))
+                {
+                    _winlogonFingerprint = FingerprintOf(winlogon);
+                    _winlogonCache = winlogon;
+                    ReplaceAll(WinlogonEntries, winlogon);
+                    ApplyWinlogonTextState(winlogon.Count);
+                }
+
+                break;
+            }
+
+            case SystemSection.GroupPolicy:
+            {
+                var gpo = await Task.Run(SystemStartupInspector.ReadGroupPolicy).ConfigureAwait(true);
+
+                if (_gpoFingerprint != FingerprintOf(gpo))
+                {
+                    _gpoFingerprint = FingerprintOf(gpo);
+                    _gpoCache = gpo;
+                    ReplaceAll(GroupPolicyEntries, gpo);
+                    ApplyGroupPolicyTextState(gpo.Count);
+                }
+
+                break;
+            }
+        }
+    }
+
+    /// <summary>算出内容指纹（顺序 + 每项的关键字段），用于"这次查询有没有变化"。</summary>
+    /// <remarks>
+    /// 🔴 参与计算的字段必须是**页面上看得见的全部**：少算一个，那次真实变化就会被
+    /// 判成"没变"而被静默吞掉 —— 界面上停留在旧状态，零提示。
+    /// <para>
+    /// 顺序也算进去：排序变了对用户就是一次可见的变化。
+    /// </para>
+    /// </remarks>
+    private static string FingerprintOf(IReadOnlyList<ServiceInfo> items)
+    {
+        var canonical = new StringBuilder(items.Count * 64);
+        foreach (var item in items)
+        {
+            canonical.Append(item.ServiceName).Append('|')
+                .Append(item.DisplayName).Append('|')
+                .Append(item.Description).Append('|')
+                .Append(item.StartType).Append('|')
+                .Append(item.StatusText).Append('|')
+                .Append(item.IsRunning ? '1' : '0')
+                .Append(item.DelayedAuto ? '1' : '0')
+                .Append(item.IsDriver ? '1' : '0')
+                .Append(item.BinaryPath).Append('|')
+                .Append(item.IsBuiltinWindows ? '1' : '0')
+                .Append(';');
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+    }
+
+    private static string FingerprintOf(IReadOnlyList<ReadOnlyEntry> items)
+    {
+        var canonical = new StringBuilder(items.Count * 64);
+        foreach (var item in items)
+        {
+            canonical.Append(item.Location).Append('|')
+                .Append(item.Name).Append('|')
+                .Append(item.Detail).Append(';');
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+    }
+
+    private void ApplyWinlogonTextState(int count)
+    {
+        Subtitle = $"Winlogon 关键值 · {count} 项";
+        TextEmptyHint = count == 0 ? "没有读到 Winlogon 自启动项。" : string.Empty;
+        HasTextEntries = count > 0;
+    }
+
+    private void ApplyGroupPolicyTextState(int count)
+    {
+        Subtitle = $"组策略启动项 · {count} 项";
+        TextEmptyHint = count == 0
+            ? "本机没有组策略下发的自启动项 —— 这是正常现象：只有域环境统一推送，或手动用 gpedit.msc 配置过「启动脚本 / 策略 Run」的机器，这里才会有内容。"
+            : string.Empty;
+        HasTextEntries = count > 0;
     }
 
     /// <summary>按开关重填服务 / 驱动的过滤视图，并同步副标题计数。</summary>

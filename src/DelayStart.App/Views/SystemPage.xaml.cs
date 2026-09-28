@@ -10,7 +10,7 @@ namespace DelayStart.App.Views;
 /// 「系统启动项」分区页（UI v2：服务 / 驱动 / Winlogon / 组策略 四个入口共用本页）。
 /// 全部只读（FR-7）：本程序永远不会碰它们。
 /// </summary>
-public sealed partial class SystemPage : Page, INavigationTarget
+public sealed partial class SystemPage : Page, INavigationTarget, IReloadablePage
 {
     /// <summary>构造页面。</summary>
     /// <param name="viewModel">本页的 ViewModel，由容器注入。</param>
@@ -90,6 +90,27 @@ public sealed partial class SystemPage : Page, INavigationTarget
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Loaded -= OnLoaded;
+        _ = ViewModel.LoadAsync();
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🔴 本页此前**没有**实现 <see cref="IReloadablePage"/>，于是"当前停留在系统启动项页时
+    /// 收到守卫通知"这一路完全失效：外壳的定位逻辑走到 <c>if (frame.Content is IReloadablePage)</c>
+    /// 判空后直接跳过，页面停在旧数据上 —— 用户明明收到"服务被改回启用"的通报，
+    /// 切回来看却还是"已禁用"。症状是"通知说的和页面上写的不一样"，
+    /// 而两边都"没 bug"。
+    /// <para>
+    /// 🔴 一页只读数据也要实现它，正是因为通知可能落到本页：判据是"会不会被定位到"，
+    /// 不是"数据会不会变"。
+    /// </para>
+    /// </remarks>
+    public void Reload()
+    {
+        // 异步发起、立即返回（IReloadablePage 的约定）：这是在处理一次唤起信号，
+        // 卡住 UI 线程会让"点了通知反而没反应"。
+        // 走 LoadAsync 而不是"强制刷新"：本页四个分区都是只读的，LoadAsync 的两段式
+        // 会先摆缓存再后台重查，而指纹门保证内容没变时不刷 —— 正是我们要的行为。
         _ = ViewModel.LoadAsync();
     }
 }

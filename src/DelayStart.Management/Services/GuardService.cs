@@ -20,15 +20,46 @@ namespace DelayStart.Management.Services;
 /// <see cref="ScanResult.Failures"/>；纠正失败也只记进结果。守卫是周期任务，
 /// 让一次巡检半途崩掉会让"上一轮到底做了什么"无从得知。
 /// </para>
+/// <para>
+/// 🔴 <b>单实例保护在 <see cref="RunOnce"/> 内部</b>（D74 / G3），不放在调用方。
+/// 三个入口（守卫进程、管理端启动时后台跑一次、管理端「真跑守卫」按钮）都会调它，
+/// 保护放在调用方就意味着要复制三遍 —— 漏一处就等于没有保护。
+/// </para>
 /// </remarks>
 public sealed class GuardService
 {
+    /// <summary>单实例互斥名（原先只在守卫进程里，现下沉到本类）。</summary>
+    private const string SingleInstanceMutexName = @"Local\DelayStart.Guard";
+
     private readonly ScanService _scanner;
     private readonly IAppConfigStore _configStore;
     private readonly GuardBaselineStore _baselineStore;
     private readonly IReadOnlyList<IStartupSource> _sources;
     private readonly ILogSink _log;
     private readonly IClock _clock;
+
+    /// <summary>
+    /// 进程内重入标志：0 = 空闲，1 = 正在巡检。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这一层**不是多余的**：内核互斥体挡不住进程内重入。同一个进程里两次
+    /// <c>new Mutex(initiallyOwned: true, 同名, out isFirst)</c> 拿到的是**同一个内核对象**，
+    /// 两次的 <c>isFirst</c> **都会是 <see langword="true"/>** —— 内核只管跨进程，
+    /// 同进程重入对它完全透明。用一次 <c>Mutex</c> 直接测这个现象是测不出来的：
+    /// 两次调用都返回 <c>isFirst=true</c>，单测会绿，而真机上就是并发跑了两轮。
+    /// <para>
+    /// 而管理端会在启动时后台跑一次、用户又能点「真跑守卫」按钮，两条路都进
+    /// <see cref="RunOnce"/>。没有这层标志，用户在启动后几秒内点一下按钮就会**同时**
+    /// 跑两轮巡检：两轮都写基线、都写归档、可能都发通知 ——
+    /// 表现为"守卫日志里同一时刻出现两条巡检记录"和"用户莫名收到两条一样的通知"。
+    /// </para>
+    /// <para>
+    /// 用 <see cref="Interlocked"/> 而不是 <see cref="SemaphoreSlim"/>：我们要的是
+    /// <b>立刻跳过</b>而不是排队等待（第二次调用本来就该什么也不做），
+    /// 标志位既够用又不引入一个需要释放的资源。
+    /// </para>
+    /// </remarks>
+    private int _runningInProcess;
 
     /// <summary>构造守卫服务。</summary>
     /// <param name="scanner">全量扫描服务。</param>
@@ -61,8 +92,73 @@ public sealed class GuardService
     }
 
     /// <summary>执行一次完整巡检。</summary>
-    /// <returns>巡检结果；守卫关闭时返回 <see cref="GuardRunReport.Disabled"/>。</returns>
+    /// <returns>
+    /// 巡检结果；守卫关闭时返回 <see cref="GuardRunReport.Disabled"/>；
+    /// 已有巡检在进行时返回 <see cref="GuardRunReport.AlreadyRunningReport"/>。
+    /// </returns>
+    /// <remarks>
+    /// 🔴 单实例保护在这里，而不在任何调用方：三个入口（守卫进程 / 管理端启动时后台跑 /
+    /// 「真跑守卫」按钮）都调它，保护放在调用方就要复制三遍，漏一处等于没有保护。
+    /// 两层锁各管一段：<c>_runningInProcess</c> 管同进程重入（内核互斥体对此完全透明），
+    /// 命名互斥体管跨进程。
+    /// </remarks>
     public GuardRunReport RunOnce()
+    {
+        // 先抢进程内标志再抢内核互斥体：反过来会出现"本进程已经有一轮在跑，却先在内核上
+        // 占了个位再白等一轮"的顺序问题。
+        if (Interlocked.CompareExchange(ref _runningInProcess, 1, 0) != 0)
+        {
+            _log.Info("本进程内已有守卫巡检在进行，本次跳过（进程内重入保护）。");
+            return GuardRunReport.AlreadyRunningReport();
+        }
+
+        try
+        {
+            Mutex? mutex = null;
+            try
+            {
+                mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var acquired);
+                if (!acquired)
+                {
+                    // 🔴 这里直接 return，**不能**落到下面的 finally 去 ReleaseMutex：
+                    // 没拥有就释放会抛 ApplicationException，把"有人在跑"变成"这次崩了"。
+                    _log.Info("已有守卫实例在运行（单实例互斥命中），本次跳过。");
+                    return GuardRunReport.AlreadyRunningReport();
+                }
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                // 🔴 拿不到互斥体 ≠ 有人在跑。可能是权限、也可能互斥名被别的东西占着。
+                // 这里**不能**抛：一次巡检的机会比一个"完美"的并发保护更值钱，
+                // 而真出并发时的后果只是多跑一轮（幂等，不会损坏状态）。
+                _log.Error(ex, "获取守卫单实例互斥体失败，本次巡检照常执行（并发保护不可用）");
+                return RunInspection();
+            }
+
+            try
+            {
+                return RunInspection();
+            }
+            finally
+            {
+                // 释放与 Dispose 的顺序：先 ReleaseMutex 再 Dispose。
+                // 反过来会让内核对象在仍被当前线程拥有时被 Dispose，
+                // 留下一个"已放弃但仍存在"的锁 —— 同名 Mutex 在本进程内后续构造
+                // 会一直拿到 isFirst=true（内核对象还在）。
+                mutex!.ReleaseMutex();
+                mutex.Dispose();
+            }
+        }
+        finally
+        {
+            // 无论走到哪条分支都要放掉标志，否则一次异常就让本进程**永远**跑不了守卫 ——
+            // 而守卫是周期任务，这种"从此静默停摆"是最坏的一类失败。
+            Interlocked.Exchange(ref _runningInProcess, 0);
+        }
+    }
+
+    /// <summary>真正干活的巡检（<see cref="RunOnce"/> 已确保单实例之后调用）。</summary>
+    private GuardRunReport RunInspection()
     {
         AppConfig config;
         try

@@ -351,6 +351,143 @@ public sealed class GuardServiceTests
             Store.Save(config);
         }
 
+        /// <summary>把守卫档位写进配置（用于在"关闭 / 启用"之间来回切换）。</summary>
+        public void SeedGuardMode(GuardMode mode)
+        {
+            var config = Store.Snapshot();
+            config.Settings.GuardMode = mode;
+            Store.Save(config);
+        }
+
         public void Dispose() => _temp.Dispose();
+    }
+
+    // ── G3：单实例与进程内防重入（D74）───────────────────────────────────
+
+    [Fact]
+    public async Task RunOnce_ConcurrentCallInSameProcess_ReturnsAlreadyRunning_AndSkipsInspection()
+    {
+        // 🔴 本条钉住的是**内核互斥体挡不住**的那一半：同进程里两次
+        // new Mutex(initiallyOwned: true, 同名, out isFirst) 拿到的是同一个内核对象，
+        // 两次 isFirst 都是 true。没有进程内那一层，并发两轮就会真的跑起来 ——
+        // 两轮都写基线、都写归档，可能都发通知，表现为"守卫日志里同一时刻两条巡检记录"
+        // 与"用户莫名收到两条一样的通知"。
+        //
+        // 刻意用**真并发**（后台线程 + 阻塞 Scan）而不是顺序调两次：顺序调两次时第一轮
+        // 已经收尾，两层锁都正确地放开了，测不出任何东西 —— 一条绿得毫无意义的用例。
+        using var entered = new SemaphoreSlim(0, 1);
+        using var mayFinish = new SemaphoreSlim(0, 1);
+        var source = new BlockingStartupSource(entered, mayFinish);
+        using var harness = new Harness(GuardMode.OnceAfterLogin, source);
+
+        var first = Task.Run(harness.Service.RunOnce, TestContext.Current.CancellationToken);
+
+        // 等第一轮真的进到扫描里再发起第二次，否则第二次可能在第一轮抢标志之前就跑了。
+        Assert.True(
+            await entered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken),
+            "第一轮巡检未在预期时间内进入扫描");
+
+        var second = harness.Service.RunOnce();
+
+        Assert.True(second.AlreadyRunning);
+        // 三种"没巡检"的状态必须互不混淆：折进 GuardDisabled 会让人以为用户关了守卫，
+        // 折进 ConfigUnavailable 会让人以为程序读不到自己的配置。
+        Assert.False(second.GuardDisabled);
+        Assert.False(second.ConfigUnavailable);
+
+        // 第二次**一个字节都没碰**：扫描只应被进入过一次。
+        Assert.Equal(1, source.ScanCount);
+
+        mayFinish.Release();
+        var firstReport = await first;
+
+        Assert.False(firstReport.AlreadyRunning);
+    }
+
+    [Fact]
+    public async Task RunOnce_AfterAPreviousRunFinished_CanRunAgain()
+    {
+        // 反向护栏：防重入标志与互斥体都必须在结束后**放掉**。
+        // 漏放的话，一次异常就让本进程永远跑不了守卫 —— 而守卫是周期任务，
+        // 这种"从此静默停摆"是最坏的一类失败。
+        using var harness = new Harness(GuardMode.OnceAfterLogin, new FakeStartupSource());
+
+        var first = harness.Service.RunOnce();
+        var second = harness.Service.RunOnce();
+
+        Assert.False(first.AlreadyRunning);
+        Assert.False(second.AlreadyRunning);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public void RunOnce_EarlyReturnPath_StillReleasesTheInProcessFlag()
+    {
+        // 🔴 防重入标志必须在**每一条**分支上放掉，包括那些不巡检就 return 的。
+        // 三条提前返回各有各的触发条件，而它们都发生在拿到标志之后：
+        //   守卫关闭 / 配置不可用 / 已在跑
+        // 只要其中一条忘了放，本进程就**从此再也跑不了守卫** —— 而守卫是周期任务，
+        // 这种"静默停摆"没有任何迹象，是最坏的一类失败。
+        //
+        // 每一步都用**同一次 Harness** 连续跑，配置在中间改掉，
+        // 这样卡死的标志一定会让后一步报 AlreadyRunning。
+        using var harness = new Harness(GuardMode.Disabled, new FakeStartupSource());
+
+        // ① 守卫关闭：提前返回，不巡检。
+        Assert.True(harness.Service.RunOnce().GuardDisabled);
+
+        // ② 配置不可用：同样提前返回（档位先改成启用，好让"返回原因"只可能来自配置不可用）。
+        harness.SeedGuardMode(GuardMode.OnceAfterLogin);
+        harness.Store.LoadException =
+            new StartupOperationException(StartupFailureReason.ConfigCorrupted, "x", "配置损坏");
+        Assert.True(harness.Service.RunOnce().ConfigUnavailable);
+
+        // ③ 换成能正常巡检的配置 —— 若前两步里有任何一步卡死了标志，这里就会报 AlreadyRunning。
+        harness.Store.LoadException = null;
+        var report = harness.Service.RunOnce();
+
+        Assert.False(report.AlreadyRunning);
+        Assert.False(report.GuardDisabled);
+        Assert.False(report.ConfigUnavailable);
+    }
+
+    /// <summary>卡住 <c>Scan</c> 的来源，用来把一轮巡检"钉"在运行中以便制造真并发。</summary>
+    private sealed class BlockingStartupSource(SemaphoreSlim entered, SemaphoreSlim mayFinish)
+        : IStartupSource
+    {
+        private int _scanCount;
+
+        public int ScanCount => Volatile.Read(ref _scanCount);
+
+        public StartupSource Kind => StartupSource.Registry;
+
+        public StartupScope Scope => StartupScope.Hkcu;
+
+        public string DisplayName => "阻塞来源";
+
+        public bool RequiresElevation => false;
+
+        public IReadOnlyList<StartupEntry> Scan(IReadOnlySet<string> takenOverKeys)
+        {
+            Interlocked.Increment(ref _scanCount);
+
+            entered.Release();
+
+            // 🔴 这里必须真的**等**：不阻塞的话第一轮会瞬间跑完，"第二轮撞上第一轮"
+            // 根本不会发生，用例会绿得毫无意义。
+            mayFinish.Wait(TestContext.Current.CancellationToken);
+
+            return [];
+        }
+
+        public void Disable(StartupEntry entry)
+        {
+        }
+
+        public void Enable(StartupEntry entry)
+        {
+        }
+
+        public bool Exists(StartupEntry entry) => true;
     }
 }

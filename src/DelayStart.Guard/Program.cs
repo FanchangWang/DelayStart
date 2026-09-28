@@ -32,23 +32,15 @@ namespace DelayStart.Guard;
 /// </remarks>
 internal static class Program
 {
-    /// <summary>单实例互斥名（与调度端 / 管理端同款做法）。</summary>
-    private const string SingleInstanceMutexName = @"Local\DelayStart.Guard";
-
     /// <summary>守卫主入口。</summary>
     /// <returns>进程退出码：0 正常；1 巡检未完成。</returns>
     [STAThread]
     private static int Main()
     {
         // ── 第 0 步：入口自检 ────────────────────────────────────────────────
-        // 顺序有讲究：先互斥再查提权。反过来会有一个很吵的场景 ——
-        // 用户连点几次双击，每次都先写一行"未提权"日志。
-        using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isFirstInstance);
-        if (!isFirstInstance)
-        {
-            GuardLog.Info("已有守卫实例在运行（单实例互斥命中），本次直接退出。");
-            return 0;
-        }
+        // 🔴 单实例互斥**不在这里**：它已下沉到 GuardService.RunOnce() 内部（G3）。
+        // 守卫是三个入口里最晚才出现的那个 —— 管理端启动时也会跑一次巡检 ——
+        // 保护放在这里就只护住了三个入口中的一个。
 
         if (!ElevationCheck.IsElevated())
         {
@@ -87,6 +79,14 @@ internal static class Program
         {
             GuardLog.Error(ex, "守卫巡检未完成");
             return 1;
+        }
+
+        if (report.AlreadyRunning)
+        {
+            // 🔴 并发保护命中，**不是**故障：返回 0。
+            // RunOnce 内部已经写过一条 Info，这里不再重复写 —— 同一条事实记两遍，
+            // 下次翻日志的人会以为发生了两次。
+            return 0;
         }
 
         if (report.GuardDisabled)

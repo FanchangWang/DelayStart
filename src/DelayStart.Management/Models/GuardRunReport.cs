@@ -41,6 +41,17 @@ public sealed record GuardRunReport
     /// <summary>本次扫描到的条目数（不全的扫描也会给出已扫到的数量）。</summary>
     public int ScannedCount { get; init; }
 
+    /// <summary>
+    /// 本次**没有**巡检，因为已有一次巡检正在进行（单实例互斥 / 进程内重入命中）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="ConfigUnavailable"/> 一样是"必须能区分"的第三种状态，理由不同：
+    /// 这一档**不是故障**，它说明并发保护起了作用。若把它折进 <see cref="ConfigUnavailable"/>，
+    /// 日志里会出现"配置不可用"，而实际上配置好得很 —— 下一个人查日志会白查很久。
+    /// 若折进 <see cref="GuardDisabled"/>，则日志读起来像用户关了守卫，事实并非如此。
+    /// </remarks>
+    public bool AlreadyRunning { get; init; }
+
     /// <summary>写回纠正的结果。</summary>
     public IReadOnlyList<GuardCorrectionOutcome> Corrections { get; init; } = [];
 
@@ -76,6 +87,10 @@ public sealed record GuardRunReport
     /// <summary>构造"配置不可用、巡检无法开始"的结果。</summary>
     /// <returns>未执行任何扫描的结果。</returns>
     public static GuardRunReport ConfigUnavailableReport() => new() { ConfigUnavailable = true };
+
+    /// <summary>构造"已有巡检在进行、本次跳过"的结果。</summary>
+    /// <returns>未执行任何扫描的结果。</returns>
+    public static GuardRunReport AlreadyRunningReport() => new() { AlreadyRunning = true };
 }
 
 /// <summary>

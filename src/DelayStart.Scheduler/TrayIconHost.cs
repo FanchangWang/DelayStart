@@ -12,9 +12,13 @@ using DelayStart.Core.Models;
 /// 气泡通知点击 → 打开管理端调度日志（D18）。
 /// </para>
 /// <para>
-/// 🔴 tooltip 上限 127 字符且不支持换行（<c>szTip</c> 缓冲 128 字符，Vista+ 单行显示；
-/// 标准托盘 tooltip 是 Shell 拥有的单行控件，无法多行）—— 写入时硬截断，超长文案宁可少一个字
-/// 也不能让 <c>Shell_NotifyIcon</c> 报错。
+/// 🔴 tooltip 上限 127 字符（<c>szTip</c> 缓冲 128 字符，含终止符）—— 写入时硬截断，
+/// 超长文案宁可少一个字也不能让 <c>Shell_NotifyIcon</c> 报错。
+/// 🔴 <b>多行是支持的</b>（<c>\r\n</c>，v0.6.1 起三行）：原先注释写的"不支持换行、标准托盘
+/// tooltip 是单行控件"是**错的**，托盘 tooltip 本来就能按 \r\n 分行显示。
+/// 所以真正的约束不是"单行"，而是 127 字的总预算 —— 文案合成放在 Core 的
+/// <see cref="Core.Services.SchedulerTip"/>，它在合成时就把全文压进预算、
+/// 且只截第三行，而不是写完再让这里砍（砍掉一半的句子比短句糟糕得多）。
 /// </para>
 /// <para>
 /// 🔴 右键菜单必须先 <c>SetForegroundWindow</c> 再 <c>TrackPopupMenu</c>，选完或点掉后补发

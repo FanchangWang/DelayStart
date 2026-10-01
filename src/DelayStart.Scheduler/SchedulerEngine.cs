@@ -1039,15 +1039,14 @@ internal sealed class SchedulerEngine
 
     private string BuildTooltip()
     {
-        var done = _items.Count(static runtime => runtime.Result.State == RunItemState.Done);
+        var done = _items.Count(static runtime =>
+            runtime.Result.State is RunItemState.Done or RunItemState.Failed);
         var failed = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
         var total = _record.PlannedCount;
 
         if (_finishing)
         {
-            return failed > 0
-                ? $"延时启动完成 · {failed} 项失败 · 点击查看"
-                : $"延时启动完成 · {total}/{total} 成功";
+            return SchedulerTip.Finished(total, failed);
         }
 
         var next = _items
@@ -1057,16 +1056,19 @@ internal sealed class SchedulerEngine
 
         if (next.Count == 0)
         {
-            return "延时启动 · 正在完成…";
+            return SchedulerTip.Building(done, total, nextName: null, remainingSeconds: 0);
         }
 
-        // D3 批复（2026-09-21）：「n/m 已启动 · 下一项 n 秒」进度摘要，上限 127 字符。
         var first = next[0];
         var remaining = first.LaunchAt - _stopwatch.Elapsed;
 
-        return remaining <= TimeSpan.FromSeconds(2)
-            ? $"延时启动 {done}/{total} 已启动 · 正在启动 {first.Result.Name}…"
-            : $"延时启动 {done}/{total} 已启动 · 下一项 {(int)Math.Ceiling(remaining.TotalSeconds)} 秒";
+        // 🔴 文案合成在 Core 的 SchedulerTip 里（调度端没有测试工程，纯逻辑放这儿就等于没测试），
+        // 三行的分工与 127 字符预算都在那边写清楚了。
+        return SchedulerTip.Building(
+            done,
+            total,
+            first.Result.Name,
+            (int)Math.Ceiling(Math.Max(0, remaining.TotalSeconds)));
     }
 
     /// <summary>完成态卡片副文案：首个失败项的名称 + 原因（面板宽度有限，只报第一条）。</summary>

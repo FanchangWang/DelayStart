@@ -1049,14 +1049,22 @@ internal sealed class SchedulerEngine
 
     private string BuildTooltip()
     {
-        var done = _items.Count(static runtime =>
-            runtime.Result.State is RunItemState.Done or RunItemState.Failed);
+        // 🔴 四个计数**分开数**，不要合并成一个"已完成"（用户 2026-10-02 实测）：
+        // 合并之后"已启动 6/8"里的 8 永远走不到头 —— 那 2 项是跳过的（进程已在跑等），
+        // 用户对不上账。而且原先的"已启动"其实含 Failed，名不副实。
+        var succeeded = _items.Count(static runtime => runtime.Result.State == RunItemState.Done);
         var failed = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
-        var total = _record.PlannedCount;
+        var skipped = _items.Count(static runtime => runtime.Result.State == RunItemState.Skipped);
+
+        // 🔴 total 用 `_items.Count` 而不是 `_record.PlannedCount`：后者在把
+        // "今天不在周期内""目标已缺失"两类项追加进 `_record.Items` **之前**赋值，
+        // 口径上等于 plan.Count，而 `_items` 也正好是 plan.Count —— 两者相等，
+        // 但写 `_items.Count` 能让"总数 = 这四个计数之和"这件事在代码里自洽可查。
+        var total = _items.Count;
 
         if (_finishing)
         {
-            return SchedulerTip.Finished(total, failed);
+            return SchedulerTip.Finished(succeeded, failed, skipped, total);
         }
 
         var next = _items
@@ -1066,7 +1074,7 @@ internal sealed class SchedulerEngine
 
         if (next.Count == 0)
         {
-            return SchedulerTip.Building(done, total, nextName: null, remainingSeconds: 0);
+            return SchedulerTip.Building(succeeded, failed, skipped, total, nextName: null, remainingSeconds: 0);
         }
 
         var first = next[0];
@@ -1075,7 +1083,9 @@ internal sealed class SchedulerEngine
         // 🔴 文案合成在 Core 的 SchedulerTip 里（调度端没有测试工程，纯逻辑放这儿就等于没测试），
         // 三行的分工与 127 字符预算都在那边写清楚了。
         return SchedulerTip.Building(
-            done,
+            succeeded,
+            failed,
+            skipped,
             total,
             first.Result.Name,
             (int)Math.Ceiling(Math.Max(0, remaining.TotalSeconds)));
@@ -1101,7 +1111,11 @@ internal sealed class SchedulerEngine
         if (!_finishing)
         {
             var waiting = _items.Count(static runtime => runtime.Result.State == RunItemState.Waiting);
-            return $"启动中 · {done}/{total} 已启动 · 剩余 {waiting} 项";
+
+            // 🔴 跳过必须在这里也出现（与托盘提示同一个理由）：done + skipped + failed + waiting
+            // 才等于 total，只报 done/total 的话，那个分母永远走不到头。
+            return $"启动中 · {done}/{total} 已启动"
+                + $"{(skipped > 0 ? $" · 跳过 {skipped}" : string.Empty)} · 剩余 {waiting} 项";
         }
 
         return failed > 0 || skipped > 0

@@ -19,7 +19,8 @@ namespace DelayStart.Core.Services;
 /// <list type="number">
 /// <item><description><b>DelayStart</b> —— 品牌。通知中心与任务栏都可能把它裁成一行，
 /// 第一行必须是名字，否则用户看到一段没头没尾的状态文字。</description></item>
-/// <item><description><b>进度</b> —— 已启动几项 / 共几项，或收尾后的成功失败计数。</description></item>
+/// <item><description><b>进度</b> —— 已成功启动几项 / 共几项，失败与跳过**各自单列**。
+/// 三者缺一，用户就算不出账（2026-10-02 用户实测：跳过没统计，两边数字对不上）。</description></item>
 /// <item><description><b>下一项</b> —— 名称与倒计时。这两件事原先挤在同一行里，
 /// 结果"下一项 12 秒"永远只有一个数字而没有名字，用户不知道在等谁。</description></item>
 /// </list>
@@ -51,15 +52,28 @@ public static class SchedulerTip
     private const int ImminentSeconds = 2;
 
     /// <summary>合成"启动中"的提示。</summary>
-    /// <param name="doneCount">已启动（含失败）条目数。</param>
+    /// <param name="succeededCount">已**成功**启动的条目数。</param>
+    /// <param name="failedCount">已失败的条目数。</param>
+    /// <param name="skippedCount">已跳过的条目数（进程已在跑等）。</param>
     /// <param name="totalCount">本轮计划条目数。</param>
     /// <param name="nextName">下一项的名称；没有下一项时传 <see langword="null"/>。</param>
     /// <param name="remainingSeconds">距离下一项启动的秒数（向上取整）。</param>
     /// <returns>三行提示全文。</returns>
-    public static string Building(int doneCount, int totalCount, string? nextName, int remainingSeconds)
+    /// <remarks>
+    /// 🔴 <b>跳过必须与成功/失败分开报</b>（用户 2026-10-02 实测）：
+    /// 「已启动 6/8」而 8 项里有 2 项是跳过的，用户对不上账 —— 他看到的是一个
+    /// 永远走不到头的进度条。四个计数缺一不可，签名就是为此拆开的。
+    /// </remarks>
+    public static string Building(
+        int succeededCount,
+        int failedCount,
+        int skippedCount,
+        int totalCount,
+        string? nextName,
+        int remainingSeconds)
         => Compose(
             BrandLine,
-            $"已启动 {doneCount}/{totalCount}",
+            ProgressLine(succeededCount, failedCount, skippedCount, totalCount, "已启动"),
             nextName is null
                 ? "正在完成…"
                 : remainingSeconds <= ImminentSeconds
@@ -67,14 +81,65 @@ public static class SchedulerTip
                     : $"下一项：{nextName} · {remainingSeconds} 秒后");
 
     /// <summary>合成"已收尾"的提示。</summary>
-    /// <param name="totalCount">本轮计划条目数。</param>
+    /// <param name="succeededCount">成功启动的条目数。</param>
     /// <param name="failedCount">失败条目数。</param>
+    /// <param name="skippedCount">跳过条目数。</param>
+    /// <param name="totalCount">本轮计划条目数。</param>
     /// <returns>三行提示全文。</returns>
-    public static string Finished(int totalCount, int failedCount)
-        => Compose(
+    /// <remarks>
+    /// 🔴 <b>「全部启动」只在真的全部启动时才许出现</b>：原先的条件只有
+    /// <c>failedCount == 0</c>，于是"6 项启动 + 2 项跳过"会被写成
+    /// 「调度完成 · 8 项全部启动」—— 那是**对用户说假话**，而且是唯一一处
+    /// 用户不会再去查日志的地方（托盘提示只停留两秒）。
+    /// </remarks>
+    public static string Finished(int succeededCount, int failedCount, int skippedCount, int totalCount)
+    {
+        var clean = failedCount == 0 && skippedCount == 0;
+
+        return Compose(
             BrandLine,
-            failedCount > 0 ? $"调度完成 · {failedCount} 项失败" : $"调度完成 · {totalCount} 项全部启动",
-            failedCount > 0 ? "点托盘图标看调度日志" : "即将退出");
+            clean
+                ? $"调度完成 · {totalCount} 项全部启动"
+                : "调度完成 · " + ProgressLine(succeededCount, failedCount, skippedCount, totalCount, "启动"),
+            failedCount > 0
+                ? "点托盘图标看调度日志"
+                : skippedCount > 0
+                    ? "跳过的项未启动，点托盘看原因"
+                    : "即将退出");
+    }
+
+    /// <summary>拼"成功/失败/跳过"的计数段。</summary>
+    /// <param name="succeededCount">成功数。</param>
+    /// <param name="failedCount">失败数。</param>
+    /// <param name="skippedCount">跳过数。</param>
+    /// <param name="totalCount">总数。</param>
+    /// <param name="label">计数的标签（"已启动" / "启动"）。</param>
+    /// <returns>计数段。</returns>
+    /// <remarks>
+    /// 🔴 **失败与跳过往后才出现**：都是 0 时不占位置，而这两位数字是用户唯一
+    /// 需要在"一切正常"时被排除掉视线的东西。
+    /// </remarks>
+    private static string ProgressLine(
+        int succeededCount,
+        int failedCount,
+        int skippedCount,
+        int totalCount,
+        string label)
+    {
+        var text = $"{label} {succeededCount}/{totalCount}";
+
+        if (failedCount > 0)
+        {
+            text += $" · 失败 {failedCount}";
+        }
+
+        if (skippedCount > 0)
+        {
+            text += $" · 跳过 {skippedCount}";
+        }
+
+        return text;
+    }
 
     /// <summary>合成三行并把全文压进 <see cref="MaxLength"/>。</summary>
     /// <param name="brand">第一行。</param>

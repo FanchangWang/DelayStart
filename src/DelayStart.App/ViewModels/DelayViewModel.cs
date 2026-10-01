@@ -933,15 +933,17 @@ public sealed partial class DelayViewModel : ObservableObject
             {
                 IsSchedulerRunning = true;
                 _toast.ShowSuccess("调度已启动", "本次启动计划正在执行。");
-                    _ = WatchSchedulerExitAsync();
+                _ = WatchSchedulerExitAsync();
             }
-
-            IsSchedulerRunning = false;
-            _log.Error($"启动调度端后 {SchedulerTakeoverTimeoutSeconds} 秒内未抢到单实例互斥体。");
-            _toast.ShowError(
-                "调度未接管",
-                $"已拉起进程，但 {SchedulerTakeoverTimeoutSeconds} 秒内没有接管。"
-                + "请在「查看调度日志」里看它为什么退出。");
+            else
+            {
+                IsSchedulerRunning = false;
+                _log.Error($"启动调度端后 {SchedulerTakeoverTimeoutSeconds} 秒内未抢到单实例互斥体。");
+                _toast.ShowError(
+                    "调度未接管",
+                    $"已拉起进程，但 {SchedulerTakeoverTimeoutSeconds} 秒内没有接管。"
+                    + "请在「查看调度日志」里看它为什么退出。");
+            }
         }
         catch (Exception ex)
         {

@@ -1,6 +1,6 @@
 using DelayStart.Core.Models;
 
-namespace DelayStart.App.ViewModels;
+namespace DelayStart.Core.Services;
 
 /// <summary>
 /// 把 <c>Core</c> 的枚举翻译成界面文案。
@@ -85,7 +85,28 @@ public static class DisplayText
 
     /// <summary>延时秒数 → 界面文案（短格式：不带「登录后」前缀）。</summary>
     /// <param name="seconds">相对登录时刻的绝对秒数。</param>
-    /// <returns>形如 <c>立即</c> / <c>30 秒</c> / <c>2 分 30 秒</c> / <c>2 分</c>。</returns>
+    /// <returns>形如 <c>立即</c> / <c>45秒</c> / <c>2分钟</c> / <c>2分30秒</c>。</returns>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b>2026-10-02 用户定的三档格式</b>：<c>nn秒</c> / <c>nn分钟</c> / <c>nn分mm秒</c>，
+    /// <b>不带空格</b>、整分钟用「分钟」而不是「分」。列宽按这份格式重算过
+    /// （延时列 156 → 88，见 <c>DelayPage.xaml</c> 的列宽注释）。
+    /// </para>
+    /// <para>
+    /// 为什么整分钟要写全「分钟」：<c>2分</c> 与 <c>2分30秒</c> 的第一个字段长得一样，
+    /// 读起来像被截断了；写成「2分钟」两种形态一眼可分。
+    /// </para>
+    /// <para>
+    /// 为什么没有「小时」这一档：<b>延时是"登录后多久启动"，小时级延时没有意义</b>
+    /// —— 那个量级上用户宁可自己晚点开机。这也让最宽的一档停在三位数分钟
+    /// （上界 604800 秒 = 10080 分钟，见 <c>DelayEditorDialog.FallbackMaxDelay</c>）。
+    /// </para>
+    /// <para>
+    /// 秒数<b>不补零</b>（<c>2分5秒</c> 而不是 <c>2分05秒</c>）：补零是为了让同列的字宽
+    /// 对齐，而对齐该由布局给位置、不是靠往字里塞空格（<c>pitfalls.md</c> 十九）。
+    /// 何况这一列宽度充裕，两种写法都放得下。
+    /// </para>
+    /// </remarks>
     public static string DelayOf(int seconds)
     {
         if (seconds <= 0)
@@ -94,10 +115,10 @@ public static class DisplayText
         }
 
         return seconds < 60
-            ? $"{seconds} 秒"
+            ? $"{seconds}秒"
             : seconds % 60 == 0
-                ? $"{seconds / 60} 分"
-                : $"{seconds / 60} 分 {seconds % 60} 秒";
+                ? $"{seconds / 60}分钟"
+                : $"{seconds / 60}分{seconds % 60}秒";
     }
 
     /// <summary>延时秒数 → 「登录后 …」文案（设置页的预设延时列表用，2026-09-23 批复 24）。</summary>

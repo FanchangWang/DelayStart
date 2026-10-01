@@ -173,24 +173,27 @@
                                         <ColumnDefinition Width="26" />
                                         <ColumnDefinition Width="36" />
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="156" />
+                                        <ColumnDefinition Width="88" />
                                         <ColumnDefinition Width="88" />
                                         <ColumnDefinition Width="54" />
                                         <ColumnDefinition Width="54" />
                                         <ColumnDefinition Width="64" />
                                         <ColumnDefinition Width="168" />
                                     </Grid.ColumnDefinitions>
-                                    <!--
+                    <!--
                                         🔴 列宽按**实际内容的最长值**定，不是拍脑袋（2026-10-02 用户批复）。
                                         下面每个数字后面写清它由什么撑起来，改文案时要照着复核：
 
                                           26  #      最多 3 位序号（序号列头就 1 个字符）
                                           36  图标    D30：图标按源显示为 32 DIP
                                           *   程序    吸收剩余空间；名字 / 命令行 / 来源三行
-                                          156 延时    🔴 最宽是「登录后 1 分钟（60 秒）」≈150px
-                                                     （LogonDelayOf 的分钟档文案）。
-                                                     原值 90 会把分钟档**剪掉后半截**，
-                                                     而这一列没有 TextTrimming —— 是硬裁。
+                                          88  延时    格式是用户定的三档 `nn秒` / `nn分钟` / `nn分mm秒`
+                                                     （无空格，Core 的 DisplayText.DelayOf）。
+                                                     最宽的一档是编辑器上界 604800 秒减 1 拆开
+                                                     = 「10079分59秒」≈ 7×7.8 + 2×14 ≈ 83px。
+                                                     🔴 原值 156 是按**另一个函数**（LogonDelayOf，
+                                                     「登录后 2 分 30 秒（150 秒）」）算的 ——
+                                                     那一列用的是 DelayOf，算错了，白占 68px。
                                           88  周期    「法定（工作）」6 字（最长内置档）
                                                      + 下方独立的「今天」「明天」提示行
                                           54  身份    「普通用户」4 字，Caption 12px ⇒ 48
@@ -199,7 +202,7 @@
                                           168 操作    编辑 40 + 移出延时 64 + 启动 40 + 间距 12 = 156，
                                                      失效行是「删除 40 + 转为手动 64 + 启动 40」同宽
 
-                                        固定列合计 646（原 710），省下的 64 全给程序列。
+                                        固定列合计 578（原 710），省下的 132 全给程序列。
                                     -->
                                     <TextBlock
                                         Grid.Column="0"
@@ -259,7 +262,7 @@
                                                         <ColumnDefinition Width="26" />
                                                         <ColumnDefinition Width="36" />
                                                         <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="156" />
+                                                        <ColumnDefinition Width="88" />
                                                         <ColumnDefinition Width="88" />
                                                         <ColumnDefinition Width="54" />
                                                         <ColumnDefinition Width="54" />
@@ -356,14 +359,20 @@
                                                             TextTrimming="CharacterEllipsis" />
                                                     </StackPanel>
 
-                                                    <!-- 批复 7：延时、身份拆成两列 -->
+                                                    <!-- 批复 7：延时、身份拆成两列。
+                                                         🔴 用 <c>DisplayText.DelayOf</c>（<c>nn秒</c> / <c>nn分钟</c> / <c>nn分mm秒</c>），
+                                                         不是 <c>LogonDelayOf</c> —— 后者是设置页预设列表那一档，带「登录后 …（150 秒）」前缀，
+                                                         宽得多。列宽按 DelayOf 的输出算，别再按 LogonDelayOf 算（v0.6.1 就算错过一次）。
+                                                         TextTrimming 是兜底：万一真填了接近编辑器上界（7 天）的延时，
+                                                         宁可显示省略号，也不要把半个字硬切掉。
+                                                    -->
                                                     <TextBlock
                                                         Grid.Column="3"
                                                         VerticalAlignment="Center"
-                                                        Text="{x:Bind DelayText}" />
-
+                                                        Text="{x:Bind DelayText}"
+                                                        TextTrimming="CharacterEllipsis" />
                                                     <!--
-                                                        周期列（v0.6.1）：独立成一列，宽 96，可三行自适应。
+                                                 周期列（v0.6.1）：独立成一列，宽 88，可三行自适应。
                                                         第一行周期名（**所有**周期都显示，包括内置的「每天」——
                                                         留空会被读成"没设周期"，而默认档恰恰是最常见的值）。
                                                         第二、三行**只显示不启动的那天**：今天跑就留空，明天不跑才显「明天」。

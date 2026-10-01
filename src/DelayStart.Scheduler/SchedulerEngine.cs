@@ -88,8 +88,22 @@ internal sealed class SchedulerEngine
     /// 没有第二个进程需要等，收尾只剩"什么时候退"一个决定，CompletionPolicy 随之删除。
     /// </summary>
 
-    /// <summary>通知中转器的降权拉起器（懒建：只有真要发通知时才需要）。</summary>
-    private DeElevatedProcessLauncher? _notifyLauncher;
+    /// <summary>
+    /// 辅助进程拉起器（懒建）：既发"发系统通知"（<b>降权</b>拉起通知中转器）、
+    /// 也发"启动守卫"（<b>继承提权</b>拉起 <c>DelayStart.Guard.exe</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>本类不是 <see cref="IProcessLauncher"/></b>：接口住在 Core 且只有
+    /// <c>Launch(DelayedItem)</c> 一个成员，够不着 <c>LaunchResultEvaluator</c> 的纯判定要能单测；
+    /// 而 Core 的 AOT 门禁不允许它引用 <c>Process.Start</c>。降权探路需要大量
+    /// <c>LaunchAuxiliary</c> / <c>LaunchElevatedAuxiliary</c> 的强类型参数和几处
+    /// <c>CreateProcess</c> 的细节，薄封装更适合只留在 Scheduler 里，依赖方向上零破例。
+    /// <para>
+    /// 字段懒建还有个并发理由：调度线程与 fire-and-forget 的收尾路径都可能在首次使用时
+    /// 撞上，构造提前到构造函数里既无必要也容易在它之前就去碰配置。
+    /// </para>
+    /// </remarks>
+    private DeElevatedProcessLauncher? _auxiliaryLauncher;
 
     /// <summary>构造调度引擎。</summary>
     public SchedulerEngine(
@@ -779,6 +793,16 @@ internal sealed class SchedulerEngine
         // N5：通知是通知，面板是面板 —— 面板已于 v0.6.1 取消，这里只剩"发不发系统通知"一件事。
         SendCompletionNotification(failedCount);
 
+        // 🔴 S1.5：本轮收尾后再跑一次守卫（fire-and-forget）。
+        //
+        // 覆盖一个真实场景：被接管的程序启动后可能把 StartupApproved 软禁用标记翻回启用，
+        // 导致下次登录被系统重复启动。守卫在本轮**最终退出前**纠正一次，
+        // 落在下次登录之前 —— 效果与"每个条目启动后立刻纠正"等价，却只扫一轮。
+        //
+        // 位置在「归档 → 通知」之后、「退不退」之前：此时"最新 RunId"归档里已经有了，
+        // 守卫读到的系统状态是**最终状态**。
+        RequestGuardRun();
+
         // 🔴 收尾**只有**一个决定：什么时候退。
         //
         // 原先这里还有一个"等不等面板关闭"的分叉，由 Core 的 CompletionPolicy 判定
@@ -787,14 +811,82 @@ internal sealed class SchedulerEngine
         // CompletionPolicy 与它的测试一并删除。
         //
         // 两种速度：菜单「跳过剩余任务并退出」要立刻离开（不等 Launching 条目的
-        // 1.5 秒复查窗口）；其余情况把 _quitAt 拨到当下，由紧随其后的同一次 Tick 判定退出。
+        // 1.5 秒复查窗口，也不等下面的通知停留）；其余情况把 _quitAt 拨到
+        // 「当下 + 通知停留时长」，让用户有时间读完系统通知。
         if (quitImmediately)
         {
             Quit();
             return;
         }
 
-        _quitAt = _stopwatch.Elapsed;
+        _quitAt = _stopwatch.Elapsed + CompletionStaySeconds;
+    }
+
+    /// <summary>
+    /// 发完系统通知后、退出前停留的秒数（v0.6.1 新增，F7.3）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 面板取消后调度端退出即托盘消失，那条系统通知就成了用户在这次登录里
+    /// **最后**一条线索 —— 立刻退出会让它来不及被读。所以收尾要在这里停一下。
+    /// <para>
+    /// 取 <see cref="CompletionStaySeconds"/> 这个经验值而不是去检测通知是否消失：
+    /// 横幅停留时长由系统与用户的辅助功能设置决定、不归我们管，而且用户手动划走通知时
+    /// 反而"检测不到"，那种情况下等满固定时长只是白等几秒。
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan CompletionStaySeconds = TimeSpan.FromSeconds(8);
+
+    /// <summary>请求守卫在收尾后跑一次巡检（S1.5–S1.7，fire-and-forget）。</summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b>fire-and-forget</b>：启动即返回，不等守卫退出、不读回执。巡检实测中位 528 ms，
+    /// 但那是它<em>独立跑</em>时；这里它与"退出"只差 8 秒，等它没有收益而收尾会被拖住。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>失败只 Warn</b>（S1.7）：exe 缺失 / 拉起失败只记"没能请求巡检"的值。
+    /// 此时归档已经写好、通知已经发过，用户能拿到的结果一条都不少；而"读不懂
+    /// 完整 exe 路径""守护没起来"这类排查线索，**已经在调度日志里留着了**。
+    /// </para>
+    /// <para>
+    /// 🔴 走 <see cref="DeElevatedProcessLauncher.LaunchElevatedAuxiliary"/>：守卫要写 HKLM
+    /// 并要提权注册/修改计划任务，<b>不能</b>走 <c>LaunchAuxiliary</c> —— 后者的存在意义
+    /// 就是降权（拿 explorer 令牌降级到 Medium）。
+    /// </para>
+    /// <para>
+    /// 守卫自己也有单实例互斥体（<c>Local\DelayStart.Guard</c>），所以与计划任务、
+    /// 管理端内联那几路并发时只有一轮会真跑，其余秒退 —— 这一点不需要这里额外处理。
+    /// </para>
+    /// </remarks>
+    private void RequestGuardRun()
+    {
+        // F7.2：设置开关（默认开）。🔴 只管调度收尾后这一次，不管管理端加载数据时的内联处理。
+        if (!Settings.RunGuardAfterSchedule)
+        {
+            _log.Info("设置里关闭了「调度退出前运行一次守卫」，本次收尾未请求巡检。");
+            return;
+        }
+
+        try
+        {
+            var guard = _paths.GuardExecutablePath;
+            if (!File.Exists(guard))
+            {
+                _log.Warn($"守卫程序缺失，本轮收尾未请求巡检：{guard}（安装不完整或文件被删）");
+                return;
+            }
+
+
+            var launcher = _auxiliaryLauncher ??= new DeElevatedProcessLauncher(_log);
+            var outcome = launcher.LaunchElevatedAuxiliary("守卫巡检", guard, arguments: null);
+            if (!outcome.Created)
+            {
+                _log.Warn($"守卫巡检拉起失败：{outcome.FailureMessage}（不影响收尾与退出码）");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(ex, "请求守卫巡检时异常（不影响收尾与退出码）。");
+        }
     }
 
     /// <summary>
@@ -871,7 +963,7 @@ internal sealed class SchedulerEngine
 
             CleanStaleNotifyJobs();
 
-            var launcher = _notifyLauncher ??= new DeElevatedProcessLauncher(_log);
+            var launcher = _auxiliaryLauncher ??= new DeElevatedProcessLauncher(_log);
             var outcome = launcher.LaunchAuxiliary("完成通知", broker, $"\"{jobFile}\"");
             if (outcome.Created)
             {

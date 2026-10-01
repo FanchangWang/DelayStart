@@ -401,6 +401,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     public partial double RetryCount { get; set; }
 
+    /// <summary>调度收尾后是否再跑一次守卫巡检（F7.2），供 ToggleSwitch 双向绑定。</summary>
+    [ObservableProperty]
+    public partial bool RunGuardAfterSchedule { get; set; }
+
     /// <summary>通知策略下拉框下标，与 <see cref="NotifyMode"/> 枚举值一致。</summary>
     [ObservableProperty]
     public partial int NotifyModeIndex { get; set; }
@@ -474,6 +478,7 @@ public partial class SettingsViewModel : ObservableObject
             RebuildCycles();
             RebuildHolidayYears();
             AutoCheckHolidayUpdates = settings.AutoCheckHolidayUpdates;
+            RunGuardAfterSchedule = settings.RunGuardAfterSchedule;
 
             // 🔴 订阅共享状态：自动检查（后台）跑完的那一刻，本页的年份行要跟着更新 ——
             // 否则会出现"数据已经下来了，列表还写着未下载"，用户只能靠重进设置页刷新。
@@ -535,6 +540,22 @@ public partial class SettingsViewModel : ObservableObject
         }
 
         Persist(settings => settings.RetryCount = (int)Math.Clamp(value, 0, 5));
+    }
+
+    /// <summary>「退出前运行一次守卫」开关变化：立即落盘（F7.2）。</summary>
+    /// <param name="value">用户拨到的新值。</param>
+    /// <remarks>
+    /// 🔴 与 <see cref="SetRetryCount"/> 同样要过 <c>_loading</c> 早退：
+    /// 加载配置时属性回写会调到这里，而那时不该把配置又写回去。
+    /// </remarks>
+    public void SetRunGuardAfterSchedule(bool value)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        Persist(settings => settings.RunGuardAfterSchedule = value);
     }
 
     /// <summary>主题被用户改变：经 <see cref="ThemeService"/> 落盘并广播。</summary>

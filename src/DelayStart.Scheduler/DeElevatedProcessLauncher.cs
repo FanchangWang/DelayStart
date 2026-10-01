@@ -213,6 +213,82 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     }
 
     /// <summary>
+    /// 拉起一个<b>继承提权令牌</b>的辅助进程（S2），fire-and-forget ——
+    /// 只回报"进程创建成功与否"，不等待退出、不读任何回执。
+    /// </summary>
+    /// <param name="label">日志里用的动作名（如「守卫巡检」「进度面板」）。</param>
+    /// <param name="executablePath">辅助进程 exe 路径。</param>
+    /// <param name="arguments">命令行参数；可为 <see langword="null"/> 或空。</param>
+    /// <returns>创建结果；失败时调用方只记日志。</returns>
+    /// <remarks>
+    /// <para>
+    /// 🔴🔴 <b>绝不能复用 <see cref="LaunchAuxiliary"/>。</b>后者存在的意义<b>就是降权</b>：
+    /// 它取外壳（explorer）令牌、降成 Medium 再 CreateProcessWithTokenW。
+    /// 守卫与进度面板都<b>必须</b>以管理员身份运行（计划任务 / 命名管道 / 写启动文件夹），
+    /// 走降权那条路的后果是"看起来启动了、其实什么权限都没有"，而且大部分操作会静默失败。
+    /// 这两个方法并排放就是为了让"名字像、行为相反"这件事显眼。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>为什么 <c>UseShellExecute = false</c> 就是"继承提权令牌"</b>：
+    /// 调度端本身由计划任务以 <c>LogonType=Interactive</c> + <c>RunLevel=Highest</c> 拉起
+    /// （D82），本进程已是 High；不经外壳直接 CreateProcess 时子进程默认继承父进程令牌。
+    /// 反过来 <c>UseShellExecute = true</c> 会经 <c>AppInfo</c>，由它按**调用方**身份
+    /// 重新判定，可能降成 Medium —— 那正是 UIAccess 链里 AppInfo 的行为。
+    /// </para>
+    /// <para>
+    /// <b>不指定 <c>WorkingDirectory</c></b>：辅助进程自己的所有路径都经 <c>PathService</c>
+    /// 从系统目录解析（<c>Environment.GetFolderPath</c>），不依赖当前目录。
+    /// </para>
+    /// </remarks>
+    public LaunchOutcome LaunchElevatedAuxiliary(string label, string executablePath, string? arguments)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            throw new ArgumentException("标签不能为空。", nameof(label));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+
+        if (!File.Exists(executablePath))
+        {
+            return LaunchOutcome.Failure($"辅助进程不存在：{executablePath}");
+        }
+
+        try
+        {
+            var start = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                Arguments = arguments ?? string.Empty,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(start);
+
+            int? processId = null;
+            try
+            {
+                if (process is not null)
+                {
+                    processId = process.Id;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // 拿不到句柄不影响"创建成功"这个结论。
+            }
+
+            _log.Info($"『{label}』已以提权身份拉起（PID {processId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "未知"}）。");
+            return LaunchOutcome.Success(processId);
+        }
+        catch (Exception ex)
+        {
+            return LaunchOutcome.Failure($"创建进程失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// UWP 判定（D41，2026-09-20 修复）。
     /// 🔴 <b>不能只看路径前缀</b>：UWP 条目的 <see cref="DelayedItem.Path"/> 存的是<b>裸 AUMID</b>
     /// （<c>&lt;PackageFamilyName&gt;!&lt;TaskId&gt;</c>），只有交给外壳前才补

@@ -477,6 +477,17 @@
                             ValueChanged="OnRetryChanged"
                             Value="{x:Bind ViewModel.RetryCount, Mode=TwoWay}" />
                     </stc:SettingsCard>
+
+                    <!-- 🔴 F7.2（v0.6.1 新增）。只管"调度收尾后再跑一次守卫"，
+                         不管管理端加载自启动项数据时的内联处理 —— 后者伴随数据加载、
+                         不是后台任务，两者不该共用一个开关。 -->
+                    <stc:SettingsCard
+                        Description="被接管的程序启动后可能把软禁用标记翻回启用，导致下次登录被重复启动；本项在调度收尾后再巡检一次"
+                        Header="退出前运行一次守卫">
+                        <ToggleSwitch
+                            IsOn="{x:Bind ViewModel.RunGuardAfterSchedule, Mode=TwoWay}"
+                            Toggled="OnRunGuardAfterScheduleToggled" />
+                    </stc:SettingsCard>
                 </StackPanel>
 
                 <!-- ── 守卫 ──（2026-09-22 批复：新增分节，目前只有通知策略一项） -->

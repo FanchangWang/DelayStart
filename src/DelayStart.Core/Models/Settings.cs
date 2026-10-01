@@ -104,4 +104,24 @@ public sealed class Settings
     /// </para>
     /// </remarks>
     public bool AutoCheckHolidayUpdates { get; set; } = true;
+
+    /// <summary>
+    /// 调度收尾后是否再跑一次守卫巡检（v0.6.1 新增）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 覆盖的是一个真实存在的场景：被接管的程序启动后可能把 <c>StartupApproved</c>
+    /// 软禁用标记翻回启用，导致下次登录被系统重复启动。守卫在本轮调度**最终退出前**
+    /// 纠正一次，落在下次登录之前。
+    /// </para>
+    /// <para>
+    /// 默认 <see langword="true"/>：它解决的是已经发生过的故障，默认关等于让这个坑一直踩。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>只管调度收尾后这一次</b>，不管管理端加载自启动项数据时的内联处理 ——
+    /// 后者伴随数据加载、不是后台任务，用户打开管理端本来就在等那批数据。
+    /// 两者是不同性质的动作，不该共用一个开关。
+    /// </para>
+    /// </remarks>
+    public bool RunGuardAfterSchedule { get; set; } = true;
 }

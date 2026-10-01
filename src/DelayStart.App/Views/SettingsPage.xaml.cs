@@ -222,6 +222,25 @@ public sealed partial class SettingsPage : Page
         ViewModel.SetRetryCount(args.NewValue);
     }
 
+    /// <summary>「退出前运行一次守卫」开关变化：立即落盘（F7.2）。</summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="OnRetryChanged"/> 同样要过 <c>_initialized</c> 早退：
+    /// <c>x:Bind Mode=TwoWay</c> 会在首屏加载时回写一次控件状态，那时用户什么都没动，
+    /// 写回配置会把用户改过的值覆盖掉。
+    /// </remarks>
+    private void OnRunGuardAfterScheduleToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        if (sender is ToggleSwitch toggle)
+        {
+            ViewModel.SetRunGuardAfterSchedule(toggle.IsOn);
+        }
+    }
+
     /// <summary>主题被改变：即时切换全局外观。⚠️ 初始化 / 回灌事件在这里被守卫挡掉（不落盘）。</summary>
     private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
     {

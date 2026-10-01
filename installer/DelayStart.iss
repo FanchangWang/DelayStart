@@ -894,16 +894,6 @@ begin
   end;
 end;
 
-// 配置与日志的默认策略：**保留**（%APPDATA%\DelayStart 与 %LOCALAPPDATA%\DelayStart），
-// 这样卸载重装后延时列表还在。D62 曾在此时点 MsgBox 询问；D84 立项、D85（2026-09-23 批复）
-// 定形为 InitializeUninstall 开头的任务对话框（GUI，三按钮）/ /DELETEDATA 参数（静默），
-// 这里只执行结果。
-//
-// 🔴 时机选 usUninstall 而不是 InitializeUninstall：
-//    ① usUninstall 在"确认卸载"之后才触发 —— 用户如果在确认页反悔，不会已经删了数据；
-//    ② 此时 --restore-all 已经跑完（它在 InitializeUninstall 里），顺序天然正确。
-// 🔴 删除条件只认 DeleteUserData：GUI 没选「删除配置并卸载」、静默没传 /DELETEDATA，
-//    都一律保留 —— 删用户数据这种事绝不能在用户没看见选项的情况下发生。
 // 配置与日志的默认策略：**保留**（%LOCALAPPDATA%\DelayStart），这样卸载重装后延时列表还在。
 // D62 曾在此时点 MsgBox 询问；D84 立项、D85（2026-09-23 批复）定形为 InitializeUninstall
 // 开头的任务对话框（GUI，三按钮）/ /DELETEDATA 参数（静默），这里只执行结果。

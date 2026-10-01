@@ -76,7 +76,10 @@ Test-Path "$app\hostfxr.dll"        # 期望 False；Test-Path "$app\DelayStart.
 # 静默卸载（D84）：先还原接管项 → /DELETEDATA 决定是否删数据
 & "$env:LOCALAPPDATA\Programs\DelayStart\unins000.exe" /VERYSILENT          # 保留配置与日志
 & "$env:LOCALAPPDATA\Programs\DelayStart\unins000.exe" /VERYSILENT /DELETEDATA  # 连配置与日志一起删
-Test-Path "$env:APPDATA\DelayStart"   # 第一条期望 True，第二条期望 False
+# 🔴 用户数据只有一个根（v0.6.1：配置已从 %APPDATA% 迁到 Local 下的 config\ 子目录）：
+#    探测它整个根是否还在，不要探 config\ —— 根删不掉而子目录空了也会报 True，
+#    那种情况下再往里找也白找。
+Test-Path "$env:LOCALAPPDATA\DelayStart"   # 第一条期望 True，第二条期望 False
 # 还原失败分支（静默）：无人拍板 → 卸载中止（不弹窗、不卡死），日志搜「卸载已中止」
 ```
 

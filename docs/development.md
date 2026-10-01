@@ -76,7 +76,7 @@ dotnet build DelayStart.slnx -c Release
 dotnet run --project tests/DelayStart.Core.Tests -c Release     # 规范测试命令
 ```
 
-**验收口径**：Release **0 警告 0 错误** + 全部单元测试绿（当前 668 个）。
+**验收口径**：Release **0 警告 0 错误** + 全部单元测试绿（当前 723 个）。
 
 > 🔴 **构建要求零警告**（`TreatWarningsAsErrors=true`）—— 出现警告即编译失败，这是故意的。
 >

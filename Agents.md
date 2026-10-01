@@ -14,7 +14,7 @@
 | 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
 | 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· **.NET 10 + 非 AOT**（守卫端）· xUnit v3（测试） |
 | 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
-| 测试 | `.\scripts\test.ps1` → **705 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 测试 | `.\scripts\test.ps1` → **723 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
 | 状态 | 功能完整（含守卫、通知中转器、FR-15 调度周期），进安装包阶段；v0.6.1 已**取消进度面板**并把守卫内联进管理端（见 `docs/decisions.md` D124–D133）；守卫 / D82 / **N1–N13 通知** / **FR-15 真机验收** / **v0.6.1 真机验收**均待真机验收；文档与代码同步 |
 
 ---
@@ -163,7 +163,7 @@
 - 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + **705** 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + **723** 个用例全绿。
 
 ---
 

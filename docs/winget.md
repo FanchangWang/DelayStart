@@ -3,11 +3,25 @@
 本文件是 DelayStart **手工提交到 winget 社区源的教程**：提交什么、文件怎么写、按哪几步做。
 决策依据见 `decisions.md` **D110 / D111**；发版流程见 `installer/README.md`。
 
+## 0. 占位符约定
+
+| 占位符 | 含义 | 什么时候换成真值 |
+|---|---|---|
+| `<VER>` | **最新 tag 的版本号，不带 `v` 前缀**（tag 是 `v0.6.1` ⇒ `<VER>` = `0.6.1`） | 每次发版。发版前先 `git describe --tags --abbrev=0` 或看一眼 Releases 页 |
+
+🔴 **本文不钉死具体版本号**：所有示例都写 `<VER>`。钉死一次之后它必然与实际 tag 漂移，
+而漂移的后果是**模板悄悄过期** —— 照着抄的人会拿旧版本号建目录、拼 URL，
+`winget validate` 过了（URL 结构对），PR 才被上游打回"找不到该版本"。
+错误的位置离原因很远。
+
+⚠️ **别把 winget 自己的 `ManifestVersion: 1.12.0` 也当成版本号替换掉** —— 那是
+manifest **schema** 的版本，与本程序发什么版无关。全文出现 7 处，一律不动。
+
 ---
 
 ## 1. 提交什么
 
-- **安装包**：`DelayStart-Setup-0.5.0-win-x64-slim.exe` 与 `…-win-arm64-slim.exe`（Release 资产，URL 版本固定）。
+- **安装包**：`DelayStart-Setup-<VER>-win-x64-slim.exe` 与 `…-win-arm64-slim.exe`（Release 资产，URL 版本固定）。
 - **形态只发 slim**：15 MB（full 是 217 MB）。winget 场景下用户必然有网络，缺的运行时交给包管理器按依赖装 —— 比让用户去安装器结尾的下载链接里自己找更直接。
 - **两个包依赖**（写进 manifest，winget 会自动先装）：
 
@@ -25,7 +39,7 @@
 社区源里 `PackageIdentifier` 直接决定路径（**大小写敏感**，文件名必须与 identifier 逐字一致）：
 
 ```
-manifests/f/FanchangWang/DelayStart/0.5.0/
+manifests/f/FanchangWang/DelayStart/<VER>/
 ├── FanchangWang.DelayStart.yaml                  ← version
 ├── FanchangWang.DelayStart.installer.yaml        ← installer
 ├── FanchangWang.DelayStart.locale.zh-CN.yaml     ← defaultLocale（DefaultLocale 指向它）
@@ -45,7 +59,7 @@ manifests/f/FanchangWang/DelayStart/0.5.0/
 ```yaml
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
 PackageIdentifier: FanchangWang.DelayStart
-PackageVersion: 0.5.0
+PackageVersion: <VER>
 DefaultLocale: zh-CN
 ManifestType: version
 ManifestVersion: 1.12.0
@@ -56,7 +70,7 @@ ManifestVersion: 1.12.0
 ```yaml
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 PackageIdentifier: FanchangWang.DelayStart
-PackageVersion: 0.5.0
+PackageVersion: <VER>
 Platform:
   - Windows.Desktop
 MinimumOSVersion: 10.0.19041.0
@@ -70,20 +84,20 @@ Dependencies:
       MinimumVersion: 1.8.0
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/FanchangWang/DelayStart/releases/download/v0.5.0/DelayStart-Setup-0.5.0-win-x64-slim.exe
+    InstallerUrl: https://github.com/FanchangWang/DelayStart/releases/download/v<VER>/DelayStart-Setup-<VER>-win-x64-slim.exe
     InstallerSha256: <发版后填，64 位十六进制>
     AppsAndFeaturesEntries:
       - DisplayName: DelayStart
         Publisher: FanchangWang
-        DisplayVersion: 0.5.0
+        DisplayVersion: <VER>
         ProductCode: '{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1'
   - Architecture: arm64
-    InstallerUrl: https://github.com/FanchangWang/DelayStart/releases/download/v0.5.0/DelayStart-Setup-0.5.0-win-arm64-slim.exe
+    InstallerUrl: https://github.com/FanchangWang/DelayStart/releases/download/v<VER>/DelayStart-Setup-<VER>-win-arm64-slim.exe
     InstallerSha256: <发版后填>
     AppsAndFeaturesEntries:
       - DisplayName: DelayStart
         Publisher: FanchangWang
-        DisplayVersion: 0.5.0
+        DisplayVersion: <VER>
         ProductCode: '{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1'
 ManifestType: installer
 ManifestVersion: 1.12.0
@@ -95,7 +109,7 @@ ManifestVersion: 1.12.0
 - `Scope: user` —— 安装器是 `PrivilegesRequired=lowest`、装在 `%LOCALAPPDATA%\Programs\DelayStart`，是用户级安装。
 - `MinimumOSVersion: 10.0.19041.0` —— 与各 csproj 的 `TargetPlatformMinVersion` 一致（NFR-5.1：Windows 10 21H2+）。
 - `Dependencies` —— 见第 1 节。只写**包标识**，不要写下载地址。
-- `DisplayName` / `DisplayVersion` —— 与安装器写进注册表的值一致（显示名是裸 `DelayStart`，版本是 `0.5.0`）；写上是为了把"版本匹配"钉死，避免版本号不一致时陷入升级循环。
+- `DisplayName` / `DisplayVersion` —— 与安装器写进注册表的值一致（显示名是裸 `DelayStart`，版本是 `<VER>`）；写上是为了把"版本匹配"钉死，避免版本号不一致时陷入升级循环。
 - `ProductCode` —— 填 Inno 的卸载注册表键名，即 `AppId` + `_is1`，本项目为 `{48BC0E34-50D1-4D82-908C-4A5C11AC5690}_is1`。
   ⚠️ YAML 里必须加引号：值以 `{` 开头，裸写会被当成 flow mapping。
 - 不写 `InstallerLocale` —— 安装器只有中文一种界面，声明它没有收益。
@@ -105,7 +119,7 @@ ManifestVersion: 1.12.0
 ```yaml
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 PackageIdentifier: FanchangWang.DelayStart
-PackageVersion: 0.5.0
+PackageVersion: <VER>
 PackageLocale: zh-CN
 Publisher: FanchangWang
 PublisherUrl: https://github.com/FanchangWang
@@ -127,7 +141,7 @@ Tags:
   - autostart
   - boot
   - performance
-ReleaseNotesUrl: https://github.com/FanchangWang/DelayStart/releases/tag/v0.5.0
+ReleaseNotesUrl: https://github.com/FanchangWang/DelayStart/releases/tag/v<VER>
 Documentations:
   - DocumentLabel: 使用说明
     DocumentUrl: https://github.com/FanchangWang/DelayStart#readme
@@ -160,31 +174,39 @@ winget settings --enable LocalManifestFiles
 
 ### 步骤 1 · 先出安装包
 
-打 `v0.5.0` 标签 → 等 Release workflow 出四个包 → 在 **Release 正文的附件说明表**里直接抄两个 slim 的 **SHA256**（`make-release-notes.ps1` 已经算好列出来了，不用自己算）。
+```powershell
+git describe --tags --abbrev=0        # ← 确认 <VER> 是哪个，别凭印象填
+```
+
+打 `v<VER>` 标签 → 等 Release workflow 出四个包 → 在 **Release 正文的附件说明表**里直接抄两个 slim 的 **SHA256**（`make-release-notes.ps1` 已经算好列出来了，不用自己算）。
 
 > 顺序不能反：`InstallerSha256` 必须与资产逐字节一致，包重传过一次哈希就变了。
 
 ### 步骤 2 · 生成骨架
 
+复制第 3 节的四个模板到 `%TEMP%\winget\FanchangWang.DelayStart\<VER>\`，**先把模板里的 `<VER>` 全部替换成真值**再往下走 —— 留着占位符去跑 `wingetcreate`，它会把 URL 当成一个不存在的地址，报错信息与真正的原因毫无关系。
+
 ```powershell
 # 工作目录随意，比如 %TEMP%\winget
 wingetcreate new `
-  https://github.com/FanchangWang/DelayStart/releases/download/v0.5.0/DelayStart-Setup-0.5.0-win-x64-slim.exe `
-  https://github.com/FanchangWang/DelayStart/releases/download/v0.5.0/DelayStart-Setup-0.5.0-win-arm64-slim.exe
+  https://github.com/FanchangWang/DelayStart/releases/download/v<VER>/DelayStart-Setup-<VER>-win-x64-slim.exe `
+  https://github.com/FanchangWang/DelayStart/releases/download/v<VER>/DelayStart-Setup-<VER>-win-arm64-slim.exe
 ```
 
-按第 3 节的模板逐字段补齐：`Scope` / `Dependencies` / `AppsAndFeaturesEntries` / `DefaultLocale` 与中文 locale 文件基本都要手工写。目录名用 `0.5.0`，文件名与 identifier 逐字一致。
+按第 3 节的模板逐字段补齐：`Scope` / `Dependencies` / `AppsAndFeaturesEntries` / `DefaultLocale` 与中文 locale 文件基本都要手工写。目录名用 `<VER>`，文件名与 identifier 逐字一致。
+
+> ⚠️ 模板里的 `ManifestVersion: 1.12.0` 是 **winget schema 版本**，不是本程序版本 —— 全局替换时别把它一起换掉。
 
 ### 步骤 3 · 本地校验
 
 ```powershell
-winget validate --manifest .\FanchangWang.DelayStart\0.5.0
+winget validate --manifest .\FanchangWang.DelayStart\<VER>
 ```
 
 ### 步骤 4 · 本地试装（**会真的装到本机**）
 
 ```powershell
-winget install --manifest .\FanchangWang.DelayStart\0.5.0
+winget install --manifest .\FanchangWang.DelayStart\<VER>
 winget list --id FanchangWang.DelayStart       # 列得出来 = 已装检测正常
 winget uninstall --id FanchangWang.DelayStart  # 顺带验卸载
 ```
@@ -194,9 +216,9 @@ winget uninstall --id FanchangWang.DelayStart  # 顺带验卸载
 
 ### 步骤 5 · 提 PR
 
-把四个文件推到 fork 的 `manifests/f/FanchangWang/DelayStart/0.5.0/`，向 `microsoft/winget-pkgs` 开 PR：
+把四个文件推到 fork 的 `manifests/f/FanchangWang/DelayStart/<VER>/`，向 `microsoft/winget-pkgs` 开 PR：
 
-- 标题：`New package: FanchangWang.DelayStart version 0.5.0`
+- 标题：`New package: FanchangWang.DelayStart version <VER>`
 - 正文按仓库 PR 模板填写（说明已本地 `winget validate` + `winget install --manifest` 通过）
 - **一个 PR 只放这一个版本、且只放 manifest 文件** —— 夹带 `README.md`、`doc/`、拼写文件的改动会被直接打回
 
@@ -214,7 +236,7 @@ PR 上会自动跑 6 个检查（清单校验 → URL 与 SmartScreen 信誉 →
 |---|---|
 | 静默卸载被"UAC 弹窗阻塞进度"判失败 | 卸载器里 `--restore-all` 走 `ShellExec('runas')`（不还原就不删，宁可中止卸载）。失败分支有 `SuppressibleMsgBox(Default=IDYES)` 兜底，卸载最终仍会完成。真被拦下再单独评估改法 —— **不要顺手改**，那一路是 D61/D84/D85 逐轮真机验过的 |
 | 安全扫描命中（PUA 一票否决） | 政策不看应用是否正当，只要命中就不能收。按 `Validation.md` 的申诉路径处理（向 Microsoft Defender 提交文件复检 + 附 PR 链接），重新触发用 `@wingetbot run` |
-| 卸载后 `%APPDATA%\DelayStart` 与 `%LOCALAPPDATA%\DelayStart` 还在 | 这是设计（默认保留用户数据），不是缺陷。静默卸载可用 `/DELETEDATA` 清除，但 manifest 里**不**传它 |
+| 卸载后 `%LOCALAPPDATA%\DelayStart` 还在 | 这是设计（默认保留用户数据），不是缺陷。静默卸载可用 `/DELETEDATA` 清除，但 manifest 里**不**传它。用户数据全在这个根下：`config\`（延时列表与设置）、`logs\`、`scheduler\`、`guard\` |
 | 干净机器上装完程序起不来 | winget 客户端自身（1.12 起 App Installer 是 WinUI 3）就依赖 `Microsoft.WindowsAppRuntime.1.8`，验证环境里必然有它；真实用户那边靠 manifest 的 `Dependencies` 自动补 |
 
 ---

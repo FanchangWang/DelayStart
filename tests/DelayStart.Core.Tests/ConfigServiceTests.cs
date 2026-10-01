@@ -130,6 +130,71 @@ public sealed class ConfigServiceTests : IDisposable
     }
 
     [Fact]
+    public void Load_NewerConfigWithUnknownFields_ReportsVersionNotCorruption()
+    {
+        // 🔴 P2-10：ConfigJsonContext 用的是 UnmappedMemberHandling.Disallow，它在
+        // Deserialize **过程中**就抛 —— 于是新版程序写的配置（含新字段）会先撞上"未知成员"，
+        // 报成「配置损坏 + 留一份 .corrupt 副本」，而不是「请升级程序」。
+        //
+        // 前向保护（D119）就这么被绕过去了，而症状极难懂：用户明明升级了程序，
+        // 却被告知配置坏了，还会多出一堆"损坏"副本让他以为配置真的废了。
+        //
+        // 这条钉的是**判定顺序**：版本检查必须先于严格反序列化。
+        WriteConfigFile("""
+        { "version": 99, "items": [], "someBrandNewField": { "a": 1 } }
+        """);
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigVersionUnsupported, exception.Reason);
+    }
+
+    [Fact]
+    public void Load_SameVersionWithUnknownFields_StillReportsCorruption()
+    {
+        // 与上一条成对：版本对但字段不认识，确实是"这份文件我读不懂"，必须是损坏。
+        // 只钉前一条的话，一个"干脆放弃严格校验"的实现也能全绿。
+        WriteConfigFile("""
+        { "version": %d, "items": [], "whoKnows": 1 }
+        """.Replace("%d", AppConfig.CurrentVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+    }
+
+    [Fact]
+    public void Load_MalformedJson_ReportsCorruptionRatherThanEscaping()
+    {
+        // 🔴 JsonDocument.Parse 对畸形 JSON 抛 JsonException，而 Load 的 catch
+        // 只接 FormatException / StartupOperationException —— 不转的话会以一个
+        // 意料之外的异常类型逃出去，UI 层接不住就成了"配置坏了但没有任何提示"。
+        WriteConfigFile("{ this is not json ");
+
+        var exception = Assert.Throws<StartupOperationException>(() => _service.Load());
+
+        Assert.Equal(StartupFailureReason.ConfigCorrupted, exception.Reason);
+    }
+
+    [Fact]
+    public void Load_ConfigWithCommentsAndTrailingCommas_StillReadsVersion()
+    {
+        // 版本探针走的是 JsonDocument 而不是序列化器，两边对注释/尾逗号的宽容度
+        // 必须一致 —— 不一致的话，「加了注释的合法配置」会在版本探针那一步就被拒。
+        WriteConfigFile($$"""
+        {
+          // 用户手写时留下的注释
+          "version": {{AppConfig.CurrentVersion}},
+          "items": [],
+        }
+        """);
+
+        var config = _service.Load();
+
+        Assert.Empty(config.Items);
+    }
+
+    [Fact]
     public void Load_ConfigWithoutVersionField_IsTreatedAsCorrupt()
     {
         // 🔴 D121：缺 `version` 字段不再"视为当前版本"。那等于替一份来路不明的文件背书 ——

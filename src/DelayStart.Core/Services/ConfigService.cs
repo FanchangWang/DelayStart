@@ -141,44 +141,77 @@ public sealed class ConfigService : IAppConfigStore
                 innerException: ex);
         }
 
-        VerifyWrite(config, json);
+        VerifyWrite(config);
     }
 
     /// <summary>
-    /// 写盘后立刻回读校验（FR-12.3）。
-    /// </summary>
+  /// 写盘后**从磁盘回读**并逐字段校验（FR-12.3）。
+ /// </summary>
+  /// <param name="saved">刚保存的配置。</param>
     /// <remarks>
-    /// <para>
+  /// <para>
     /// 这一步要抓的是「写出去的文件读不回来」：磁盘写满、杀软锁文件、同步盘中途断连，
     /// <c>AtomicFileWriter</c> 都会成功返回，但落盘的内容可能是残缺的。
     /// </para>
     /// <para>
+    /// 🔴 <b>必须读磁盘，不能重解析传进来的那个字符串</b>（审计 P1-5）。原先
+ /// <c>VerifyWrite(config, json)</c> 重新解析的是<b>内存里那个刚序列化的字符串</b> ——
+    /// 它当然读得回来。于是这个安全网恒为真，而它自称要防的故障一次也检测不到：
+    /// 比没有更坏，因为它让人以为写盘被验证过了。
+    /// </para>
+    /// <para>
     /// 🔴 校验失败**不抛异常**。调用方是管理端的一次普通保存（例如用户在设置页点了个开关），
     /// 为此让整个界面报错退出不成比例。写盘本身已成功，真实后果只是「本次改动没生效」，
-    /// 下一��读时会走 Load 的 fail-closed 路径给出可见的提示 —— 那才是该报错的地方。
+    /// 下次读时会走 Load 的 fail-closed 路径给出可见的提示 —— 那才是该报错的地方。
     /// </para>
-    /// </remarks>
-    private void VerifyWrite(AppConfig saved, string written)
+  /// </remarks>
+    private void VerifyWrite(AppConfig saved)
     {
+  string? onDisk;
         try
         {
-            var roundTripped = Parse(written);
+            onDisk = AtomicFileWriter.ReadAllTextOrNull(ConfigFilePath);
+   }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+    {
+   _log.Error(ex, $"配置文件写盘后无法回读，本次改动可能未生效：{ConfigFilePath}");
+  return;
+    }
+
+ if (onDisk is null)
+     {
+        _log.Error($"配置文件写盘后读不回来，本次改动可能未生效：{ConfigFilePath}");
+   return;
+ }
+
+        try
+        {
+            var roundTripped = Parse(onDisk);
             Normalize(roundTripped);
 
             var mismatch = FindMismatch(saved, roundTripped);
-            if (mismatch is null)
-            {
-                return;
-            }
+          if (mismatch is null)
+     {
+          return;
+      }
 
             _log.Error(
                 $"配置文件写盘校验不一致（{mismatch}），本次改动可能未生效：{ConfigFilePath}");
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException or FormatException)
+        catch (StartupOperationException ex)
         {
-            _log.Error(ex, $"配置文件写盘后无法回读，本次改动可能未生效：{ConfigFilePath}");
+   // 🔴 Parse 会抛这个（版本过新 / 结构不对），它**不在**原来的 catch 过滤条件里 ——
+      // 而 Save 头上的 catch 也不接它，于是会以一个意料之外的异常类型逃出去。
+            _log.Error(ex, $"配置文件写盘后回读解析失败，本次改动可能未生效：{ConfigFilePath}");
         }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or FormatException)
+     {
+            _log.Error(ex, $"配置文件写盘后无法解析，本次改动可能未生效：{ConfigFilePath}");
+  }
     }
+
 
     /// <summary>逐字段比对配置；返回第一个不一致项的说明，全等则返回 <see langword="null"/>。</summary>
     /// <remarks>
@@ -225,49 +258,90 @@ public sealed class ConfigService : IAppConfigStore
     }
 
     /// <summary>
-    /// 解析配置 JSON。只有一种受支持格式（v<see cref="AppConfig.CurrentVersion"/>，由本程序写出）。
-    /// </summary>
-    /// <remarks>
+    /// 版本检查**先于**严格反序列化（审计 P2-10）。
+  /// </summary>
+    /// <param name="json">配置原文。</param>
+  /// <remarks>
+    /// 🔴 <see cref="ConfigJsonContext"/> 用的是 <c>UnmappedMemberHandling.Disallow</c>，
+    /// 它在 <c>Deserialize</c> <b>过程中</b>就抛 —— 也就是说新版程序写的配置（含新字段）
+    /// 会先撞上"未知成员"，报成「配置损坏 + 留副本」，而不是「请升级程序后再试」。
+    /// 前向保护（D119）就这么被绕过去了，而症状极难懂：用户明明升级了程序，
+    /// 却被告知配置坏了。
     /// <para>
-    /// <see cref="AppConfig.Version"/> 的语义是**损坏探针**，不是"迁移起点"：项目不做旧格式迁移，
-    /// 于是任何"不等于当前值"的情形都只有一个正确答案 —— 这份文件本程序读不懂。
+    /// 所以先用宽松的 <see cref="JsonDocument"/> 只把 <c>version</c> 读出来做判定
+    /// （它对未知成员宽容），通过之后再走严格反序列化。顺序反过来，前向保护就永远走不到。
     /// </para>
-    /// <list type="bullet">
-    /// <item><description>高于当前值 → <see cref="StartupFailureReason.ConfigVersionUnsupported"/>（前向保护：旧程序遇到新配置要拒绝加载，而不是写丢新字段）</description></item>
-    /// <item><description>低于当前值（含**缺这个字段**，此时落到默认的 0）→ 抛 <see cref="FormatException"/>，由 <see cref="Load"/> 统一转成"损坏 + 留副本"。没有迁移逻辑去补它，硬解析出来的多半是字段名对不上的半截数据，写回去就是把用户配置毁掉</description></item>
-    /// </list>
     /// <para>
-    /// 🔴 未知字段会在这里**直接抛 <see cref="JsonException"/>**（由
-    /// <see cref="ConfigJsonContext"/> 的 <c>UnmappedMemberHandling.Disallow</c> 强制）。
-    /// 不做兼容就没有迁移兜底，少一个字段会被 <see cref="Normalize"/> 补成默认值并写回磁盘 ——
-    /// 用户配的延时静默变成默认值。立刻报错是这里唯一有意义的失败方式。
+    /// 读不到 <c>version</c> 字段时按 <c>0</c> 算 —— 落到"低于当前版本"分支，
+    /// 报「这份文件我读不懂」而不是"版本过新"，方向是保守的。
     /// </para>
     /// </remarks>
     private static AppConfig Parse(string json)
     {
-        var config = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.AppConfig)
-            ?? throw new FormatException("配置文件内容无法解析为配置对象。");
+        VerifyVersion(json);
 
-        if (config.Version > AppConfig.CurrentVersion)
-        {
-            throw new StartupOperationException(
-                StartupFailureReason.ConfigVersionUnsupported,
-                entryId: string.Empty,
-                message: $"配置版本 v{config.Version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
-                    + "为避免写坏配置已拒绝加载。请升级程序后再试。");
-        }
-
-        if (config.Version < AppConfig.CurrentVersion)
-        {
-            // 抛 FormatException —— 由 Load 的 catch 统一转成 ConfigCorrupted + 留副本，
-            // 与其它"这份文件我读不懂"的形态走同一条路。
-            throw new FormatException(
-                $"配置版本为 v{config.Version}，本程序只支持 v{AppConfig.CurrentVersion}"
-                + "（本项目不做旧格式迁移，配置可删除后重建）。");
-        }
-
-        return config;
+        return JsonSerializer.Deserialize(json, ConfigJsonContext.Default.AppConfig)
+       ?? throw new FormatException("配置文件内容无法解析为配置对象。");
     }
+
+    /// <summary>只读出版本号并判定它是否是本程序能读懂的（宽容解析，不碰其它字段）。</summary>
+    /// <param name="json">配置原文。</param>
+    /// <exception cref="StartupOperationException">版本高于本程序支持。</exception>
+    /// <exception cref="FormatException">版本低于本程序支持（含读不到 version，或根本不是合法 JSON）。</exception>
+    private static void VerifyVersion(string json)
+    {
+        JsonDocument document;
+        try
+        {
+    // 🔴 CommentHandling 必须显式给 Skip：JsonDocument **默认拒绝**注释与尾逗号，
+    // 而这里的用途恰恰是"手改过的配置也要能读出版本" —— 序列化器那边接受注释
+            //（ReadCommentHandling = Skip / AllowTrailingCommas），两边口径不一致会让
+            //「加了注释的合法配置」在这里被判成非法 JSON。
+     document = JsonDocument.Parse(json, new JsonDocumentOptions
+    {
+     CommentHandling = JsonCommentHandling.Skip,
+         AllowTrailingCommas = true,
+ });
+     }
+        catch (JsonException ex)
+    {
+     // 🔴 JsonDocument 对畸形 JSON 抛 JsonException，而 Load 的 catch 只接
+  // FormatException / StartupOperationException —— 直接放行会以一个意料之外的
+  // 异常类型逃出去，UI 层接不住就成了"配置坏了但没有任何提示"。
+    // 转成 FormatException：它走的正是「这份文件我读不懂」那条既有路径。
+   throw new FormatException($"配置文件不是合法 JSON：{ex.Message}", ex);
+        }
+
+        using (document)
+  {
+    var version = 0;
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+   && document.RootElement.TryGetProperty("version", out var versionElement)
+       && versionElement.TryGetInt32(out var parsed))
+     {
+  version = parsed;
+      }
+
+    if (version > AppConfig.CurrentVersion)
+            {
+          throw new StartupOperationException(
+  StartupFailureReason.ConfigVersionUnsupported,
+entryId: string.Empty,
+        message: $"配置版本 v{version} 高于本程序支持的 v{AppConfig.CurrentVersion}，"
+        + "为避免写坏配置已拒绝加载。请升级程序后再试。");
+    }
+
+   if (version < AppConfig.CurrentVersion)
+     {
+     // 抛 FormatException —— 由 Load 的 catch 统一转成 ConfigCorrupted + 留副本，
+     // 与其它"这份文件我读不懂"的形态走同一条路。
+       throw new FormatException(
+   $"配置版本为 v{version}，本程序只支持 v{AppConfig.CurrentVersion}"
+       + "（本项目不做旧格式迁移，配置可删除后重建）。");
+            }
+        }
+    }
+
 
     /// <summary>
     /// 把配置里明显非法的值收拢到合法区间。

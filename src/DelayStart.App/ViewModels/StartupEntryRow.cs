@@ -26,6 +26,12 @@ public sealed class StartupEntryRow
     /// <summary>构造行。</summary>
     /// <param name="entry">扫描结果中的条目。</param>
     /// <param name="iconPixels">该条目的图标像素；提取失败为 <see langword="null"/>（显示占位符）。</param>
+    /// <remarks>
+    /// 🔴 原先这里还有一个 <c>isNew</c> 参数与 <c>IsNew</c> 属性（「新增」徽标，A2.5 / A2.6），
+    ///   已按用户决策删除：它靠 <c>ScanCacheService</c> 内存里的上一份快照求差，
+    ///   **只在本次运行内有效** —— 关掉管理端再打开，判定基准就没了；
+    ///   而用户对"新增"的心智模型几乎必然是**跨会话**的。
+    /// </remarks>
     public StartupEntryRow(StartupEntry entry, IconPixels? iconPixels)
     {
         ArgumentNullException.ThrowIfNull(entry);

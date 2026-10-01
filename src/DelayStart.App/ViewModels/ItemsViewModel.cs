@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Collections.ObjectModel;
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -30,6 +31,11 @@ namespace DelayStart.App.ViewModels;
 public sealed partial class ItemsViewModel : ObservableObject
 {
     private readonly ScanCacheService _cache;
+
+    /// <summary>
+    /// 当前已渲染到界面上的内容指纹（A2.3）。<see langword="null"/> = 还没渲染过任何东西。
+    /// </summary>
+    private string? _renderedFingerprint;
     private readonly TakeoverService _takeover;
     private readonly ConfigEditService _editor;
     private readonly IReadOnlyList<IStartupSource> _sources;
@@ -109,7 +115,6 @@ public sealed partial class ItemsViewModel : ObservableObject
 
     /// <summary>筛选与搜索后的可见条目，列表实际绑定的集合。</summary>
     public ObservableCollection<StartupEntryRow> FilteredRows { get; } = [];
-
     /// <summary>全部条目是否为空（真正"一个都没有"，而不是被筛光了）。</summary>
     public bool IsEmpty => Rows.Count == 0;
 
@@ -128,7 +133,19 @@ public sealed partial class ItemsViewModel : ObservableObject
     public int DefaultPreset { get; private set; }
 
     /// <summary>加载列表（读缓存，秒回；缓存为空时触发全量扫描一次）。</summary>
-    /// <returns>异步任务。</returns>
+    /// <remarks>
+    /// 🔴 <b>两段式</b>（A2.4）：先无条件把已有缓存渲染出来，再决定要不要后台重扫。
+    /// <para>
+    /// 原来只有一段：<c>LoadSnapshotAsync</c> 决定读缓存还是重扫，而重扫要走一遍
+    /// 注册表 + 计划任务 + UWP 全量枚举 + 图标提取，往往要一两秒 —— 这一两秒里页面
+    /// 是**空的**，用户看到"此位置没有自启动项"。而缓存其实就在那儿。
+    /// </para>
+    /// <para>
+    /// 两段之后：第一段永远是微秒级的（纯内存），第二段的成果只在**指纹真的变了**时
+    /// 才落到界面上（A2.3）。于是"有缓存"是瞬间出内容，"无缓存"是先显示加载中、
+    /// 扫完再出内容 —— 两种情况都不会出现"明明有数据却显示空列表"。
+    /// </para>
+    /// </remarks>
     [RelayCommand]
     private async Task LoadAsync()
     {
@@ -136,8 +153,22 @@ public sealed partial class ItemsViewModel : ObservableObject
         try
         {
             LoadSettings();
+
+            // ── 第一段：先把缓存里已有的东西无条件渲染出来 ──────────────────
+            if (_cache.Current is { } cached)
+            {
+                Apply(cached);
+            }
+            else
+            {
+                Rows.Clear();
+                FilteredRows.Clear();
+                OnPropertyChanged(nameof(IsEmpty));
+            }
+
+            // ── 第二段：后台重扫（必要时），指纹变了才应用 ──────────────────
             var snapshot = await LoadSnapshotAsync(CancellationToken.None).ConfigureAwait(true);
-            Apply(snapshot);
+            ApplyIfChanged(snapshot);
         }
         catch (Exception ex)
         {
@@ -148,6 +179,30 @@ public sealed partial class ItemsViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// 指纹与当前已渲染内容相同 ⇒ 什么都不做（A2.3）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这一层是"两段式加载"能成立的前提。第一段刚渲染完缓存，第二段重扫回来的结果
+    /// 若与之相同（**常见情况**：自启动项不会每秒都变），就一个通知都不发 ——
+    /// 否则用户会看到列表无端闪一下、滚动位置跳回顶部。
+    /// <para>
+    /// 判据用**整个快照**的指纹而不是"条目数变了没"：只比数量会漏掉"某一项的状态翻了"
+    /// 这种最该被看见的变化。
+    /// </para>
+    /// </remarks>
+    private void ApplyIfChanged(ScanSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (string.Equals(_renderedFingerprint, snapshot.Fingerprint, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Apply(snapshot);
     }
 
     /// <summary>
@@ -184,7 +239,7 @@ public sealed partial class ItemsViewModel : ObservableObject
             var snapshot = SourceFilter is { } kind
                 ? await _cache.RefreshSourceAsync(kind, cancellationToken).ConfigureAwait(true)
                 : await _cache.RefreshAsync(cancellationToken).ConfigureAwait(true);
-            Apply(snapshot);
+            ApplyIfChanged(snapshot);
         }
         catch (OperationCanceledException)
         {
@@ -332,6 +387,12 @@ public sealed partial class ItemsViewModel : ObservableObject
     }
 
     /// <summary>用修改后的标志位重建条目（<see cref="StartupEntry"/> 不可变，只能换新实例）。</summary>
+    /// <remarks>
+    /// 🔴 换新实例时**必须把每个字段都搬过去** —— 漏一个，那个字段就会静默变成默认值。
+    /// 这里曾经漏掉 <see cref="StartupEntry.ExecutablePath"/>，症状是任何一次行内局部刷新
+    /// （接管 / 禁用 / 回滚）之后，图标提取的目标路径变空，于是图标消失。
+    /// 那种故障极难定位：扫一次是对的，点一下按钮图标就没了，再扫又回来。
+    /// </remarks>
     private static StartupEntry WithState(StartupEntry entry, bool isTakenOver, bool isEnabled) => new()
     {
         Id = entry.Id,
@@ -342,6 +403,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         Scope = entry.Scope,
         SourceKey = entry.SourceKey,
         SourceDetail = entry.SourceDetail,
+        ExecutablePath = entry.ExecutablePath,
         IsEnabled = isEnabled,
         IsMissing = entry.IsMissing,
         IsProtected = entry.IsProtected,
@@ -405,6 +467,8 @@ public sealed partial class ItemsViewModel : ObservableObject
     /// <summary>把快照灌进列表（只保留当前来源）。</summary>
     private void Apply(ScanSnapshot snapshot)
     {
+        _renderedFingerprint = snapshot.Fingerprint;
+
         Rows.Clear();
         foreach (var entry in snapshot.Entries)
         {
@@ -455,7 +519,16 @@ public sealed partial class ItemsViewModel : ObservableObject
     /// <summary>排序方式变化 → 重算可见列表。</summary>
     partial void OnSortIndexChanged(int value) => ApplyFilters();
 
-    /// <summary>按当前搜索词与状态筛选重建 <see cref="FilteredRows"/>。</summary>
+    /// <summary>
+    /// 按当前搜索词与状态筛选重建 <see cref="FilteredRows"/>。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>差量同步，绝不 <c>Clear()</c> + <c>Add()</c> 整表重摆</b>（A2.1）。
+    /// <c>FilteredRows</c> 是 <c>ListView</c> 真正绑定的集合，而 <c>ObservableCollection</c>
+    /// 的每一次 <c>Add</c> 都会让 ListView **新建一个容器** —— 整表重摆于是把每一行
+    /// 都重建一遍，后果是行内按钮闪一下、焦点丢失、正在点的按钮被换掉。
+    /// 而 <see cref="ApplyFilters"/> 在搜索框每敲一个字、每切一次筛选时都会跑。
+    /// </remarks>
     private void ApplyFilters()
     {
         var keyword = SearchText.Trim();
@@ -469,17 +542,79 @@ public sealed partial class ItemsViewModel : ObservableObject
             _ => visible.OrderBy(static row => row.Name, StringComparer.CurrentCulture),
         };
 
-        FilteredRows.Clear();
-        foreach (var row in visible)
-        {
-            FilteredRows.Add(row);
-        }
+        SyncInPlace(FilteredRows, [.. visible]);
 
         OnPropertyChanged(nameof(FilteredEmpty));
         OnPropertyChanged(nameof(EmptyText));
     }
 
-    /// <summary>「按状态」排序的次序：已接管最前，其次已禁用 / 已失效 / 受保护，最后已启用。</summary>
+    /// <summary>
+    /// 把 <paramref name="desired"/> 差量同步进 <paramref name="current"/>：只对**真的变了**的位置
+    /// 发通知，位置相同且内容相同的行一个通知都不发。
+    /// </summary>
+    /// <remarks>
+    /// 逐位比较用引用相等而不是 <c>Equals</c>：行对象是不可变的（换状态就换新实例），
+    /// 同一个行对象在前后两次筛选里出现就代表它一个字节都没变。走 <c>Equals</c> 只会
+    /// 多算一遍却得到同样的结论。
+    /// </remarks>
+    private static void SyncInPlace(ObservableCollection<StartupEntryRow> current, List<StartupEntryRow> desired)
+    {
+        // ① 找到第一个不同的位置。之前的前缀原样不动 —— 这就是"差量"的含义。
+        var start = 0;
+        while (start < current.Count && start < desired.Count && ReferenceEquals(current[start], desired[start]))
+        {
+            start++;
+        }
+
+        // ② 尾部多余的从后往前删：往前删会让后面所有行的索引位移，白发一批通知。
+        while (current.Count > desired.Count)
+        {
+            current.RemoveAt(current.Count - 1);
+        }
+
+        for (var i = start; i < desired.Count; i++)
+        {
+            if (i < current.Count && ReferenceEquals(current[i], desired[i]))
+            {
+                continue;
+            }
+
+            if (i >= current.Count)
+            {
+                current.Add(desired[i]);
+                continue;
+            }
+
+            // ③ 这一行在后面别处已经出现过 ⇒ 它只是**位置变了**，不该重建容器。
+            //   排序一变就是这种情况，而"重建容器"正是行内操作闪烁的来源。
+            //   ObservableCollection<T>.Move（.NET 9+）发的是一条真正的 Move 通知；
+            //   自己用 RemoveAt + Insert 拼则会发两条 —— WinUI 对 Remove 是销毁容器、
+            //   对 Add 是新建容器，于是排一次序整屏行都没了。
+            var existingIndex = IndexOfFrom(current, desired[i], i + 1);
+            if (existingIndex >= 0)
+            {
+                current.Move(existingIndex, i);
+                continue;
+            }
+
+            // ④ 内容确实变了（状态翻转 / 换图标）—— 这一格只能 Replace。
+            current[i] = desired[i];
+        }
+    }
+
+    private static int IndexOfFrom(ObservableCollection<StartupEntryRow> rows, StartupEntryRow target, int startIndex)
+    {
+        for (var i = startIndex; i < rows.Count; i++)
+        {
+            if (ReferenceEquals(rows[i], target))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private static int StatusRank(StartupEntryRow row) => row.StatusKind switch
     {
         "taken" => 0,

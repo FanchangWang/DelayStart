@@ -188,6 +188,16 @@
                                 VerticalAlignment="Center"
                                 Spacing="2"
                                 ToolTipService.ToolTip="{x:Bind LocationText}">
+                                <!-- 🔴 原先这里有一个「新增」徽标（A2.5 / A2.6），已按用户决策删除。
+                                     它靠 ScanCacheService 内存里的上一份快照求差，**只在本次运行内有效** ——
+                                     关掉管理端再打开，判定基准就没了。而用户对"新增"的心智模型
+                                     几乎必然是**跨会话**的，这个徽标给的是比预期弱得多的信号；
+                                     价值与它要付的成本（快照差集 + 指纹多一项 + 换行实例骨架）不成比例。
+
+                                     随之删除的还有 StartupEntryRow.IsNew、ScanCacheService 的
+                                     上一份 Id 集合与 IsNewSinceLastSnapshot。
+                                     **A2.1 的差量同步与 A2.3 的内容指纹都保留** —— 那两条是真需求
+                                     （行内操作不闪、重扫无变化时界面无反应），与徽标无关。 -->
                                 <TextBlock
                                     FontWeight="SemiBold"
                                     Text="{x:Bind Name}"

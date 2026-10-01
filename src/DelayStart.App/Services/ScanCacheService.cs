@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Models;
 using DelayStart.Management.Abstractions;
@@ -33,6 +36,8 @@ public sealed class ScanCacheService : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private ScanSnapshot? _snapshot;
+
+    /// <summary>是否已有过一份可比对的快照（首次加载为 <see langword="false"/>）。</summary>
 
     /// <summary>已过期的来源集合（<see cref="Invalidate"/> 写入，重扫成功后清除）。</summary>
     private readonly HashSet<StartupSource> _staleSources = [];
@@ -143,7 +148,14 @@ public sealed class ScanCacheService : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _snapshot = await Task.Run(() => ScanAllAsync(cancellationToken), cancellationToken).ConfigureAwait(false);
+            var scanned = await Task.Run(() => ScanAllAsync(cancellationToken), cancellationToken).ConfigureAwait(false);
+
+            // 基准取**本次成功结果的上一份**，而不是本次：求差的对象必须是"之前"的那份。
+            if (_snapshot is { } previous)
+            {
+            }
+
+            _snapshot = scanned;
             ClearStale(kind: null);
             return _snapshot;
         }
@@ -167,7 +179,13 @@ public sealed class ScanCacheService : IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _snapshot = await Task.Run(() => RescanSourceAsync(kind, cancellationToken), cancellationToken).ConfigureAwait(false);
+            var rescanned = await Task.Run(() => RescanSourceAsync(kind, cancellationToken), cancellationToken).ConfigureAwait(false);
+
+            if (_snapshot is { } previous)
+            {
+            }
+
+            _snapshot = rescanned;
             ClearStale(kind);
             return _snapshot;
         }
@@ -379,4 +397,71 @@ public sealed record ScanSnapshot(
     IReadOnlyList<StartupEntry> Entries,
     IReadOnlyDictionary<StartupEntry, IconPixels?> Pixels,
     IReadOnlyList<ScanFailure> Failures,
-    bool ConfigUnavailable = false);
+    bool ConfigUnavailable = false)
+{
+    /// <summary>
+    /// 内容指纹：<b>界面上能看到的一切</b>的摘要（A2.3）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 用途只有一个：判断"这次重扫的结果和上次一样吗"。一样就**一个集合通知都不发** ——
+    /// 而重扫在「刷新本页」以及每次进入页面时都会发生。
+    /// <para>
+    /// 没有指纹的话，即使内容完全一样，每次重扫也会把列表整表重建 —— 用户看到的是
+    /// 无端地闪一下、滚动位置跳回顶部、刚点开的按钮被换掉。而重扫前后内容**通常**就是
+    /// 一样的（自启动项不会每秒都变），所以这才是常态路径。
+    /// </para>
+    /// <para>
+    /// 参与计算的是**所有影响渲染的**：条目的全部字段、是否有图标、来源失败列表、
+    /// 配置是否可用。少算一个字段就会在某次真实变化时误判成"没变"，那一次更新会被
+    /// 静默吞掉 —— 界面上停留在旧状态而没有任何提示。
+    /// </para>
+    /// </remarks>
+    public string Fingerprint { get; } = ComputeFingerprint(Entries, Failures, ConfigUnavailable, Pixels);
+
+    /// <summary>算内容指纹。</summary>
+    private static string ComputeFingerprint(
+        IReadOnlyList<StartupEntry> entries,
+        IReadOnlyList<ScanFailure> failures,
+        bool configUnavailable,
+        IReadOnlyDictionary<StartupEntry, IconPixels?> pixels)
+    {
+        var canonical = new StringBuilder(entries.Count * 128);
+
+        canonical.Append(configUnavailable ? "cfg:1;" : "cfg:0;");
+
+        // 条目顺序也参与：顺序变了就是用户看得见的变化（列表重排）。
+        // 排序由 CompareEntries 统一给出，同一份数据每次顺序都相同。
+        foreach (var entry in entries)
+        {
+            canonical.Append(entry.Id).Append('|')
+                .Append(entry.Name).Append('|')
+                .Append(entry.Path).Append('|')
+                .Append(entry.ExecutablePath).Append('|')
+                .Append(entry.Arguments).Append('|')
+                .Append((int)entry.Source).Append('|')
+                .Append((int)entry.Scope).Append('|')
+                .Append(entry.SourceKey).Append('|')
+                .Append(entry.SourceDetail).Append('|')
+                .Append(entry.IsEnabled ? '1' : '0')
+                .Append(entry.IsMissing ? '1' : '0')
+                .Append(entry.IsProtected ? '1' : '0')
+                .Append(entry.IsTakenOver ? '1' : '0')
+                // 图标的有无也要算：占位符 ↔ 真图标是一次可见的变化，
+                // 而它不体现在 StartupEntry 的任何字段上。
+                .Append(pixels.TryGetValue(entry, out var icon) && icon is not null ? 'i' : '-')
+                .Append(';');
+        }
+
+        foreach (var failure in failures)
+        {
+            canonical.Append((int)failure.Source).Append('/')
+                .Append((int)failure.Scope).Append('/')
+                .Append(failure.DisplayName).Append('/')
+                .Append(failure.Message).Append(';');
+        }
+
+        // 取 SHA-256 而不是直接存上面这串：快照有几百条时它可达几十 KB，
+        // 每次重扫都新分配一份纯属浪费。摘要定长，且碰撞概率在本场景下可忽略。
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+    }
+}

@@ -59,10 +59,18 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
 
     /// <inheritdoc />
     /// <remarks>
-    /// 🔴 切标签（注册表 → 计划任务 …）也必须在这里触发刷新，**不能只靠 <c>Loaded</c>**。
-    /// <c>NavigationService.Navigate</c> 只是把**同一个单例实例**重新赋给 <c>frame.Content</c>
-    /// （同类型同标签时甚至直接 <c>return</c>），并不保证 <c>Loaded</c> 会再触发一次。
-    /// 漏了这一句的症状是：标签切了、标题变了、列表还是上一个来源的。
+    /// 🔴 切标签（注册表 → 计划任务 …）也走刷新路径，但**不是**靠这一句，
+    /// 更不能只靠 <c>Loaded</c> —— 两个都不够：
+    /// <list type="number">
+    /// <item><description><b>当前</b>：<c>ItemsPage</c> 与 <c>ItemsViewModel</c> 都是
+    /// <c>AddTransient</c>，每次导航都是新实例，<c>_hasLoaded</c> 恒为 <see langword="false"/>
+    /// ⇒ 下面这个分支**一次都走不到**，真正干活的是新实例的 <c>Loaded</c>。</description></item>
+    /// <item><description><b>若哪天改成单例</b>：<c>frame.Content</c> 赋同一个实例不保证
+    /// <c>Loaded</c> 再触发，那时这条分支就是唯一的刷新入口。</description></item>
+    /// </list>
+    /// 🔴 <b>而这两个来源都不够</b>：漏掉刷新时的症状是"标签切了、标题变了、
+    /// 列表还是上一个来源的"（2026-10-02 用户实测）。漏掉筛选时的症状更隐蔽 ——
+    /// 见 <see cref="ItemsViewModel"/> 里 <c>SourceFilterPolicy</c> 的说明（D140）。
     /// </remarks>
     public string? NavigationTag
     {
@@ -108,18 +116,19 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
     /// 🔴 <b>这里原来有一句 <c>Loaded -= OnLoaded;</c>，是"切页不刷新"的根因之一</b>
     /// （2026-10-02 用户实测：在外部加/删注册表项后，重新进入本页表格没刷新）。
     /// 它当初的理由是「只加载一次，免得守卫和 <see cref="IReloadablePage.Reload"/> 都叠加」。
-    /// 但那个理由建立在两个后来都不成立的前提上：
-    /// <list type="number">
-    /// <item><description>注释说「页面每次导航都新建实例」—— <b>不成立</b>。
-    /// <c>NavigationService.Navigate</c> 用 <c>_services.GetRequiredService(pageType)</c> 取实例，
-    /// 页面注册成单例，同一个实例被反复 <c>frame.Content = page</c> 复用。
-    /// 于是第二次进页时 <c>Loaded</c> 确实会触发，但<b>已经没有处理器了</b>。</description></item>
-    /// <item><description>「免得叠加」也不成立 —— <see cref="IReloadablePage.Reload"/> 与本页的
+    /// 但那个理由不成立 —— <see cref="IReloadablePage.Reload"/> 与本页的
     /// <c>Loaded</c> 本来就走同一个 <see cref="ScanCacheService"/>，重复调用是幂等的
-    /// （指纹相同 ⇒ 一个集合通知都不发）。</description></item>
-    /// </list>
-    /// 所以现在**不摘绑**：每次进页都触发一次加载，而加载本身是"先摆缓存、后台重扫"两段式，
-    /// 缓存命中时是微秒级，重扫在后台且被指纹门控。
+    /// （指纹相同 ⇒ 一个集合通知都不发）。所以现在**不摘绑**。
+    /// <para>
+    /// 🔴 <b>更正一处我自己写错的陈述</b>（2026-10-02）：本方法原先的注释写着
+    /// 「页面注册成单例，同一个实例被反复 <c>frame.Content = page</c> 复用，
+    /// 于是第二次进页 <c>Loaded</c> 没有处理器了」。<b>前半句是错的</b> ——
+    /// <c>ServiceRegistration</c> 里是 <c>AddTransient&lt;ItemsPage&gt;()</c>，
+    /// 每次导航都是**全新实例**。后半句的**结论**碰巧仍成立（自解绑之后第二次进页
+    /// 确实没有处理器），但当时给出的机制是错的 —— 而按错的机制去推，就会推出
+    /// 「切标签必须靠 <see cref="NavigationTag"/> 补一次刷新」这种在当前注册下
+    /// **永远走不到**的分支（见下）。
+    /// </para>
     /// </remarks>
     private void OnLoaded(object sender, RoutedEventArgs e)
     {

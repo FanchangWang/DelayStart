@@ -632,7 +632,13 @@ if (RunGuardAlongsideLoad(snapshot))
         var rebuilt = new List<StartupEntryRow>(previous.Count);
         foreach (var entry in snapshot.Entries)
         {
-            if (SourceFilter is not { } filter || entry.Source == filter)
+            // 🔴 判据在 Core 的 SourceFilterPolicy（D140），这里只负责"不该显示就跳过"。
+            //
+            // 写成 `if (!IsVisible(...)) continue;` 而不是
+            // `if (IsVisible(...)) { Rows.Add(...); }`，是为了让**取反出现在眼前**：
+            // 上一轮我写成 `if (IsVisible 谓词) continue;` —— 谓词没取反，
+            // 于是该显示的全被跳过、四个子页面混在一起，而构建与单测全绿。
+            if (!SourceFilterPolicy.IsVisible(entry.Source, SourceFilter))
             {
                 continue;
             }
@@ -670,7 +676,7 @@ if (RunGuardAlongsideLoad(snapshot))
         if (snapshot.Failures.Count > 0)
         {
             var names = string.Join("、", snapshot.Failures
-                .Where(failure => SourceFilter is not { } kind || failure.Source == kind)
+                .Where(failure => SourceFilterPolicy.IsVisible(failure.Source, SourceFilter))
                 .Select(static failure => failure.DisplayName));
             FailureText = names.Length == 0 ? null : $"以下来源扫描失败，列表可能不完整：{names}。详情见调度日志。";
         }
@@ -819,11 +825,15 @@ if (RunGuardAlongsideLoad(snapshot))
     }
 
     /// <summary>拼页头副标题。</summary>
+    /// <remarks>
+    /// 🔴 这里原先是 `filter is { } kind ? …Where(Source == kind) : [..all]` —— 判据正确，
+    /// 但它是那份三写之一的第三份。改成共用 <see cref="SourceFilterPolicy"/>：
+    /// 副标题的数字必须与列表里**实际摆着的行数**一致，而这个一致性以前只靠
+    /// "两处手写的谓词碰巧一样"维持着（D140）。
+    /// </remarks>
     private static string BuildSubtitle(ScanSnapshot snapshot, StartupSource? filter)
     {
-        var entries = filter is { } kind
-            ? snapshot.Entries.Where(entry => entry.Source == kind).ToList()
-            : [.. snapshot.Entries];
+        var entries = SourceFilterPolicy.Visible(snapshot.Entries, filter).ToList();
 
         var disabled = entries.Count(
             static entry => !entry.IsEnabled && !entry.IsTakenOver && !entry.IsMissing);

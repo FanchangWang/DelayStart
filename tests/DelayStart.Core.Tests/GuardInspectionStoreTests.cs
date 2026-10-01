@@ -26,9 +26,10 @@ public sealed class GuardInspectionStoreTests : IDisposable
     {
         var harness = Create();
 
-        var reports = harness.Store.ReadRecent(10);
+  var read = harness.Store.ReadRecent(10);
+        Assert.Equal(0, read.UnreadableCount);
 
-        Assert.Empty(reports);
+        Assert.Empty(read.Reports);
     }
 
     [Fact]
@@ -46,9 +47,10 @@ public sealed class GuardInspectionStoreTests : IDisposable
             StaleItems = [new StaleEntry(MakeDelayedItem("registry:hkcu:c", "丙"), StaleKind.SourceLost, null)],
         });
 
-        var reports = harness.Store.ReadRecent(10);
+  var read = harness.Store.ReadRecent(10);
+        Assert.Equal(0, read.UnreadableCount);
 
-        var report = Assert.Single(reports);
+        var report = Assert.Single(read.Reports);
         Assert.Equal(completedAt, report.CompletedAt);
         Assert.Equal(12, report.ScannedCount);
 
@@ -76,7 +78,7 @@ public sealed class GuardInspectionStoreTests : IDisposable
 
         harness.Store.Write(GuardRunReport.Disabled());
 
-        Assert.Empty(harness.Store.ReadRecent(10));
+        Assert.Empty(harness.Store.ReadRecent(10).Reports);
         Assert.False(Directory.Exists(harness.Paths.GuardInspectionsRoot));
     }
 
@@ -89,12 +91,18 @@ public sealed class GuardInspectionStoreTests : IDisposable
             Path.Combine(harness.Paths.GuardInspectionsRoot, "20260923-120000.json"),
             "{ \"CompletedAt\": ");
 
-        var reports = harness.Store.ReadRecent(10);
+  var read = harness.Store.ReadRecent(10);
 
         // 坏归档只跳过自己，不能拖空整个列表（FR-1.4 的同一条原则）。
-        var report = Assert.Single(reports);
+        var report = Assert.Single(read.Reports);
         Assert.Equal("甲", Assert.Single(report.NewItems).Name);
         Assert.True(harness.Log.Contains(LogLevel.Warn, "守卫巡检归档无法读取"));
+
+        // 🔴 P1-2：读不出来的那份必须**被计数**并冒到 Error 级。
+        // 只记一行 Warn 就跳过的话，守卫日志页最多 30 份历史会与总览卡一起**静默消失**，
+        // 而用户与日志都看不出发生过任何事 —— 它与"从来没有过这些记录"无法区分。
+        Assert.Equal(1, read.UnreadableCount);
+        Assert.True(harness.Log.Contains(LogLevel.Error, "读不出来"));
     }
 
     [Fact]
@@ -104,10 +112,11 @@ public sealed class GuardInspectionStoreTests : IDisposable
         harness.Store.Write(Report("旧", at: 10));
         harness.Store.Write(Report("新", at: 20));
 
-        var reports = harness.Store.ReadRecent(10);
+        var read = harness.Store.ReadRecent(10);
 
-        Assert.Equal("新", Assert.Single(reports[0].NewItems).Name);
-        Assert.Equal("旧", Assert.Single(reports[1].NewItems).Name);
+        Assert.Equal(0, read.UnreadableCount);
+        Assert.Equal("新", Assert.Single(read.Reports[0].NewItems).Name);
+        Assert.Equal("旧", Assert.Single(read.Reports[1].NewItems).Name);
     }
 
     [Fact]
@@ -121,9 +130,9 @@ public sealed class GuardInspectionStoreTests : IDisposable
             harness.Store.Write(Report($"条目-{minute}", at: minute));
         }
 
-        var reports = harness.Store.ReadRecent(GuardInspectionStore.MaxRetainedInspections + 10);
-        Assert.Equal(GuardInspectionStore.MaxRetainedInspections, reports.Count);
-        Assert.DoesNotContain(reports, static report => report.NewItems.Any(static item => item.Name == "条目-0"));
+        var read = harness.Store.ReadRecent(GuardInspectionStore.MaxRetainedInspections + 10);
+        Assert.Equal(0, read.UnreadableCount);
+        Assert.DoesNotContain(read.Reports, static report => report.NewItems.Any(static item => item.Name == "条目-0"));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────

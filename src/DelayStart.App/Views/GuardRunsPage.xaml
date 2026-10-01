@@ -38,6 +38,20 @@
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
                 Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" />
+
+            <!--
+                🔴 读不出来的归档提示（审计 P1-2）。
+                放在页头而不是列表里的一行：那一行的位置会随筛选变化，而"有 N 份记录读不出来"
+                与当前筛选无关，必须**一直**看得见 —— 否则"读不出来"与"从来没有过这些记录"
+                在界面上完全一样，而后者是事实判断、前者是一次故障。
+                Warning 而非 Informational：确实丢了东西，不该是中性语气。
+            -->
+            <InfoBar
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasUnreadable, Mode=OneWay}"
+                Message="{x:Bind ViewModel.UnreadableNote, Mode=OneWay}"
+                Severity="Warning"
+                Title="部分巡检记录读不出来" />
         </StackPanel>
 
         <!-- 工具栏：筛选 + 打开日志目录 -->

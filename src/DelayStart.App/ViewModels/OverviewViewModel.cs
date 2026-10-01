@@ -441,7 +441,7 @@ public partial class OverviewViewModel : ObservableObject
     /// </remarks>
     private async Task FillRecentGuard()
     {
-        var reports = await Task.Run(() => _guardInspections.ReadRecent(1)).ConfigureAwait(true);
+        var reports = await Task.Run(() => _guardInspections.ReadRecent(1).Reports).ConfigureAwait(true);
 
         if (reports.Count == 0)
         {

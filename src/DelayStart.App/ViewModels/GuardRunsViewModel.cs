@@ -89,29 +89,48 @@ public partial class GuardRunsViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
-    /// <summary>加载巡检归档（读文件放后台）。页面进入时调用。</summary>
+  /// <summary>加载巡检归档（读文件放后台）。页面进入时调用。</summary>
     /// <returns>异步任务。</returns>
     public async Task LoadAsync()
-    {
+  {
         IsLoading = true;
         try
-        {
-            var reports = await Task.Run(
-                () => _inspections.ReadRecent(GuardInspectionStore.MaxRetainedInspections)).ConfigureAwait(true);
+    {
+    var read = await Task.Run(
+            () => _inspections.ReadRecent(GuardInspectionStore.MaxRetainedInspections))
+     .ConfigureAwait(true);
 
-            _allGroups.Clear();
-            foreach (var report in reports)
-            {
-                _allGroups.Add(new GuardInspectionGroupRow(report));
+     _allGroups.Clear();
+        foreach (var report in read.Reports)
+     {
+     _allGroups.Add(new GuardInspectionGroupRow(report));
             }
 
-            RefillGroups();
+   RefillGroups();
+
+            // 🔴 读不出来的归档必须**在界面上看得见**（审计 P1-2）：它们不显示，
+            // 而"不显示"与"从来没有过这些记录"在界面上完全一样 ——
+            // 后者是事实判断，前者是一次故障，混在一起就成了静默的数据丢失。
+   UnreadableNote = read.UnreadableCount > 0
+     ? $"{read.UnreadableCount} 份较早的巡检记录读不出来（程序升级改了归档格式）。"
+              + "它们仍在磁盘上，删除 guard\\inspections 目录可清除。"
+       : string.Empty;
         }
         finally
         {
             IsLoading = false;
         }
     }
+
+    /// <summary>读不出来的归档份数提示；为空串表示没有。</summary>
+    /// <remarks>
+    /// 绑到页头的一条 InfoBar。不做成列表里的一行：那一行的位置会随筛选变化，
+    /// 而"有 N 份记录丢了"这件事与当前筛选无关，必须**一直**看得见。
+    /// </remarks>
+    public string UnreadableNote { get; private set; } = string.Empty;
+
+  /// <summary><see cref="UnreadableNote"/> 是否非空。</summary>
+    public bool HasUnreadable => UnreadableNote.Length > 0;
 
     /// <summary>按筛选重填 <see cref="Groups"/> 并同步副标题。</summary>
     /// <remarks>进入页面时最新一组默认展开；筛选重填后同样生效。</remarks>

@@ -87,39 +87,60 @@ public sealed class GuardInspectionStore
     /// <summary>按完成时间倒序读取最近若干份巡检归档，供守卫日志页与总览卡使用。</summary>
     /// <param name="maxCount">最多读取数量。</param>
     /// <returns>倒序排列（最新在前）的巡检结果集合；无归档时为空集合。</returns>
-    public IReadOnlyList<GuardRunReport> ReadRecent(int maxCount)
+    /// <remarks>
+    /// 🔴 <b>读不出来的份数必须往外报</b>（审计 P1-2）。本方法原先只记一行 Warn 就跳过，
+    /// 于是"枚举改名 / schema 变动"这类**结构**性不兼容的后果是：守卫日志页最多 30 份历史
+    /// 与总览守卫卡一起**静默消失**，而用户与日志都看不出发生过任何事。
+    /// <para>
+    /// 这里<b>不加兼容映射</b>（项目未正式发布，用户明确指示不做兼容代码）：
+    /// 读不出来就是读不出来。但"读不出来"必须**看得见** —— 否则它与"从来没有过这些记录"
+    /// 在界面上完全一样，而后者是一个事实判断，前者是一次故障。
+    /// </para>
+    /// </remarks>
+    public GuardInspectionReadResult ReadRecent(int maxCount)
     {
-        if (maxCount <= 0 || !Directory.Exists(_paths.GuardInspectionsRoot))
-        {
-            return [];
+
+    if (maxCount <= 0 || !Directory.Exists(_paths.GuardInspectionsRoot))
+    {
+            return new GuardInspectionReadResult([], 0);
         }
 
-        var results = new List<GuardRunReport>();
+     var results = new List<GuardRunReport>();
+   var unreadableCount = 0;
 
         // 文件名是 yyyyMMdd-HHmmss，字典序降序 == 时间降序，无需读文件内容比较时间。
         var files = Directory.GetFiles(_paths.GuardInspectionsRoot, ArchiveSearchPattern)
             .OrderByDescending(static path => Path.GetFileNameWithoutExtension(path), StringComparer.OrdinalIgnoreCase)
-            .Take(maxCount);
+  .Take(maxCount);
 
         foreach (var file in files)
-        {
+     {
             try
-            {
-                var json = File.ReadAllText(file);
-                var report = JsonSerializer.Deserialize(json, GuardJsonContext.Default.GuardRunReport);
-                if (report is not null)
-                {
-                    results.Add(report);
-                }
+       {
+          var json = File.ReadAllText(file);
+        var report = JsonSerializer.Deserialize(json, GuardJsonContext.Default.GuardRunReport);
+        if (report is not null)
+   {
+            results.Add(report);
+    }
             }
             catch (Exception ex) when (ex is JsonException or NotSupportedException or IOException or UnauthorizedAccessException)
             {
-                // 单份归档读不出来不该让整个守卫日志页空掉（FR-1.4 的同一条原则）。
-                _log.Warn(ex, $"守卫巡检归档无法读取，已跳过：{file}");
-            }
+   // 单份归档读不出来不该让整个守卫日志页空掉（FR-1.4 的同一条原则），
+       // 但**必须计数**：静默跳过与"从来没有过"在界面上无法区分。
+                unreadableCount++;
+          _log.Warn(ex, $"守卫巡检归档无法读取，已跳过：{file}");
+  }
+   }
+
+ if (unreadableCount > 0)
+        {
+ _log.Error(
+   $"{unreadableCount} 份守卫巡检归档读不出来（通常是程序升级改了归档结构）。"
+       + "它们仍在磁盘上，但守卫日志页与总览卡不会显示 —— 删除 inspections 目录可清除。");
         }
 
-        return results;
+        return new GuardInspectionReadResult(results, unreadableCount);
     }
 
     /// <summary>清理超出上限的旧归档（写入后调用；与 <c>RunStateService.TrimArchive</c> 同构）。</summary>
@@ -148,3 +169,16 @@ public sealed class GuardInspectionStore
         }
     }
 }
+
+/// <summary>一次「读最近若干份巡检归档」的结果（审计 P1-2）。</summary>
+/// <param name="Reports">读出来的巡检结果，倒序（最新在前）。</param>
+/// <param name="UnreadableCount">
+/// 读不出来的份数。🔴 它必须随结果一起返回而不是只记一行日志：
+/// 调用方要能把它显示给用户 ——「读不出来」与「从来没有过」在界面上必须能区分。
+/// </param>
+/// <remarks>
+/// 做成记录而不是 <c>out</c> 参数：读文件要放到后台线程，而 <c>out</c> 参数不能跨 lambda。
+/// </remarks>
+public sealed record GuardInspectionReadResult(
+    IReadOnlyList<GuardRunReport> Reports,
+    int UnreadableCount);

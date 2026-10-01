@@ -32,7 +32,8 @@ public sealed partial class GuardRunsPage : Page
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        Loaded -= OnLoaded;
+        // 🔴 **不摘绑**（2026-10-02）：守卫又跑了一轮之后回到本页，看到的必须是新的归档。
+        // 论证见 ItemsPage.OnLoaded。
         _ = ViewModel.LoadAsync();
     }
 }

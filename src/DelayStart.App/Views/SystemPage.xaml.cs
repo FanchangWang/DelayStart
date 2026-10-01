@@ -89,7 +89,9 @@ public sealed partial class SystemPage : Page, INavigationTarget, IReloadablePag
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        Loaded -= OnLoaded;
+        // 🔴 **不摘绑**（2026-10-02）：本页读的是服务/驱动/登录项等活体状态，
+        // 缓存只是"先摆出来给你看"，后台那次重查才是真相。
+        // 论证见 ItemsPage.OnLoaded。
         _ = ViewModel.LoadAsync();
     }
 

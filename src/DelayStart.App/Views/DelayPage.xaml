@@ -69,31 +69,6 @@
                 TextWrapping="Wrap"
                 Visibility="{x:Bind ViewModel.HasCycleSummary, Mode=OneWay}" />
 
-            <!--
-                F11.3「运行调度」：与计划任务跑的是同一个调度端、同一份判定、同一批条目，
-                只是时刻由用户点出来（跟"重试守卫"改叫"立即巡检"是同一条理由：按钮名要说它真的做什么）。
-                放在这里而不是总览页：它的对象是**延时条目列表**，而那一页在"扫到哪些自启动项"，
-                两页的数据不在同一个语境里。
-                🔴 禁用依据是"调度端已在跑"而不是"空闲"：第二实例会秒退，
-                点下去用户只会看到"没反应"。
-                🔴 忙碌态在等调度端接管那 30 秒里一直转 —— 那个窗口里"不知道有没有生效"
-                正是最容易让人重复点击的时刻。
-            -->
-            <Button
-                Margin="0,8,0,0"
-                HorizontalAlignment="Left"
-                Click="OnRunSchedulerClicked"
-      IsEnabled="{x:Bind ViewModel.IsRunSchedulerAvailable, Mode=OneWay}"
-                Style="{StaticResource RowButtonStyle}">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <ProgressRing
-                        Width="14"
-                        Height="14"
-                        IsActive="{x:Bind ViewModel.IsSchedulerBusy, Mode=OneWay}"
-                        Visibility="{x:Bind ViewModel.IsSchedulerBusy, Mode=OneWay}" />
-                    <TextBlock Text="运行调度" />
-                </StackPanel>
-            </Button>
         </StackPanel>
 
         <!-- 顶部两条横幅共用一个 StackPanel：它们可能同时出现（配置坏了 + 次年数据没到），
@@ -117,27 +92,46 @@
                 Title="节假日数据待更新" />
         </StackPanel>
 
-        <!-- 工具栏（本批：刷新 + 手动添加） -->
+        <!--
+            工具栏：运行调度 + 进度条 + 手动添加 + 刷新
+            （2026-10-02 用户批复：「运行调度」与「手动添加」「刷新」同一行、左对齐，
+              按钮大小与样式也一致）
+        -->
         <Grid Grid.Row="2" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <ProgressBar
+            <!--
+                🔴 不用 `RowButtonStyle`：那是**行内小按钮**的样式（FontSize 12、Padding 8,5），
+                放在工具栏里比旁边两个默认样式按钮小一圈。
+                🔴 忙碌态改成**换文案**而不是塞 ProgressRing：转圈会让这一个按钮比旁边两个宽，
+                尺寸又对不齐了；而"启动中…"本来就比一个转圈说得更清楚。
+                🔴 禁用依据是"调度端已在跑"而不是"空闲"：第二实例会秒退，
+                点下去用户只会看到"没反应"。
+            -->
+            <Button
                 Grid.Column="0"
+                Click="OnRunSchedulerClicked"
+                Content="{x:Bind ViewModel.RunSchedulerText, Mode=OneWay}"
+                IsEnabled="{x:Bind ViewModel.IsRunSchedulerAvailable, Mode=OneWay}" />
+
+            <ProgressBar
+                Grid.Column="1"
                 IsIndeterminate="True"
                 VerticalAlignment="Center"
                 Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
 
             <Button
-                Grid.Column="1"
+                Grid.Column="2"
                 Click="OnAddManualRequested"
                 Content="手动添加" />
 
             <Button
-                Grid.Column="2"
+                Grid.Column="3"
                 Command="{x:Bind ViewModel.RefreshCommand}"
                 Content="刷新" />
         </Grid>
@@ -176,16 +170,37 @@
                                      默认 Stretch + 左对齐，所以下面不写对齐属性。 -->
                                 <Grid Padding="28,0,28,2" ColumnSpacing="10">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="28" />
-                                        <ColumnDefinition Width="40" />
+                                        <ColumnDefinition Width="26" />
+                                        <ColumnDefinition Width="36" />
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="90" />
-                                        <ColumnDefinition Width="96" />
-                                        <ColumnDefinition Width="80" />
-                                        <ColumnDefinition Width="70" />
-                                        <ColumnDefinition Width="76" />
-                                        <ColumnDefinition Width="230" />
+                                        <ColumnDefinition Width="156" />
+                                        <ColumnDefinition Width="88" />
+                                        <ColumnDefinition Width="54" />
+                                        <ColumnDefinition Width="54" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="168" />
                                     </Grid.ColumnDefinitions>
+                                    <!--
+                                        🔴 列宽按**实际内容的最长值**定，不是拍脑袋（2026-10-02 用户批复）。
+                                        下面每个数字后面写清它由什么撑起来，改文案时要照着复核：
+
+                                          26  #      最多 3 位序号（序号列头就 1 个字符）
+                                          36  图标    D30：图标按源显示为 32 DIP
+                                          *   程序    吸收剩余空间；名字 / 命令行 / 来源三行
+                                          156 延时    🔴 最宽是「登录后 1 分钟（60 秒）」≈150px
+                                                     （LogonDelayOf 的分钟档文案）。
+                                                     原值 90 会把分钟档**剪掉后半截**，
+                                                     而这一列没有 TextTrimming —— 是硬裁。
+                                          88  周期    「法定（工作）」6 字（最长内置档）
+                                                     + 下方独立的「今天」「明天」提示行
+                                          54  身份    「普通用户」4 字，Caption 12px ⇒ 48
+                                          54  启用    ToggleSwitch ≈40，或「已失效」4 字 = 48
+                                          64  排序    两个行内小按钮各 ≈28 + 间距 4
+                                          168 操作    编辑 40 + 移出延时 64 + 启动 40 + 间距 12 = 156，
+                                                     失效行是「删除 40 + 转为手动 64 + 启动 40」同宽
+
+                                        固定列合计 646（原 710），省下的 64 全给程序列。
+                                    -->
                                     <TextBlock
                                         Grid.Column="0"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -241,15 +256,15 @@
                                             <DataTemplate x:DataType="vm:DelayRow">
                                                 <Grid Padding="20,10,20,10" ColumnSpacing="10">
                                                     <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="28" />
-                                                        <ColumnDefinition Width="40" />
+                                                        <ColumnDefinition Width="26" />
+                                                        <ColumnDefinition Width="36" />
                                                         <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="90" />
-                                                        <ColumnDefinition Width="96" />
-                                                        <ColumnDefinition Width="80" />
-                                                        <ColumnDefinition Width="70" />
-                                                        <ColumnDefinition Width="76" />
-                                                        <ColumnDefinition Width="230" />
+                                                        <ColumnDefinition Width="156" />
+                                                        <ColumnDefinition Width="88" />
+                                                        <ColumnDefinition Width="54" />
+                                                        <ColumnDefinition Width="54" />
+                                                        <ColumnDefinition Width="64" />
+                                                        <ColumnDefinition Width="168" />
                                                     </Grid.ColumnDefinitions>
 
                                                     <!-- 顺序：与调度端的发起顺序一致（组内 ↑↓ 局部更新时联动） -->
@@ -462,20 +477,6 @@
                                                         Orientation="Horizontal"
                                                         Spacing="6">
 
-                                                        <!--
-                                                            F11.1「启动」：**始终可点，含失效条目**。
-                                                            失效说的是系统锚点没了或目标程序不在，而"程序还在、
-                                                            只是没有接管关系"（源丢失）恰恰是用户最想手动试一下的时候。
-                                                            禁用掉的话用户只能回日志里猜它还能不能跑。
-                                                            点了没起来会有 toast 说明原因，所以"能点"不等于"保证成功"。
-                                                        -->
-                                                        <Button
-                                                            Click="OnLaunchOneClicked"
-                                                            Content="启动"
-IsEnabled="{x:Bind IsLaunching}"
-                                                            Style="{StaticResource RowButtonStyle}"
-                                                            ToolTipService.ToolTip="现在启动这一项（按它自己的身份设置走，与登录时同一套降权链）" />
-
                                                         <!-- 正常条目：编辑 / 移出延时 -->
                                                         <StackPanel
                                                             Orientation="Horizontal"
@@ -512,6 +513,31 @@ IsEnabled="{x:Bind IsLaunching}"
                                                                 ToolTipService.ToolTip="脱离系统来源，变成一个手动添加的条目"
                                                                 Visibility="{x:Bind CanConvertToManual, Mode=OneTime}" />
                                                         </StackPanel>
+
+                                                        <!--
+                                                            「启动」放**最后**（2026-10-02 用户批复）：
+                                                            编辑 / 移出延时 是"改这一条"，启动是"跑一下看看"——
+                                                            前者是日常操作、后者是偶尔的排查动作，
+                                                            放末尾才不会和改配置的按钮混在一起被误点。
+
+                                                            🔴 F11.1：**始终可点，含失效条目**。
+                                                            失效说的是系统锚点没了或目标程序不在，而"程序还在、
+                                                            只是没有接管关系"（源丢失）恰恰是用户最想手动试一下的时候。
+                                                            禁用掉的话用户只能回日志里猜它还能不能跑。
+                                                            点了没起来会有 toast 说明原因，所以"能点"不等于"保证成功"。
+
+                                                            🔴🔴 禁用态必须绑 `CanLaunch`（= `!IsLaunching`），**不能绑 `IsLaunching`**：
+                                                            `IsLaunching` 的语义是"正在启动中"，绑到 `IsEnabled` 上就是
+                                                            全反 —— 空闲时 `IsLaunching=false` ⇒ **全部禁用**，
+                                                            而正在启动时反而可点（点第二次 = 重复启动多个实例）。
+                                                            `x:Bind` 不支持 `!`，所以必须多一个属性。
+                                                        -->
+                                                        <Button
+                                                            Click="OnLaunchOneClicked"
+                                                            Content="启动"
+                                                            IsEnabled="{x:Bind CanLaunch, Mode=OneWay}"
+                                                            Style="{StaticResource RowButtonStyle}"
+                                                            ToolTipService.ToolTip="现在启动这一项（按它自己的身份设置走，与登录时同一套降权链）" />
                                                     </StackPanel>
                                                 </Grid>
                                             </DataTemplate>

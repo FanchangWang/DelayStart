@@ -59,8 +59,9 @@ public sealed partial class DelayPage : Page, IReloadablePage
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        // 首次进入只需要加载一次；后续重载由外壳经 IReloadablePage.Reload 触发。
-        Loaded -= OnLoaded;
+        // 🔴 **不摘绑**（2026-10-02）：页面是 DI 单例、被 NavigationService 反复复用，
+        // 摘绑之后第二次进页就再也不会刷新了 —— 而用户看到的正是"切页回来数据没变"。
+        // 同一条注释的完整论证见 ItemsPage.OnLoaded。
         RefreshData();
     }
 

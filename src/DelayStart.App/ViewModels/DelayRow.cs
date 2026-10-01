@@ -266,12 +266,32 @@ public sealed class DelayRow : ObservableObject
     /// </para>
     /// </remarks>
     public bool IsLaunching
+    {
+        get => _isLaunching;
+        set
         {
-  get => _isLaunching;
-   set => SetProperty(ref _isLaunching, value);
+            // 🔴 连带刷新 CanLaunch：它是由 IsLaunching 派生的只读属性，
+            // SetProperty 只会通知 IsLaunching 本身 —— 少了这一行，
+            // 按钮会在「点下去 → 飞行中」之后仍然可点。
+            if (SetProperty(ref _isLaunching, value))
+            {
+                OnPropertyChanged(nameof(CanLaunch));
+            }
         }
+    }
 
     private bool _isLaunching;
+
+    /// <summary>
+    /// 「启动」按钮此刻该不该可点（F11.1；修正 P2-2 引入的反向禁用）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>必须单独有这个属性</b>，不能把 <see cref="IsLaunching"/> 直接绑到 <c>IsEnabled</c>：
+    /// 那个绑法语义是反的 —— 空闲时 <c>IsLaunching == false</c> ⇒ 按钮<b>全部禁用</b>，
+    /// 而正在启动时反而可点 —— 那正好是用户最容易再点一次、起出多个实例的时刻。
+    /// <c>x:Bind</c> 不支持 <c>!</c> 取反（见 AGENTS 反模式清单），所以只能多一个属性。
+    /// </remarks>
+    public bool CanLaunch => !_isLaunching;
 
     /// <summary>
     /// 能否转成手动条目（D81）。

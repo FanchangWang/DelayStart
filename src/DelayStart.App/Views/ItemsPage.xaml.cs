@@ -58,15 +58,32 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
     public ItemsViewModel ViewModel { get; }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 🔴 切标签（注册表 → 计划任务 …）也必须在这里触发刷新，**不能只靠 <c>Loaded</c>**。
+    /// <c>NavigationService.Navigate</c> 只是把**同一个单例实例**重新赋给 <c>frame.Content</c>
+    /// （同类型同标签时甚至直接 <c>return</c>），并不保证 <c>Loaded</c> 会再触发一次。
+    /// 漏了这一句的症状是：标签切了、标题变了、列表还是上一个来源的。
+    /// </remarks>
     public string? NavigationTag
     {
         get => field;
         set
         {
+            var changed = field != value;
             field = value;
             ApplyTag(value);
+
+            // 🔴 只在"已经加载过一次"之后才由标签驱动刷新：首次导航时外壳会先设标签、
+            // 再把页面挂上去，紧跟着的 Loaded 会刷一次 —— 两次叠加没有意义。
+            if (changed && _hasLoaded)
+            {
+                RequestRefresh();
+            }
         }
     }
+
+    /// <summary>本页是否已经加载过至少一次（用来区分"首次导航"与"切标签"）。</summary>
+    private bool _hasLoaded;
 
     /// <summary>把导航标签翻译成来源筛选与页标题。</summary>
     private void ApplyTag(string? tag) => ViewModel.SourceFilter = tag switch
@@ -84,23 +101,51 @@ public sealed partial class ItemsPage : Page, INavigationTarget, IReloadablePage
         return source;
     }
 
+    /// <summary>
+    /// 进入本页时触发加载。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>这里原来有一句 <c>Loaded -= OnLoaded;</c>，是"切页不刷新"的根因之一</b>
+    /// （2026-10-02 用户实测：在外部加/删注册表项后，重新进入本页表格没刷新）。
+    /// 它当初的理由是「只加载一次，免得守卫和 <see cref="IReloadablePage.Reload"/> 都叠加」。
+    /// 但那个理由建立在两个后来都不成立的前提上：
+    /// <list type="number">
+    /// <item><description>注释说「页面每次导航都新建实例」—— <b>不成立</b>。
+    /// <c>NavigationService.Navigate</c> 用 <c>_services.GetRequiredService(pageType)</c> 取实例，
+    /// 页面注册成单例，同一个实例被反复 <c>frame.Content = page</c> 复用。
+    /// 于是第二次进页时 <c>Loaded</c> 确实会触发，但<b>已经没有处理器了</b>。</description></item>
+    /// <item><description>「免得叠加」也不成立 —— <see cref="IReloadablePage.Reload"/> 与本页的
+    /// <c>Loaded</c> 本来就走同一个 <see cref="ScanCacheService"/>，重复调用是幂等的
+    /// （指纹相同 ⇒ 一个集合通知都不发）。</description></item>
+    /// </list>
+    /// 所以现在**不摘绑**：每次进页都触发一次加载，而加载本身是"先摆缓存、后台重扫"两段式，
+    /// 缓存命中时是微秒级，重扫在后台且被指纹门控。
+    /// </remarks>
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        // 读缓存秒回，但仍挂 Loaded：让窗口先画出来，再灌列表。
-        // 只加载一次；后续重载由外壳经 IReloadablePage.Reload 触发。
-        Loaded -= OnLoaded;
-
-        if (ViewModel.LoadCommand.CanExecute(null))
-        {
-            ViewModel.LoadCommand.Execute(null);
-        }
+        _hasLoaded = true;
+        RequestRefresh();
     }
 
     /// <inheritdoc />
-    public void Reload()
+    public void Reload() => RequestRefresh();
+
+    /// <summary>
+    /// 请求一次"强制重扫当前来源"。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 三个入口（进页 / 切标签 / 外壳定位）统一走这里，且一律用
+    /// <c>RefreshCommand</c> 而不是 <c>LoadCommand</c>：后者命中缓存就直接返回，
+    /// 而"系统里多了/少了一条"（用户在外部改注册表、卸载器清了启动文件夹）
+    /// 恰恰是缓存里**没有**、也没有任何东西会把它标记成过期的信息。
+    /// <para>
+    /// 重复调用是安全的：加载是"先摆缓存、后台重扫"两段式，且
+    /// <c>AsyncRelayCommand</c> 默认不允许并发执行，飞行中 <c>CanExecute</c> 为假。
+    /// 指纹相同 ⇒ 一个集合通知都不发，所以无变化的重扫对界面完全不可见。
+    /// </para>
+    /// </remarks>
+    private void RequestRefresh()
     {
-        // 用「刷新本页」那条命令（强制重扫当前来源），不用 LoadCommand：
-        // 后者命中缓存就直接返回，而"系统里多了/少了一条"恰恰是缓存里没有的信息。
         if (ViewModel.RefreshCommand.CanExecute(null))
         {
             ViewModel.RefreshCommand.Execute(null);

@@ -33,8 +33,8 @@ public sealed partial class RunsPage : Page, IReloadablePage
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        // 只加载一次；后续重载由外壳经 IReloadablePage.Reload 触发。
-        Loaded -= OnLoaded;
+        // 🔴 **不摘绑**（2026-10-02）：调度端每跑完一轮就多一份归档，回到本页必须能看到。
+        // 论证见 ItemsPage.OnLoaded。
         Reload();
     }
 

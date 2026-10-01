@@ -49,7 +49,10 @@ public sealed partial class SettingsPage : Page
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        Loaded -= OnLoaded;
+        // 🔴 **不摘绑**（2026-10-02）—— 这一处摘绑造成的是**第二个**潜在故障：
+        // OnUnloaded 会 DetachHolidayStatus，而重新挂接只在 Load() 里。
+        // 摘绑之后第一次离开设置页，节假日更新进度那条线就永远接不回来了。
+        // 论证见 ItemsPage.OnLoaded。
         ViewModel.Load();
         _initialized = true;
     }

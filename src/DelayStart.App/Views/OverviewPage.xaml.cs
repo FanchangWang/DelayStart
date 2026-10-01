@@ -54,7 +54,8 @@ public sealed partial class OverviewPage : Page
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        Loaded -= OnLoaded;
+        // 🔴 **不摘绑**（2026-10-02）：总览页要显示"最近一次运行"，而调度端可能刚跑完。
+        // 论证见 ItemsPage.OnLoaded。
         await ViewModel.LoadAsync();
         _initialized = true;
     }

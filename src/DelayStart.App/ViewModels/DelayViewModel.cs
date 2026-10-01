@@ -692,15 +692,30 @@ public sealed partial class DelayViewModel : ObservableObject
     /// </remarks>
     public bool IsRunSchedulerAvailable => !IsSchedulerRunning && !IsSchedulerBusy;
 
-    /// <summary><see cref="IsSchedulerRunning"/> 变化时连带刷新按钮可用态。</summary>
+    /// <summary>「运行调度」按钮上的文字（2026-10-02 用户批复：与「手动添加」同一行、同一样式）。</summary>
+    /// <remarks>
+    /// 🔴 忙碌态用**换文案**而不是塞 <c>ProgressRing</c>：转圈会让这一个按钮比旁边两个宽，
+    /// 尺寸又对不齐了 —— 而用户要的是"这三个按钮看起来是一套"。
+    /// 而且"启动中…"本来就比一个转圈说得更清楚：那个窗口要等 30 秒，
+    /// "不知道有没有生效"正是最容易让人重复点击的时刻。
+    /// </remarks>
+    public string RunSchedulerText => IsSchedulerBusy ? "启动中…" : "运行调度";
+
+    /// <summary><see cref="IsSchedulerRunning"/> 变化时连带刷新按钮可用态与文案。</summary>
     /// <param name="value">新值。</param>
     partial void OnIsSchedulerRunningChanged(bool value)
-        => OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+    {
+        OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+        OnPropertyChanged(nameof(RunSchedulerText));
+    }
 
-    /// <summary><see cref="IsSchedulerBusy"/> 变化时连带刷新按钮可用态。</summary>
+    /// <summary><see cref="IsSchedulerBusy"/> 变化时连带刷新按钮可用态与文案。</summary>
     /// <param name="value">新值。</param>
     partial void OnIsSchedulerBusyChanged(bool value)
-  => OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+    {
+        OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+        OnPropertyChanged(nameof(RunSchedulerText));
+    }
 
     /// <summary>
     /// 「运行调度」：确认 → 单实例预检 → 启动调度端 → 轮询等它接管（F11.3）。

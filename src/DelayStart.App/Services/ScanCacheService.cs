@@ -150,11 +150,6 @@ public sealed class ScanCacheService : IDisposable
         {
             var scanned = await Task.Run(() => ScanAllAsync(cancellationToken), cancellationToken).ConfigureAwait(false);
 
-            // 基准取**本次成功结果的上一份**，而不是本次：求差的对象必须是"之前"的那份。
-            if (_snapshot is { } previous)
-            {
-            }
-
             _snapshot = scanned;
             ClearStale(kind: null);
             return _snapshot;
@@ -180,10 +175,6 @@ public sealed class ScanCacheService : IDisposable
         try
         {
             var rescanned = await Task.Run(() => RescanSourceAsync(kind, cancellationToken), cancellationToken).ConfigureAwait(false);
-
-            if (_snapshot is { } previous)
-            {
-            }
 
             _snapshot = rescanned;
             ClearStale(kind);

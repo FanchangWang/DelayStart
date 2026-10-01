@@ -34,9 +34,10 @@ public sealed partial class ItemsViewModel : ObservableObject
     private readonly ScanCacheService _cache;
 
     /// <summary>
-    /// 当前已渲染到界面上的内容指纹（A2.3）。<see langword="null"/> = 还没渲染过任何东西。
+    /// 上一次**真正摆到界面上的**那份内容的键（快照指纹 + 来源筛选，D139）。
+    /// <see langword="null"/> = 从未摆过。
     /// </summary>
-    private string? _renderedFingerprint;
+    private string? _renderedKey;
     private readonly TakeoverService _takeover;
     private readonly ConfigEditService _editor;
     private readonly IReadOnlyList<IStartupSource> _sources;
@@ -212,7 +213,19 @@ public sealed partial class ItemsViewModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        if (string.Equals(_renderedFingerprint, snapshot.Fingerprint, StringComparison.Ordinal))
+        // 🔴 指纹必须**连来源筛选一起**比（D139）。
+        //
+        // `Rows` 的内容 = 快照 ∩ <see cref="SourceFilter"/>，而 <c>ScanSnapshot.Fingerprint</c>
+        // 覆盖的是**整份快照**（七个来源全在一起）。只比它的话：
+        // 切子页面时系统毫无变化 ⇒ 指纹逐字节相同 ⇒ 这里直接 return ⇒
+        // 列表还停在上一个来源 —— 用户看到的就是「计划任务页里摆着注册表的条目」，
+        // 四页看上去像混在了一起（2026-10-02 用户实测）。
+        //
+        // 改动前这里压根不刷新（Loaded 自解绑），所以那会儿是"看不到变化"；
+        // 修好刷新之后变成"刷新了但被门挡掉" —— 症状没变，根因换了一个。
+        var key = RenderKey.For(SourceFilter, snapshot.Fingerprint);
+
+        if (string.Equals(_renderedKey, key, StringComparison.Ordinal))
         {
             return;
         }
@@ -602,7 +615,7 @@ if (RunGuardAlongsideLoad(snapshot))
     /// <summary>把快照灌进列表（只保留当前来源）。</summary>
     private void Apply(ScanSnapshot snapshot)
     {
-        _renderedFingerprint = snapshot.Fingerprint;
+        _renderedKey = RenderKey.For(SourceFilter, snapshot.Fingerprint);
 
         // 🔴 **复用旧行实例**（D138）。`SyncInPlace` 用引用相等判断「这行没变」，
         // 而这里原先每次都 new 出全部行 —— 引用永不相等，于是差量同步退化成
@@ -610,14 +623,14 @@ if (RunGuardAlongsideLoad(snapshot))
         //
     // 按 Id 建旧行索引，内容一模一样的直接沿用旧对象 —— 容器不重建，
         // 行内按钮不闪、焦点与滚动位置都留着。
-     var previous = new Dictionary<string, StartupEntryRow>(Rows.Count, StringComparer.Ordinal);
-foreach (var row in Rows)
+        var previous = new Dictionary<string, StartupEntryRow>(Rows.Count, StringComparer.Ordinal);
+        foreach (var row in Rows)
         {
             previous[row.Entry.Id] = row;
         }
 
         var rebuilt = new List<StartupEntryRow>(previous.Count);
-    foreach (var entry in snapshot.Entries)
+        foreach (var entry in snapshot.Entries)
         {
             if (SourceFilter is not { } filter || entry.Source == filter)
             {
@@ -627,10 +640,10 @@ foreach (var row in Rows)
             var pixels = snapshot.Pixels.GetValueOrDefault(entry);
 
             rebuilt.Add(
-       previous.TryGetValue(entry.Id, out var old)
-       && StartupEntryRow.SameContent(old.Entry, old.Pixels, entry, pixels)
-  ? old
-         : new StartupEntryRow(entry, pixels));
+                previous.TryGetValue(entry.Id, out var old)
+                    && StartupEntryRow.SameContent(old.Entry, old.Pixels, entry, pixels)
+                    ? old
+                    : new StartupEntryRow(entry, pixels));
         }
 
         // 集合本身仍按差量更新，而不是 Clear()+Add：ObservableCollection 的每一次 Add

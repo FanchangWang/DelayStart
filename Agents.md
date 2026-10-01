@@ -14,7 +14,7 @@
 | 三原则 | **全部可逆**、**判定可靠**、**不替用户做决定**（违反任何一条即架构性错误） |
 | 技术栈 | .NET 10 + WinUI 3（管理端，unpackaged）· 纯 Win32 + NativeAOT（调度端）· **.NET 10 + 非 AOT**（守卫端）· xUnit v3（测试） |
 | 构建 | `.\scripts\build.ps1` → Release **0 警告 0 错误**（`TreatWarningsAsErrors=true`） |
-| 测试 | `.\scripts\test.ps1` → **723 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
+| 测试 | `.\scripts\test.ps1` → **797 个用例全绿**；🔴 **不要用 `dotnet test`**（见 D26） |
 | 状态 | 功能完整（含守卫、通知中转器、FR-15 调度周期），进安装包阶段；v0.6.1 已**取消进度面板**并把守卫内联进管理端（见 `docs/decisions.md` D124–D133）；守卫 / D82 / **N1–N13 通知** / **FR-15 真机验收** / **v0.6.1 真机验收**均待真机验收；文档与代码同步 |
 
 ---
@@ -69,6 +69,15 @@
 | 守卫触发规则（档位 → 触发器） | `Services/GuardSchedulePlan.cs` |
 | 提权自检（供守卫入口 / 调度端） | `Services/ElevationCheck.cs` |
 | 跨进程启动参数 / 协议常量（CLI token、`delaystart://`） | `Launch/AppActivation.cs`（🔴 守卫与管理端**共用**，改一处即改契约） |
+| 界面文案合成（延时三档格式、状态词、来源名） | `Services/DisplayText.cs`（🔴 从 `App/ViewModels/` 搬来：纯逻辑住在没有测试工程的层 = 没有测试） |
+| **来源筛选**（哪个子页面显示哪些来源的条目） | `Services/SourceFilterPolicy.cs`（🔴 **唯一实现**：判据曾手写三份、其中一份取反漏了 ⇒ 四个子页面条目混在一起。写成肯定式 `IsVisible`，调用点必须 `if (!IsVisible(...)) continue;`） |
+| **集合差量同步**（只发必要的集合通知） | `Services/ListSync.cs`（🔴 唯一实现。验它要验**两件**事：结果对 + **通知次数**接近最小 —— `Add`/`Remove`/索引赋值会让 `ListView` 销毁重建行容器，`Move` 不会） |
+| 托盘悬停提示文案（127 字符预算截断） | `Services/SchedulerTip.cs`（🔴 成功 / 失败 / **跳过**三个计数必须分开：合成"已启动 6/8"而 6 是含跳过的，分母就走不到头；收尾行不许在有跳过时宣称"全部启动"） |
+| 目标存活预筛（调度端发起前） | `Services/TargetPrefilter.cs` |
+| 目标路径漂移判定（D137，守卫用） | `Services/TargetPathResync.cs` |
+| 渲染键（来源筛选 + 快照指纹） | `Services/RenderKey.cs`（⚠️ 见 D139：页面是 `AddTransient`，它在"切页面"上几乎空转） |
+| 防双启动：枚举运行中进程 + 判定 | `Launch/RunningProcessProbe.cs`（🔴 调度端与管理端**共用同一份**：抄一份就是两份漂移。判定失败一律按"未启动"处理） |
+| 降权启动链（D128，已从调度端搬来） | `Launch/DeElevatedProcessLauncher.cs` + `Launch/LaunchNative.cs` |
 **`src/DelayStart.Management`** —— 一切 COM / 系统 API / 计划任务：
 
 | 要改什么 | 去哪 |
@@ -163,7 +172,7 @@
 - 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + **723** 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + **797** 个用例全绿。
 
 ---
 
@@ -194,7 +203,7 @@
 | `FR-x.y` / `NFR-x.y` | 功能 / 非功能需求 | `docs/design.md` 三、四 | `FR-5.3`、`NFR-1.2` |
 | `E-x` | 异常场景矩阵 | `docs/design.md` 五 | `E13` |
 | `R-x` | 技术风险（已全部闭环） | `docs/decisions.md` 附表 | `R11` |
-| `D-x` | 决策点（D1–D123） | `docs/decisions.md` | `D17` |
+| `D-x` | 决策点（D1–D142） | `docs/decisions.md` | `D17` |
 | `坑 x` | 技术陷阱（编号 1–10 沿用） | `docs/pitfalls.md` | `坑 1` 键名三级回退 |
 
 规则：实现某 `FR` 时在代码注释里引用它；修某 `E` 场景时在提交信息里引用它；**新踩的坑必须追加进 `pitfalls.md`**。
@@ -206,7 +215,7 @@
 | 文档 | 回答什么问题 | 什么时候必须改 |
 |---|---|---|
 | `docs/design.md` | 当前方案单一来源：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发流程 | 需求 / 机制 / 交互行为发生变化 |
-| `docs/decisions.md` | 每个决策的结论与取舍（D1–D123）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
+| `docs/decisions.md` | 每个决策的结论与取舍（D1–D142）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
 | `docs/pitfalls.md` | 技术陷阱：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 | 踩到新坑，或旧坑被修掉 / 定性变化 |
 | `docs/development.md` | 面向人：环境、构建测试、调试、发布打包、真机验收 | 环境要求 / 命令 / 流程变化 |
 | `docs/winget.md` | 上架 winget 的**手工提交教程**：提交什么、四个清单模板、流程步骤、自动化 | 包标识 / 提交形态 / 依赖声明 / 发布流程变化（决策见 D110） |

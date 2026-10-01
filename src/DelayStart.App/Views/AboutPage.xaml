@@ -124,7 +124,7 @@
                     Text="安装目录只读，所有运行数据都在用户目录下；卸载时会先还原全部接管的自启动项，再删程序文件。" />
 
                 <StackPanel Margin="0,10,0,0" Spacing="2">
-                    <stc:SettingsCard Description="{x:Bind ViewModel.ConfigPath, Mode=OneTime}" Header="配置（漫游）">
+                    <stc:SettingsCard Description="{x:Bind ViewModel.ConfigPath, Mode=OneTime}" Header="配置目录（app.json）">
                         <Button
                             Click="OnOpenFolder"
                             Content="打开"

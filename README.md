@@ -112,7 +112,7 @@ Windows 的自启动是全有或全无的：要么所有程序在登录瞬间一
 | 类别 | 路径 |
 |---|---|
 | 程序（只读） | `%LOCALAPPDATA%\Programs\DelayStart\` |
-| 配置 | `%LOCALAPPDATA%\DelayStart\config\config.json` |
+| 配置 | `%LOCALAPPDATA%\DelayStart\config\app.json` |
 | 日志 / 调度数据 / 守卫数据 | `%LOCALAPPDATA%\DelayStart\logs\` · `scheduler\archive\`（运行归档） · `guard\`（基线与巡检归档） |
 | 节假日日历缓存 | `%LOCALAPPDATA%\DelayStart\holidays\{年份}.json`（可手工替换 / 校正，设置页有「打开数据目录」） |
 

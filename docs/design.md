@@ -326,7 +326,7 @@ Tests ──> Core (+ Management)
 | 类别 | 路径 | 说明 |
 |---|---|---|
 | 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**只读**；四类 exe 同目录（D75） |
-| 配置 | `%APPDATA%\DelayStart\config.json` | Roaming，原子写 |
+| 配置 | `%LOCALAPPDATA%\DelayStart\config\app.json` | Local（**不**漫游），原子写；v0.6.1 起放进 `config\` 子目录，与可随时删的运行数据分开（P1-3） |
 | 日志 | `%LOCALAPPDATA%\DelayStart\logs\{scheduler,manager,launchbroker,guard}.log` | 2MB 轮转 |
 | 调度运行归档 | `%LOCALAPPDATA%\DelayStart\scheduler\archive\<runId>.json` | 保留 30 次（D116 起从 `runs\` 迁入） |
 | 守卫基线 | `%LOCALAPPDATA%\DelayStart\guard\baseline.json` | 上一轮扫描快照，原子写（D74） |

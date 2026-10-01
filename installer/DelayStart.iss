@@ -755,8 +755,8 @@ begin
   //    （D85 补丁：首版把「删除」排第一，用户实测发现默认焦点落错了）。
   Answer := TaskDialogMsgBox(
       '卸载 {#AppName}',
-      '配置目录：' + ExpandConstant('{userappdata}\DelayStart') + #13#10 +
-      '日志目录：' + ExpandConstant('{localappdata}\DelayStart'),
+      '配置目录：' + ExpandConstant('{localappdata}\DelayStart\config') + #13#10 +
+      '数据目录：' + ExpandConstant('{localappdata}\DelayStart'),
       mbInformation,
       MB_YESNOCANCEL, ['保留配置并卸载', '删除配置并卸载'],
       IDNO);
@@ -904,9 +904,21 @@ end;
 //    ② 此时 --restore-all 已经跑完（它在 InitializeUninstall 里），顺序天然正确。
 // 🔴 删除条件只认 DeleteUserData：GUI 没选「删除配置并卸载」、静默没传 /DELETEDATA，
 //    都一律保留 —— 删用户数据这种事绝不能在用户没看见选项的情况下发生。
+// 配置与日志的默认策略：**保留**（%LOCALAPPDATA%\DelayStart），这样卸载重装后延时列表还在。
+// D62 曾在此时点 MsgBox 询问；D84 立项、D85（2026-09-23 批复）定形为 InitializeUninstall
+// 开头的任务对话框（GUI，三按钮）/ /DELETEDATA 参数（静默），这里只执行结果。
+//
+// 🔴 时机选 usUninstall 而不是 InitializeUninstall：
+//    ① usUninstall 在"确认卸载"之后才触发 —— 用户如果在确认页反悔，不会已经删了数据；
+//    ② 此时 --restore-all 已经跑完（它在 InitializeUninstall 里），顺序天然正确。
+// 🔴 删除条件只认 DeleteUserData：GUI 没选「删除配置并卸载」、静默没传 /DELETEDATA，
+//    都一律保留 —— 删用户数据这种事绝不能在用户没看见选项的情况下发生。
+//
+// 🔴 v0.6.1 起只有**一个**数据根：配置从 %APPDATA% 迁到 Local，又放进 Local 下的 config\ 子目录
+//    （D23 → v0.6.1）。原先这里还并列删 RoamingDir，那是已经没有写入方、也永远不会生成的目录 ——
+//    留着会让"配置与日志未能完全删除"的提示列出两个路径，其中一个删了也不存在。
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  RoamingDir: String;
   LocalDir: String;
 begin
   if CurUninstallStep = usUninstall then
@@ -923,19 +935,16 @@ begin
     if RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\delaystart') then
       Log('已删除协议处理器：HKCU\Software\Classes\delaystart');
 
-    RoamingDir := ExpandConstant('{userappdata}\DelayStart');
     LocalDir := ExpandConstant('{localappdata}\DelayStart');
 
     if not DeleteUserData then
       Exit;
 
-    DelTree(RoamingDir, True, True, True);
     DelTree(LocalDir, True, True, True);
 
-    if DirExists(RoamingDir) or DirExists(LocalDir) then
+    if DirExists(LocalDir) then
       UserDataNote :=
         '⚠ 配置与日志未能完全删除（文件可能仍被占用）。请手动检查：' #13#10 +
-        '  ' + RoamingDir + #13#10 +
         '  ' + LocalDir
     else
       UserDataNote := '配置与日志已一并删除。';
@@ -945,8 +954,9 @@ begin
     if UserDataNote = '' then
       SuppressibleMsgBox(
         '配置与日志已保留：' #13#10 +
-        '  %APPDATA%\DelayStart（延时列表与设置）' #13#10 +
-        '  %LOCALAPPDATA%\DelayStart（日志与运行记录）' #13#10 #13#10 +
+        '  %LOCALAPPDATA%\DelayStart\config（延时列表与设置）' #13#10 +
+        '  %LOCALAPPDATA%\DelayStart\logs（日志）' #13#10 +
+        '  %LOCALAPPDATA%\DelayStart\scheduler（运行归档）' #13#10 #13#10 +
         '如需彻底清除，请手动删除上述目录。',
         mbInformation, MB_OK, IDOK)
     else

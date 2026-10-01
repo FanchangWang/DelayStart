@@ -94,10 +94,19 @@ public sealed partial class AboutViewModel : ObservableObject
     public string ElevationText { get; } =
         Environment.IsPrivilegedProcess ? "管理员（高完整性）" : "标准用户";
 
-    /// <summary>配置（漫游）目录：<c>%APPDATA%\DelayStart</c>。</summary>
+    /// <summary>配置目录：<c>%LOCALAPPDATA%\DelayStart\config</c>（<c>app.json</c> 在里面）。</summary>
+    /// <remarks>
+    /// 🔴 卡片上必须显示**配置文件所在的目录**，不是配置文件本身，也不是 Local 根 ——
+    /// v0.6.1 之前这三者恰好相同（ConfigRoot 就是 LocalRoot），卡片同时写着
+    /// 「配置（漫游）%APPDATA%\DelayStart」而实际早已迁到 Local，那是**事实性错误**。
+    /// </remarks>
     public string ConfigPath { get; }
 
-    /// <summary>数据目录：<c>%LOCALAPPDATA%\DelayStart</c>（状态、归档、节假日数据）。</summary>
+    /// <summary>数据目录：<c>%LOCALAPPDATA%\DelayStart</c>（日志、状态、归档、节假日数据）。</summary>
+    /// <remarks>
+    /// 🔴 与 <see cref="ConfigPath"/> 的区别现在**看得见**了：配置在它下面的 <c>config\</c> 子目录里
+    /// （v0.6.1 之前两者是同一个目录，卡片上并排显示两行一模一样的路径）。
+    /// </remarks>
     public string DataPath { get; }
 
     /// <summary>日志目录。</summary>

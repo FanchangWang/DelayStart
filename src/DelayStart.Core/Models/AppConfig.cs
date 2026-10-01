@@ -1,7 +1,7 @@
 namespace DelayStart.Core.Models;
 
 /// <summary>
-/// 配置文件根对象，对应 <c>%APPDATA%\DelayStart\config.json</c>（D23 / FR-4.8）。
+/// 配置文件根对象，对应 <c>%LOCALAPPDATA%\DelayStart\config\app.json</c>（D23 / FR-4.8）。
 /// </summary>
 /// <remarks>
 /// <para>

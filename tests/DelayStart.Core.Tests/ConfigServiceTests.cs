@@ -10,7 +10,7 @@ namespace DelayStart.Core.Tests;
 /// </summary>
 public sealed class ConfigServiceTests : IDisposable
 {
-    private const string CorruptBackupSearchPattern = "config.json.corrupt-*";
+    private const string CorruptBackupSearchPattern = "app.json.corrupt-*";
 
     private readonly TempDirectory _temp = new();
     private readonly FakeLogSink _log = new();
@@ -377,7 +377,7 @@ public sealed class ConfigServiceTests : IDisposable
         _service.Save(config);
         _service.Save(config);
 
-        Assert.Single(Directory.GetFiles(_paths.ConfigRoot, "config.json"));
+        Assert.Single(Directory.GetFiles(_paths.ConfigRoot, "app.json"));
     }
 
     [Fact]

@@ -51,9 +51,28 @@ public sealed class PathService
         // 计划任务路径、接管前的原始状态。漫游过去的后果是守卫看到一堆"源已消失"的孤儿、
         // 调度器去启动不存在的路径，而且**这些数据在源机器上已被覆盖、无法还原**。
         // 其余数据（调度、守卫、法定日历、日志）本来就都在 Local，配置是唯一的例外。
+        //
+        // 🔴 **放在 LocalRoot 下的 config\ 子目录**，而不是与 LocalRoot 平级：
+        // 同一个目录里既堆着 logs\ scheduler\ guard\ holidays\ 这些**可随时删**的运行数据，
+        // 又放着唯一的**还原依据**。用户清理"日志和缓存"时顺手动到 config.json 的概率不低，
+        // 而配置丢了 = 接管关系全部失忆 = 无法还原被接管的系统启动项。
+        // 分成子目录之后，"删运行数据"与"留配置"在目录层面就是两件不同的事。
+        var resolvedLocalRoot = ResolveRoot(localRoot, LocalRootOverrideVariable, Environment.SpecialFolder.LocalApplicationData);
+        LocalRoot = NormalizeDirectory(resolvedLocalRoot);
+
+        // 环境变量仍然优先：它本来就是给测试与"把配置放到别处"用的显式入口，
+        // 显式指定时不该再被强行塞进 LocalRoot\config。
         ConfigRoot = NormalizeDirectory(
-            ResolveRoot(configRoot, ConfigRootOverrideVariable, Environment.SpecialFolder.LocalApplicationData));
+            configRoot is not null || Environment.GetEnvironmentVariable(ConfigRootOverrideVariable) is { } overridden
+                ? ResolveRoot(configRoot, ConfigRootOverrideVariable, Environment.SpecialFolder.LocalApplicationData)
+                : Path.Combine(resolvedLocalRoot, ConfigDirectoryName));
     }
+
+    /// <summary>配置目录名（<see cref="LocalRoot"/> 下的子目录）。</summary>
+    private const string ConfigDirectoryName = "config";
+
+    /// <summary>配置文件名（不含目录）。</summary>
+    private const string ConfigFileName = "app.json";
 
     /// <summary>
     /// 安装目录（per-user 安装时为 <c>%LOCALAPPDATA%\Programs\DelayStart</c>）。
@@ -65,12 +84,22 @@ public sealed class PathService
     public string LocalRoot { get; }
 
     /// <summary>
-    /// 配置根目录：<c>%LOCALAPPDATA%\DelayStart\config.json</c>。
+    /// 配置根目录：<c>%LOCALAPPDATA%\DelayStart\config</c>。
     /// </summary>
     /// <remarks>
     /// 🔴 刻意与 <see cref="LocalRoot"/> 同在 Local、而不是漫游目录：配置内容全是机器相关的
     /// （绝对路径、注册表键名、计划任务路径、接管前状态），漫游到另一台机器上全部失效且无法还原。
     /// 用户偏好（主题、上次选的延时）才适合漫游，而本项目没有那类数据。
+    /// <para>
+    /// 🔴 而它**必须**是 <see cref="LocalRoot"/> 的**子目录**而不是与它平级：同一个目录里
+    /// 既堆着 logs\ / scheduler\ / guard\ / holidays\ 这些**可随时删**的运行数据，又放着
+    /// 唯一的**还原依据**。用户清理"日志和缓存"时顺手动到配置文件的概率不低，而配置丢了
+    /// 等于接管关系全部失忆、无法还原被接管的系统启动项（硬约束 7 可逆优先）。
+    /// </para>
+    /// <para>
+    /// 显式传入或设了 <see cref="ConfigRootOverrideVariable"/> 时**不**再套子目录 ——
+    /// 那两个入口本来就是给测试与"把配置放到别处"用的，显式指定就该照办。
+    /// </para>
     /// </remarks>
     public string ConfigRoot { get; }
 
@@ -97,8 +126,12 @@ public sealed class PathService
     /// 与 <see cref="GuardRoot"/> 同口径，不进 <see cref="EnsureCreated"/>。</remarks>
     public string GuardInspectionsRoot => Path.Combine(GuardRoot, "inspections");
 
-    /// <summary>配置文件完整路径（<c>config.json</c>）。</summary>
-    public string ConfigFilePath => Path.Combine(ConfigRoot, "config.json");
+    /// <summary>配置文件完整路径（<c>{ConfigRoot}\app.json</c>）。</summary>
+    /// <remarks>
+    /// 🔴 文件名不叫 <c>config.json</c>：它所在的目录已经叫 <c>config</c> 了，
+    /// <c>config\config.json</c> 是那种读起来会卡一下的重复。
+    /// </remarks>
+    public string ConfigFilePath => Path.Combine(ConfigRoot, ConfigFileName);
 
     /// <summary>调度端日志完整路径。</summary>
     public string SchedulerLogPath => Path.Combine(LogsRoot, "scheduler.log");

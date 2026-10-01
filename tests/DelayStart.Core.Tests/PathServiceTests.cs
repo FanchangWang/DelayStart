@@ -39,7 +39,8 @@ public sealed class PathServiceTests : IDisposable
         var expected = Path.GetFullPath(
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DelayStart"));
+                "DelayStart",
+                "config"));
 
         Assert.Equal(expected, paths.ConfigRoot, ignoreCase: true);
 
@@ -74,10 +75,42 @@ public sealed class PathServiceTests : IDisposable
         Assert.NotEqual(paths.LocalRoot, paths.ConfigRoot);
         Assert.True(
             paths.ConfigFilePath.StartsWith(paths.ConfigRoot, StringComparison.OrdinalIgnoreCase),
-            "config.json 必须落在配置根下");
+            "配置文件必须落在配置根下");
         Assert.True(
             paths.SchedulerLogPath.StartsWith(paths.LocalRoot, StringComparison.OrdinalIgnoreCase),
             "日志必须落在 Local 根下");
+    }
+
+    [Fact]
+    public void DefaultConfigRoot_IsASubdirectoryOfLocalRoot()
+    {
+        // 🔴 这条钉的是"默认布局"下配置必须**在** Local 根的子目录里（v0.6.1）。
+        //
+        // 理由不是好看：Local 根里同时堆着 logs\ scheduler\ guard\ holidays\ 这些
+        // **可随时删**的运行数据，和唯一的**还原依据**（配置里记着每个被接管系统项的
+        // 原始状态）。两者平级时，用户清理"日志和缓存"顺手删掉配置文件是迟早的事，
+        // 而配置一丢，接管关系全部失忆、无法还原被接管的系统启动项（硬约束 7 可逆优先）。
+        var paths = new PathService(localRoot: null, configRoot: null, installedRoot: _temp.Path);
+
+        var expected = Path.GetFullPath(Path.Combine(paths.LocalRoot, "config"));
+
+        Assert.Equal(expected, paths.ConfigRoot, ignoreCase: true);
+        Assert.True(
+            paths.LocalRoot.Length < paths.ConfigRoot.Length,
+            "配置目录必须是 Local 根的**下级**，而不是同一个目录换了个名字");
+    }
+
+    [Fact]
+    public void ExplicitConfigRoot_IsUsedVerbatim_NoSubdirectoryAppended()
+    {
+        // 显式入口（测试传参 / DELAYSTART_CONFIG_DIR）本来就用来"把配置放到别处"，
+        // 强行再套一层子目录会让那个入口失去意义。
+        var explicitRoot = _temp.Combine("elsewhere");
+
+        var paths = new PathService(localRoot: _temp.Combine("local"), configRoot: explicitRoot, _temp.Path);
+
+        Assert.Equal(Path.GetFullPath(explicitRoot), paths.ConfigRoot, ignoreCase: true);
+        Assert.Equal(Path.Combine(Path.GetFullPath(explicitRoot), "app.json"), paths.ConfigFilePath);
     }
 
     [Fact]
@@ -99,7 +132,7 @@ public sealed class PathServiceTests : IDisposable
         var paths = new PathService(_temp.Combine("local"), _temp.Combine("config"), _temp.Path);
 
         // Act / Assert
-        Assert.Equal(Path.Combine(paths.ConfigRoot, "config.json"), paths.ConfigFilePath);
+        Assert.Equal(Path.Combine(paths.ConfigRoot, "app.json"), paths.ConfigFilePath);
         Assert.Equal(Path.Combine(paths.LogsRoot, "scheduler.log"), paths.SchedulerLogPath);
         Assert.Equal(Path.Combine(paths.LogsRoot, "manager.log"), paths.ManagerLogPath);
         Assert.Equal(Path.Combine(paths.LocalRoot, "logs"), paths.LogsRoot);

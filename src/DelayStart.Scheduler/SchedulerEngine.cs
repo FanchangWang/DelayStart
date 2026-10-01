@@ -695,36 +695,16 @@ internal sealed class SchedulerEngine
         return true;
     }
 
-    /// <summary>枚举同名进程并取各自的可执行模块路径。</summary>
+    /// <summary>枚举同进程名下正在运行的进程，取其可执行文件路径。</summary>
     /// <param name="processName">进程名（不含扩展名）。</param>
-    /// <returns>进程快照；模块路径读不到时为 <see langword="null"/>（该进程不参与判定）。</returns>
+    /// <returns>进程快照。</returns>
+    /// <remarks>
+    /// 🔴 委托给 <see cref="RunningProcessProbe"/>（D138）：这份收集逻辑原先是调度端私有的，
+    /// 而管理端「启动」按钮要用同一套"目标已在跑 ⇒ 跳过"判定。抄一份就是两份漂移 ——
+    /// 那正是降权启动链在 D128 之前落到调度端私有的原因，而那份拷贝后来真的漂移了。
+    /// </remarks>
     private static List<RunningProcessInfo> CollectRunningProcesses(string processName)
-    {
-        var snapshot = new List<RunningProcessInfo>();
-
-        foreach (var process in Process.GetProcessesByName(processName))
-        {
-            using (process)
-            {
-                string? modulePath = null;
-                try
-                {
-                    // 提权不足 / 受保护进程 / 进程刚退出都会在这里抛 —— 属预期，按"读不到"处理。
-                    modulePath = process.MainModule?.FileName;
-                }
-                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception
-                    or InvalidOperationException
-                    or NotSupportedException)
-                {
-                    // 故意留空：读不到模块路径的进程不算命中（不能退化成按名字匹配）。
-                }
-
-                snapshot.Add(new RunningProcessInfo(process.ProcessName, modulePath));
-            }
-        }
-
-        return snapshot;
-    }
+        => [.. RunningProcessProbe.Collect(processName)];
 
     /// <summary>复查窗口到期：探测进程状态并做最终判定（机制 7）。</summary>
     private void Evaluate(SchedulerRuntimeItem runtime)

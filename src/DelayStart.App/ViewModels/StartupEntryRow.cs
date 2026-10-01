@@ -48,6 +48,48 @@ public sealed class StartupEntryRow
     /// <summary>原始条目，供后续操作（接管 / 禁用 / 打开文件位置）取用。</summary>
     public StartupEntry Entry { get; }
 
+    /// <summary>
+    /// 两条扫描结果渲染出来的行是否**完全一样**（D138）。
+    /// </summary>
+    /// <param name="leftEntry">旧条目。</param>
+    /// <param name="leftPixels">旧图标像素（可为 <see langword="null"/>）。</param>
+    /// <param name="rightEntry">新条目。</param>
+    /// <param name="rightPixels">新图标像素（可为 <see langword="null"/>）。</param>
+    /// <returns>界面上不会有任何可见差异为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 🔴 存在的唯一理由：<c>SyncInPlace</c> 用<b>引用相等</b>判断"这一行没变"，
+    /// 而 <see cref="ItemsViewModel.Apply"/> 原先每次都 <c>new</c> 出全部行 ——
+    /// 引用永不相等，于是差量同步退化成"每一行都 Replace"，
+    /// F10.3 那套按 Id 增删移动的机制等于白做（2026-10-02 用户实测：刷新仍是全量）。
+    /// <para>
+    /// 🔴 **只比界面上真正显示或影响可点性的字段**，不比"反射全字段"——
+    /// 那会把一个只影响日志的字段也变成"变了"，等于没复用。
+    /// </para>
+    /// <para>
+    /// 🔴 图标按<b>引用</b>比：<c>IconProvider</c> 有缓存，图标没换时返回的就是同一个
+    /// <see cref="IconPixels"/> 实例；而它里面是 <c>byte[]</c>，逐字节比一遍的开销
+ /// 比重新提取一次图标还贵。引用不同就当作「变了」，最坏结果只是多刷一行。
+    /// </para>
+    /// </remarks>
+    public static bool SameContent(
+        StartupEntry leftEntry,
+        IconPixels? leftPixels,
+        StartupEntry rightEntry,
+        IconPixels? rightPixels)
+    {
+        return string.Equals(leftEntry.Id, rightEntry.Id, StringComparison.Ordinal)
+            && string.Equals(leftEntry.Name, rightEntry.Name, StringComparison.Ordinal)
+            && string.Equals(leftEntry.Path, rightEntry.Path, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(leftEntry.ExecutablePath, rightEntry.ExecutablePath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(leftEntry.Arguments, rightEntry.Arguments, StringComparison.Ordinal)
+            && string.Equals(leftEntry.SourceDetail, rightEntry.SourceDetail, StringComparison.Ordinal)
+            && leftEntry.IsEnabled == rightEntry.IsEnabled
+            && leftEntry.IsProtected == rightEntry.IsProtected
+            && leftEntry.IsMissing == rightEntry.IsMissing
+            && leftEntry.IsTakenOver == rightEntry.IsTakenOver
+            && ReferenceEquals(leftPixels, rightPixels);
+    }
+
     /// <summary>条目图标；提取失败为 <see langword="null"/>，XAML 用占位符代替。</summary>
     /// <remarks>
     /// 在构造时由 <see cref="IconRenderer"/> 同步转换（UI 线程）—— 行对象保持

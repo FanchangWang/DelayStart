@@ -43,6 +43,9 @@ public sealed partial class DelayViewModel : ObservableObject
     private readonly PathService _paths;
     private readonly SchedulerProbe _scheduler;
     private readonly DeElevatedProcessLauncher _launcher;
+
+    /// <summary>守卫巡检（D138：本页用它纠正路径漂移与被写回启用的接管项）。</summary>
+    private readonly GuardService _guard;
     private readonly ToastService _toast;
     private readonly ILogSink _log;
 
@@ -82,6 +85,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <param name="log">日志接收端。</param>
     /// <param name="scheduler">调度端手动启动 + 单实例探测（F11.3）。</param>
     /// <param name="launcher">降权启动链（F11.1：每行「启动」按钮）。</param>
+    /// <param name="guard">守卫巡检（D138：本页用它纠正路径漂移与被写回启用的接管项）。</param>
     /// <param name="toast">应用内右下角通知（F11.1/F11.3 的结果出口）。</param>
     public DelayViewModel(
         IAppConfigStore configStore,
@@ -93,6 +97,7 @@ public sealed partial class DelayViewModel : ObservableObject
         PathService paths,
         SchedulerProbe scheduler,
         DeElevatedProcessLauncher launcher,
+        GuardService guard,
         ToastService toast,
         ILogSink log)
     {
@@ -105,6 +110,7 @@ public sealed partial class DelayViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(launcher);
+        ArgumentNullException.ThrowIfNull(guard);
         ArgumentNullException.ThrowIfNull(toast);
         ArgumentNullException.ThrowIfNull(log);
 
@@ -117,6 +123,7 @@ public sealed partial class DelayViewModel : ObservableObject
         _paths = paths;
         _scheduler = scheduler;
         _launcher = launcher;
+        _guard = guard;
         _toast = toast;
         _log = log;
 
@@ -235,6 +242,21 @@ public sealed partial class DelayViewModel : ObservableObject
                             .Select(static failure => new ScanScope(failure.Source, failure.Scope))
                             .ToArray();
 
+       // 🔴 **本页也跑一次守卫巡检**（D138）。
+        //
+        // 守卫原先只在**自启动项页**加载时被顺带触发，于是「打开管理端直奔延时启动页」
+        // 这条最常见的路径上一次都不跑 —— 目标路径漂移（D137：程序自更新换了 exe 文件名）
+        // 就得不到纠正，而用户看到的正是**这一页**里那个条目的路径不对。
+        // 用户报「管理端启动后并未进行纠正」，根因就在这里（2026-10-02）。
+    //
+  // 🔴 必须在**失效判定与 Load 之前**：路径同步会写配置，
+     // 而下面的 config 是刚从配置读出来的、后面还要交给 Load() 重新读 ——
+        // 顺序反了就会拿旧路径先判定一次、界面上仍然显示旧路径。
+        //
+        // 🔴 复用本次已经扫出来的 scan：守卫要的输入我们已经有了，
+        // 再扫一遍就是把同一份系统状态读两遍（用户可见的等待也是两倍）。
+     RunGuardForScan(scan);
+
                         // 失效判定交给 Core 的策略而不是"扫描结果里找不到就算失效"：
                         // 后者只能发现孤儿，发现不了"启动项还在、程序文件没了"（FR-1.10）。
                         _staleKinds = GuardStalePolicy
@@ -279,6 +301,51 @@ public sealed partial class DelayViewModel : ObservableObject
 
     /// <summary>最近一次后台扫描是否有来源整体失败（只影响那行提示文案）。</summary>
     private bool _scanHadFailures;
+
+  /// <summary>
+    /// 用本页刚扫出来的结果跑一次守卫巡检（D138）。
+    /// </summary>
+    /// <param name="scan">本页已完成的扫描结果。</param>
+    /// <remarks>
+  /// 🔴 <b>为什么要放在这一页</b>：守卫要修的每一样东西（被写回启用的接管项、
+  /// 已过期的目标路径）都会**立刻反映到这一页的列表上** —— 而这一页恰恰是
+    /// 用户看得最勤的一页。只在自启动项页顺带跑，等于「要纠正的东西显示在 A 页，
+    /// 但只有去 B 页才会纠正」。
+    /// <para>
+    /// 🔴 <b>整轮巡检只跑一次</b>：守卫内部有单实例互斥与进程内防重入（F4 / G3），
+    /// 所以本页与自启动项页同时想跑也不会跑两遍。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>失败不阻断本页</b>：巡检抛异常只记日志，列表照常显示 —— 这一页的职责是
+    /// 「让用户看到延时配置」，不是「当守卫的看门人」。
+    /// </para>
+    /// </remarks>
+    private void RunGuardForScan(ScanResult scan)
+    {
+        try
+        {
+            var report = _guard.RunOnce(scan, processedScopes: null);
+
+  if (report.Corrections.Count == 0)
+            {
+                return;
+            }
+
+            var applied = report.Corrections.Count(static outcome => outcome.Succeeded);
+   _log.Info(
+        $"加载延时条目时顺带巡检：纠正 {applied}/{report.Corrections.Count} 项"
+     + "（重新禁用 / 目标路径同步）。");
+
+        foreach (var outcome in report.Corrections)
+  {
+     _log.Info($"  {outcome.Name}：{outcome.Detail}");
+            }
+        }
+        catch (Exception ex)
+        {
+   _log.Error(ex, "加载延时条目时顺带巡检失败（已忽略，不影响本页显示）");
+        }
+    }
 
     /// <summary>同步读取配置并刷新列表。页面首次进入时调用。</summary>
     public void Load()
@@ -770,6 +837,18 @@ public sealed partial class DelayViewModel : ObservableObject
 
         try
         {
+            // 🔴 与调度端**同一套**防双启动判定（D138）。
+            // 调度端在发起前会问一次"目标已在跑吗"，在跑就跳过（D76）；
+            // 管理端原先直接就 Launch，于是用户在程序已开着的情况下点「启动」
+            // 会真的再起一个实例 —— 同一个动作、同一个界面、两种行为。
+            // 判据与枚举都共用 Core 的那一份，两边不会漂移。
+            if (RunningProcessProbe.IsAlreadyRunning(row.Item, _log, out var skipReason))
+            {
+                _toast.ShowSuccess($"跳过：{row.Name}", skipReason);
+                _log.Info($"用户手动启动『{row.Name}』被跳过：{skipReason}");
+                return;
+            }
+
             var outcome = await Task.Run(() => _launcher.Launch(row.Item)).ConfigureAwait(true);
 
             if (outcome.Created)
@@ -854,7 +933,7 @@ public sealed partial class DelayViewModel : ObservableObject
             {
                 IsSchedulerRunning = true;
                 _toast.ShowSuccess("调度已启动", "本次启动计划正在执行。");
-                return;
+                    _ = WatchSchedulerExitAsync();
             }
 
             IsSchedulerRunning = false;
@@ -874,6 +953,41 @@ public sealed partial class DelayViewModel : ObservableObject
             IsSchedulerBusy = false;
         }
     }
+
+    /// <summary>调度端退出后把「运行调度」按钮的可用态恢复回去（D138）。</summary>
+    /// <returns>异步任务。</returns>
+    /// <remarks>
+    /// 🔴 **起因**：<c>IsSchedulerRunning</c> 一旦置 true 就<b>永远没人复位</b>，
+    /// 而按钮的可用态是「非运行中且不忙」——
+    /// 于是点过一次「运行调度」，这个按钮在本会话里就再也点不动了（2026-10-02 用户实测）。
+    /// 而调度端是<b>会自己退出的</b>（收尾 + 8 秒 + 拉守卫，然后托盘消失），
+    /// 所以"在跑"是个<b>会自己结束的状态</b>，按钮必须跟着它走。
+    /// <para>
+    /// 🔴 <b>只在"我们认为它在跑"的时候轮询，退出即停</b>：不启常驻定时器，
+    /// 也不去管用户不点按钮的情况 —— 那样会给一个后台进程白挂一个永不退出的循环。
+    /// </para>
+    /// <para>
+    /// 轮询间隔 2 秒：调度端收尾那 8 秒里按钮保持禁用是对的（那时它确实还在跑），
+    /// 而收尾之后最多两秒按钮就恢复 —— 足够快，也不至于每秒问一次系统。
+    /// </para>
+    /// </remarks>
+    private async Task WatchSchedulerExitAsync()
+    {
+        while (IsSchedulerRunning)
+        {
+            await Task.Delay(SchedulerExitPollMilliseconds).ConfigureAwait(true);
+
+            if (!SchedulerProbe.IsSchedulerRunning())
+            {
+                IsSchedulerRunning = false;
+                _log.Info("调度端已退出，「运行调度」恢复可用。");
+                return;
+            }
+        }
+    }
+
+    /// <summary>「调度端是否还在跑」的轮询间隔（D138）。</summary>
+    private const int SchedulerExitPollMilliseconds = 2000;
 
     /// <summary>轮询单实例互斥体，等调度端真正接管。</summary>
     /// <returns>在超时前接管为 <see langword="true"/>。</returns>

@@ -604,14 +604,38 @@ if (RunGuardAlongsideLoad(snapshot))
     {
         _renderedFingerprint = snapshot.Fingerprint;
 
-        Rows.Clear();
-        foreach (var entry in snapshot.Entries)
+        // 🔴 **复用旧行实例**（D138）。`SyncInPlace` 用引用相等判断「这行没变」，
+        // 而这里原先每次都 new 出全部行 —— 引用永不相等，于是差量同步退化成
+        // 「每一行都 Replace」，F10.3 那套机制等于白做（2026-10-02 用户实测：刷新仍是全量）。
+        //
+    // 按 Id 建旧行索引，内容一模一样的直接沿用旧对象 —— 容器不重建，
+        // 行内按钮不闪、焦点与滚动位置都留着。
+     var previous = new Dictionary<string, StartupEntryRow>(Rows.Count, StringComparer.Ordinal);
+foreach (var row in Rows)
         {
-            if (SourceFilter is not { } kind || entry.Source == kind)
-            {
-                Rows.Add(new StartupEntryRow(entry, snapshot.Pixels.GetValueOrDefault(entry)));
-            }
+            previous[row.Entry.Id] = row;
         }
+
+        var rebuilt = new List<StartupEntryRow>(previous.Count);
+    foreach (var entry in snapshot.Entries)
+        {
+            if (SourceFilter is not { } filter || entry.Source == filter)
+            {
+                continue;
+            }
+
+            var pixels = snapshot.Pixels.GetValueOrDefault(entry);
+
+            rebuilt.Add(
+       previous.TryGetValue(entry.Id, out var old)
+       && StartupEntryRow.SameContent(old.Entry, old.Pixels, entry, pixels)
+  ? old
+         : new StartupEntryRow(entry, pixels));
+        }
+
+        // 集合本身仍按差量更新，而不是 Clear()+Add：ObservableCollection 的每一次 Add
+        // 都会让 ListView 新建一个容器，整表重摆会把每一行都重建一遍。
+        SyncInPlace(Rows, rebuilt);
 
         ApplyFilters();
         Subtitle = BuildSubtitle(snapshot, SourceFilter);

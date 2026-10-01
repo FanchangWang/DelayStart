@@ -128,37 +128,66 @@ public partial class SystemViewModel : ObservableObject
     [ObservableProperty]
     public partial string Subtitle { get; set; } = "正在读取…";
 
-    /// <summary>加载当前分区的只读数据。页面进入时调用。</summary>
-    /// <remarks>
-    /// <para>
-    /// 只拉当前分区要用的数据：四个入口各自独立，进「服务」页没必要读 Winlogon。
-    /// </para>
-    /// <para>
-    /// 🔴 <b>两段式</b>（A3.2）：先无条件把本进程缓存里已有的内容渲染出来，再后台重查。
-    /// 查服务要 WMI、查驱动要枚举驱动对象，都是几百毫秒起步的同步调用；
-    /// 而四个分区在一次会话里会被反复进出（守卫通知可能把用户直接导航到本页）。
-    /// 没有缓存时页面会先空着，有缓存却还要等一次全量查询 —— 两种都不该发生。
-    /// </para>
-    /// <para>
-    /// 第二段的成果只在<b>指纹不同</b>时才刷（A3.1）。这一页的行模型就是数据本身
-    /// （没有包装类），所以整刷的成本为零，不需要差量同步 ——
-    /// <c>ReplaceAll</c> / <c>Clear+AddRange</c> 就够了，关键是"没变就别刷"。
-    /// </para>
-    /// </remarks>
     public async Task LoadAsync()
+    {
+        // 🔴 **重入守卫**（审计 P3-6）：本页会被两条路同时调 —— 用户切页进来，
+        // 以及守卫通知把用户导航到本页后外壳发的 `IReloadablePage.Reload()`。
+        // 两次调用重叠时有两个具体问题：
+        // ① 两轮 `RefreshCurrentSectionAsync` 并发，谁后返回谁说了算 ——
+        // 先发起的慢查询可能**后**落地，把更新的数据覆盖成旧的；
+  // ② `IsBusy` 各自置 false，先完成的那次就把「忙」抹掉了，
+        // 而另一轮还在查 —— 转圈消失而进度条其实没停。
+        //
+        // 合并而不是排队：两轮读的是同一个活体系统状态，**后一轮的结果不会比先一轮更新**
+        //（没有「我要刷新到更新的数据」这个语义），所以等在途那一轮就等于拿到了同一份答案。
+  // 排队则是白等一轮。
+  if (_loadInFlight is { } running)
+   {
+   await running.ConfigureAwait(true);
+            return;
+        }
+
+        var load = LoadCoreAsync();
+        _loadInFlight = load;
+
+   try
+        {
+            await load.ConfigureAwait(true);
+    }
+     finally
+        {
+ // 🔴 只能用**引用相等**清：`_loadInFlight` 可能已经被下一轮换成了别的 Task，
+     // 那时把它置 null 会把下一轮的在途状态抹掉，下一轮就失去守卫了。
+            if (ReferenceEquals(_loadInFlight, load))
+  {
+  _loadInFlight = null;
+            }
+        }
+    }
+
+    /// <summary>在途加载任务（重入合并用，见 <see cref="LoadAsync"/>）。</summary>
+    private Task? _loadInFlight;
+
+    /// <summary>真正干活的加载。</summary>
+    /// <returns>异步任务。</returns>
+    /// <remarks>
+  /// 单独拆出来是为了让 <see cref="LoadAsync"/> 的重入守卫只管「要不要再发起一轮」——
+    /// 业务步骤与重入逻辑混在一个方法里会让两件事都看不清。
+    /// </remarks>
+    private async Task LoadCoreAsync()
     {
         IsBusy = true;
         try
         {
-            // ── 第一段：先摆缓存（同步，微秒级）────────────────────────────────
+   // ── 第一段：先摆缓存（同步，微秒级）────────────────────────────────
             RenderFromCache();
 
-            // ── 第二段：后台重查，指纹变了才刷 ────────────────────────────────
-            await RefreshCurrentSectionAsync().ConfigureAwait(true);
-        }
+     // ── 第二段：后台重查，指纹门控刷 ───────────────────────────────────
+  await RefreshCurrentSectionAsync().ConfigureAwait(true);
+     }
         finally
         {
-            IsBusy = false;
+  IsBusy = false;
         }
     }
 
@@ -207,9 +236,11 @@ public partial class SystemViewModel : ObservableObject
                 // 指纹相同 ⇒ 一个集合通知都不发。A3 的核心收益就在这里：
                 // 自启动的服务/驱动列表在两次查询之间通常**完全一样**，
                 // 而整刷一次意味着 ListView 重建全部容器（滚动位置、展开状态全丢）。
-                if (_servicesFingerprint != FingerprintOf(services))
+                var servicesFingerprint = FingerprintOf(services);
+
+                if (_servicesFingerprint != servicesFingerprint)
                 {
-                    _servicesFingerprint = FingerprintOf(services);
+                    _servicesFingerprint = servicesFingerprint;
                     _servicesCache = services;
                     _allServices.Clear();
                     _allServices.AddRange(services);
@@ -223,9 +254,11 @@ public partial class SystemViewModel : ObservableObject
             {
                 var drivers = await Task.Run(_serviceQuery.QueryDrivers).ConfigureAwait(true);
 
-                if (_driversFingerprint != FingerprintOf(drivers))
+                var driversFingerprint = FingerprintOf(drivers);
+
+                if (_driversFingerprint != driversFingerprint)
                 {
-                    _driversFingerprint = FingerprintOf(drivers);
+                    _driversFingerprint = driversFingerprint;
                     _driversCache = drivers;
                     _allDrivers.Clear();
                     _allDrivers.AddRange(drivers);
@@ -239,9 +272,11 @@ public partial class SystemViewModel : ObservableObject
             {
                 var winlogon = await Task.Run(SystemStartupInspector.ReadWinlogon).ConfigureAwait(true);
 
-                if (_winlogonFingerprint != FingerprintOf(winlogon))
+                var winlogonFingerprint = FingerprintOf(winlogon);
+
+                if (_winlogonFingerprint != winlogonFingerprint)
                 {
-                    _winlogonFingerprint = FingerprintOf(winlogon);
+                    _winlogonFingerprint = winlogonFingerprint;
                     _winlogonCache = winlogon;
                     ReplaceAll(WinlogonEntries, winlogon);
                     ApplyWinlogonTextState(winlogon.Count);
@@ -254,9 +289,11 @@ public partial class SystemViewModel : ObservableObject
             {
                 var gpo = await Task.Run(SystemStartupInspector.ReadGroupPolicy).ConfigureAwait(true);
 
-                if (_gpoFingerprint != FingerprintOf(gpo))
+                var gpoFingerprint = FingerprintOf(gpo);
+
+                if (_gpoFingerprint != gpoFingerprint)
                 {
-                    _gpoFingerprint = FingerprintOf(gpo);
+                    _gpoFingerprint = gpoFingerprint;
                     _gpoCache = gpo;
                     ReplaceAll(GroupPolicyEntries, gpo);
                     ApplyGroupPolicyTextState(gpo.Count);

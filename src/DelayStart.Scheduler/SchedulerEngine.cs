@@ -73,7 +73,6 @@ internal sealed class SchedulerEngine
     private TimeSpan _quitAt;
 
     /// <summary>完成后已弹出面板，正在等用户关闭（关闭即退出，期间不能自行退出）。</summary>
-    private bool _awaitingPanelClose;
 
     /// <summary>退出已发起（面板倒计时与菜单「退出」可能重复触发，需要幂等）。</summary>
     private bool _quitRequested;
@@ -84,10 +83,10 @@ internal sealed class SchedulerEngine
     /// <summary>
     /// 收尾动作是**面板上**发起的（「立即启动剩余 N 项」/「跳过剩余任务」）。
     /// 用户已经手动弹出面板在看，完成时就必须给结果：面板切完成态并起倒计时，
-    /// 不能点了之后面板反而消失（2026-09-21 批复）。N4 后它仍参与收尾判定
-    /// （见 <see cref="CompletionPolicy"/>），但与通知策略再无关系。
+    /// 🔴 原先这里判定"收尾**要不要等**"，由 Core 的 CompletionPolicy 回答
+    /// （判定表可单测；D71–D73 三个缺陷都出在那一处）。面板已于 v0.6.1 取消 ——
+    /// 没有第二个进程需要等，收尾只剩"什么时候退"一个决定，CompletionPolicy 随之删除。
     /// </summary>
-    private bool _panelRequestedCompletion;
 
     /// <summary>通知中转器的降权拉起器（懒建：只有真要发通知时才需要）。</summary>
     private DeElevatedProcessLauncher? _notifyLauncher;
@@ -141,7 +140,7 @@ internal sealed class SchedulerEngine
             // 升级成了功能停摆，而且用户连原因都看不到（托盘本来就没出来）。
             // 现在降级为继续调度：到点照常启动，失败与结果照常落盘；代价只是没有托盘菜单
             // （也就没有「立即启动 / 跳过剩余」这两个手动入口），这个代价远小于"全部不启动"。
-            _log.Error("托盘宿主创建失败，本次调度继续（无法显示托盘菜单与面板）。");
+            _log.Error("托盘图标注册失败，本次按无托盘运行（不显示图标，但调度照常进行）。");
         }
         else
         {
@@ -470,21 +469,17 @@ internal sealed class SchedulerEngine
     private TrayIconHost? CreateTrayHost(IconResources? icons)
     {
         // 托盘只属调度端、恒显示（用户批复 2026-09-19：托盘设置已移除）。
-        // UI v2（2026-09-21）：生命周期 = 调度期间显示 → 完成态面板关闭后退出（托盘随之消失）。
+        // 生命周期 = 调度期间显示 → 收尾延迟结束后退出（托盘随之消失）。
         var host = new TrayIconHost(
             icons,
-            BuildPanelSnapshot,
             OpenRunLog,
             OpenManager,
             LaunchRemainingNow,
             SkipRemaining,
-            LaunchRemainingFromPanel,
-            SkipRemainingFromPanel,
             RequestQuit,
             HasWaitingItems,
             () => _finishing,
-            BuildMenuStatusText,
-            () => Settings.Theme);
+            BuildMenuStatusText);
         if (!host.TryCreate(BuildTooltip(), withIcon: icons is not null))
         {
             host.Dispose();
@@ -518,7 +513,6 @@ internal sealed class SchedulerEngine
 
         if (changed)
         {
-            _tray?.RefreshPanel();
         }
 
         if (!_finishing && _items.All(static runtime => runtime.Result.State is RunItemState.Done or RunItemState.Failed or RunItemState.Skipped))
@@ -526,8 +520,9 @@ internal sealed class SchedulerEngine
             Finish();
         }
 
-        // 完成态且已弹面板时不能自行退出 —— 退出时机交给面板（倒计时归零或失焦关闭，N9-D3）。
-        if (_finishing && !_awaitingPanelClose && _stopwatch.Elapsed >= _quitAt)
+        // 收尾延迟时间到 → 退。原先这里还有 `&& !_awaitingPanelClose`：
+        // 面板在时退出时机交给面板（倒计时归零或失焦关闭，N9-D3），面板取消后没有第二个进程了。
+        if (_finishing && _stopwatch.Elapsed >= _quitAt)
         {
             Quit();
             return;
@@ -570,7 +565,6 @@ internal sealed class SchedulerEngine
         }
 
         _lastCountdownSecond = second;
-        _tray?.RefreshPanel();
     }
 
     /// <summary>发起一次启动；失败且仍有重试额度时立即重试（同一次运行内，FR-9.6）。</summary>
@@ -759,7 +753,7 @@ internal sealed class SchedulerEngine
     /// <remarks>
     /// N4–N7（2026-09-22 批复，<c>design.md</c> FR-14.1）：
     /// 通知与面板在此分道 —— **无论面板是否显示**都先按策略发通知（N5，D2：菜单跳过路径同样发），
-    /// 然后面板在看的走 <see cref="CompletionExitMode.WaitForPanelClose"/>，否则同拍退出（N6）。
+    /// 通知与"收尾怎么退"互不读取对方的输入（D83 的拆分之一；另一半是 CompletionPolicy，已删）。
     /// 收尾**不再**自动弹面板（N4：面板仅手动弹出）。
     /// </remarks>
     private void Finish(bool quitImmediately = false)
@@ -782,24 +776,17 @@ internal sealed class SchedulerEngine
         var failedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
         _tray?.SetIcon(IconFor(failedCount > 0));
 
-        // N5：通知是通知，面板是面板 —— 无论面板是否显示都按策略发（失败只记日志，N12）。
+        // N5：通知是通知，面板是面板 —— 面板已于 v0.6.1 取消，这里只剩"发不发系统通知"一件事。
         SendCompletionNotification(failedCount);
 
-        // 收尾判据下沉到 Core 的 CompletionPolicy（判定表可单测；D71–D73 三个缺陷都出在这一处）。
-        // N2 后判定表不再读通知策略：只看 QuitImmediately / 面板发起 / 面板可见。
-        var decision = CompletionPolicy.Decide(new CompletionPolicyInput(
-            QuitImmediately: quitImmediately,
-            PanelRequestedCompletion: _panelRequestedCompletion,
-            PanelVisible: _tray?.IsPanelVisible ?? false));
-
-        if (decision.ExitMode == CompletionExitMode.WaitForPanelClose)
-        {
-            _awaitingPanelClose = true;
-            _tray?.ShowCompletionPanel();
-            return;
-        }
-
-        // 两种"不等面板"的速度：菜单「跳过剩余任务并退出」要立刻离开（不等 Launching 条目的
+        // 🔴 收尾**只有**一个决定：什么时候退。
+        //
+        // 原先这里还有一个"等不等面板关闭"的分叉，由 Core 的 CompletionPolicy 判定
+        // （判定表可单测；D71–D73 三个缺陷都出在那一处）。面板取消后那个问题本身不存在了 ——
+        // 没有第二个进程需要等，调度端可以直接决定自己的死期，所以连同
+        // CompletionPolicy 与它的测试一并删除。
+        //
+        // 两种速度：菜单「跳过剩余任务并退出」要立刻离开（不等 Launching 条目的
         // 1.5 秒复查窗口）；其余情况把 _quitAt 拨到当下，由紧随其后的同一次 Tick 判定退出。
         if (quitImmediately)
         {
@@ -947,7 +934,6 @@ internal sealed class SchedulerEngine
         }
 
         _quitRequested = true;
-        _awaitingPanelClose = false;
         // D40：没有需要协同退出的代理进程（降权是进程内一次系统调用，无长生命周期对象）。
         _tray?.StopTimer();
         _tray?.Dispose();
@@ -989,83 +975,6 @@ internal sealed class SchedulerEngine
         return remaining <= TimeSpan.FromSeconds(2)
             ? $"延时启动 {done}/{total} 已启动 · 正在启动 {first.Result.Name}…"
             : $"延时启动 {done}/{total} 已启动 · 下一项 {(int)Math.Ceiling(remaining.TotalSeconds)} 秒";
-    }
-
-    private PanelSnapshot BuildPanelSnapshot()
-    {
-        var elapsed = _stopwatch.Elapsed;
-        var total = _record.PlannedCount;
-        var done = _items.Count(static runtime => runtime.Result.State == RunItemState.Done);
-        var failed = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
-        var skipped = _items.Count(static runtime => runtime.Result.State == RunItemState.Skipped);
-        var launching = _items.Count(static runtime => runtime.Result.State == RunItemState.Launching);
-        var waiting = _items.Count(static runtime => runtime.Result.State == RunItemState.Waiting);
-
-        var rows = _items.Select(static runtime => new PanelItemRow(
-            runtime.Result.State,
-            runtime.Result.Name,
-            runtime.Result.State switch
-            {
-                RunItemState.Done => $"{runtime.Result.Delay} 秒",
-                RunItemState.Failed => runtime.Result.Reason ?? "启动失败",
-                RunItemState.Skipped => "已跳过",
-                _ => $"{runtime.Result.Delay} 秒",
-            })).ToList();
-
-        var nextList = _items
-            .Where(static runtime => runtime.Result.State == RunItemState.Waiting)
-            .OrderBy(static runtime => runtime.LaunchAt)
-            .ToList();
-
-        if (_finishing)
-        {
-            return new PanelSnapshot(
-                ChipText: failed > 0 ? $"完成 · {failed} 项失败" : "启动完成",
-                HasFailure: failed > 0,
-                IsFinished: true,
-                DoneCount: done,
-                TotalCount: total,
-                MetaText: failed > 0 || skipped > 0
-                    ? $"成功 {done} · 失败 {failed}{(skipped > 0 ? $" · 跳过 {skipped}" : string.Empty)}"
-                    : $"全部 {total} 项已启动",
-                Items: rows,
-                Current: new PanelCurrentRow(
-                    failed > 0 ? RunItemState.Failed : RunItemState.Done,
-                    failed > 0 ? $"{failed} 项启动失败" : "启动计划已完成",
-                    failed > 0 ? FirstFailureDetail() : $"{total} 项全部启动 · 无失败",
-                    EtaSeconds: null),
-                NextName: "—",
-                AutoCloseTotalSeconds: failed > 0 ? AutoCloseSecondsOnFailure : AutoCloseSecondsOnSuccess,
-                PrimaryButtonText: "打开 DelayStart",
-                StatusText: BuildMenuStatusText());
-        }
-
-        var active = _items.Find(static runtime => runtime.Result.State == RunItemState.Launching)
-            ?? (nextList.Count > 0 ? nextList[0] : null);
-        var eta = nextList.Count > 0
-            ? (int)Math.Ceiling(Math.Max((nextList[0].LaunchAt - elapsed).TotalSeconds, 0))
-            : 0;
-
-        return new PanelSnapshot(
-            ChipText: "启动中",
-            HasFailure: failed > 0,
-            IsFinished: false,
-            DoneCount: done,
-            TotalCount: total,
-            MetaText: $"已启动 {done} · 启动中 {launching} · 等待 {waiting}",
-            Items: rows,
-            Current: active is null
-                ? new PanelCurrentRow(RunItemState.Waiting, "正在完成…", string.Empty, EtaSeconds: null)
-                : new PanelCurrentRow(
-                    active.Result.State,
-                    active.Result.Name,
-                    $"{active.Result.Delay} 秒延时",
-                    // 还有等待项就一直显示数字（含 0）—— 否则最后一秒右侧会空一下再启动。
-                    EtaSeconds: nextList.Count > 0 ? eta : null),
-            NextName: nextList.Count > 0 ? nextList[0].Result.Name : "—",
-            AutoCloseTotalSeconds: 0,
-            PrimaryButtonText: waiting > 0 ? $"立即启动剩余 {waiting} 项" : "已全部到期",
-            StatusText: BuildMenuStatusText());
     }
 
     /// <summary>完成态卡片副文案：首个失败项的名称 + 原因（面板宽度有限，只报第一条）。</summary>
@@ -1161,23 +1070,9 @@ internal sealed class SchedulerEngine
     private bool HasWaitingItems() =>
         !_finishing && _items.Exists(static runtime => runtime.Result.State == RunItemState.Waiting);
 
-    /// <summary>立即启动全部剩余条目 —— **右键菜单**入口（2026-09-21 批复）。
-    /// N4 后：完成后不自动弹面板，只有面板已开着（或收尾由面板发起）才留在面板上；通知照按策略发。</summary>
+    /// <summary>立即启动全部剩余条目 —— 托盘右键菜单入口（2026-09-21 批复）。
+    /// N4 后：完成后不弹任何窗口，通知照按策略发。</summary>
     private void LaunchRemainingNow()
-    {
-        LaunchRemainingNowCore(fromPanel: false);
-    }
-
-    /// <summary>立即启动全部剩余条目 —— **面板按钮**入口（2026-09-21 批复）。
-    /// 面板已经是用户手动打开的，完成后必须留在面板上给结果（切完成态 + 倒计时），
-    /// 不能点了按钮面板反而消失。</summary>
-    private void LaunchRemainingFromPanel()
-    {
-        LaunchRemainingNowCore(fromPanel: true);
-        _tray?.RefreshPanel();
-    }
-
-    private void LaunchRemainingNowCore(bool fromPanel)
     {
         var count = 0;
         var now = _stopwatch.Elapsed;
@@ -1195,20 +1090,14 @@ internal sealed class SchedulerEngine
             return;
         }
 
-        if (fromPanel)
-        {
-            _panelRequestedCompletion = true;
-        }
-
-        _log.Info($"用户请求立即启动全部剩余条目（{count} 项，来源：{(fromPanel ? "面板" : "托盘菜单")}）。");
+        _log.Info($"用户请求立即启动全部剩余条目（{count} 项，来源：托盘菜单）。");
     }
 
-    /// <summary>跳过剩余条目并结束调度 —— **右键菜单**入口（2026-09-21 批复 D2=不启动）。
-    /// 等待条目标记 <see cref="RunItemState.Skipped"/> 落盘归档，但**不弹面板**，收尾后直接退出
-    /// （即使用户设了「总是弹出面板」也不弹 —— 菜单这条语义就是"跳过并走人"）。</summary>
+    /// <summary>跳过剩余条目并结束调度 —— 托盘右键菜单入口（2026-09-21 批复 D2=不启动）。
+    /// 等待条目标记 <see cref="RunItemState.Skipped"/> 落盘归档，收尾后直接退出。</summary>
     private void SkipRemaining()
     {
-        if (SkipRemainingCore(fromPanel: false) == 0)
+        if (MarkRemainingSkipped() == 0)
         {
             return;
         }
@@ -1218,25 +1107,21 @@ internal sealed class SchedulerEngine
         Finish(quitImmediately: true);
     }
 
-    /// <summary>跳过剩余条目 —— **面板按钮**入口（2026-09-21 批复：文案去掉"并退出"）。
-    /// 面板已开着，跳过后留在面板上看完成结果（切完成态 + 倒计时），不能直接消失。</summary>
-    private void SkipRemainingFromPanel()
+    /// <summary>把当前仍可跳过的条目标记为 <see cref="RunItemState.Skipped"/>。</summary>
+    /// <returns>被标记的条目数；0 = 没有可跳过的条目。</returns>
+    /// <remarks>
+    /// 🔴 可跳判定下沉到 Core 的 <see cref="SkipPolicy"/>；原因文案留在引擎层
+    /// （策略层不产出面向用户的文案）。面板已于 v0.6.1 取消，判定不再按入口分流，
+    /// 所以 <c>SkipEntry</c> 枚举已随之删除，这里也只剩托盘菜单一个入口。
+    /// </remarks>
+    private int MarkRemainingSkipped()
     {
-        _ = SkipRemainingCore(fromPanel: true);
-    }
-
-    /// <returns>被跳过（标记 <see cref="RunItemState.Skipped"/>）的条目数；0 = 没有可跳过的条目。</returns>
-    private int SkipRemainingCore(bool fromPanel)
-    {
-        // 可跳判定下沉到 Core 的 SkipPolicy；"入口 → 原因文案"的映射留在引擎层
-        // （策略层不产出面向用户的文案）。
-        var entry = fromPanel ? SkipEntry.Panel : SkipEntry.TrayMenu;
-        var reason = fromPanel ? "用户跳过（进度面板）" : "用户跳过（托盘右键菜单）";
+        const string reason = "用户跳过（托盘右键菜单）";
 
         var count = 0;
         foreach (var runtime in _items)
         {
-            if (!SkipPolicy.Decide(runtime.Result.State, entry).CanSkip)
+            if (!SkipPolicy.Decide(runtime.Result.State).CanSkip)
             {
                 continue;
             }
@@ -1248,26 +1133,7 @@ internal sealed class SchedulerEngine
 
         if (count > 0)
         {
-            if (fromPanel)
-            {
-                // 面板发起 → 完成时必须留在面板上给结果（即使用户中途收起了面板也要再弹回来）。
-                _panelRequestedCompletion = true;
-            }
-            else
-            {
-                // 菜单发起 → 不弹面板，归档后立刻退。判据不在这里：
-                // SkipRemaining() 调的是 Finish(quitImmediately: true)，直接进退出分支，
-                // 压根不经过下面的"要不要留在面板上"决策。
-            }
-
-            _log.Info($"用户跳过剩余 {count} 个条目，本次调度收尾（来源：{(fromPanel ? "面板" : "托盘菜单")}）。");
-        }
-
-        // 直接退出的那条路径上刷新没有意义（托盘马上就没了）。
-        if (fromPanel)
-        {
-            _tray?.RefreshPanel();
-            _tray?.UpdateTip(BuildTooltip());
+            _log.Info($"用户跳过剩余 {count} 个条目，本次调度收尾（来源：托盘菜单）。");
         }
 
         return count;

@@ -395,7 +395,7 @@ internal static unsafe partial class NativeMethods
     // 调度端与守卫端用同一个门槛，两份实现会漂移，而漂移的表现是"某一个入口的门禁失效"，
     // 不报错也看不出来。这里只保留本工程自己还要用的令牌 P/Invoke。
 
-    // ---- 系统主题探测（面板双主题，2026-09-21 批复：跟随设置「自动/浅色/深色」）----
+    // ---- 系统主题探测（托盘动态配色用，2026-09-21 批复：跟随系统浅色/深色）----
 
     private static readonly nint HkeyCurrentUser = unchecked((nint)0x80000001);
     private const uint RrfRtRegDword = 0x00000010;
@@ -594,93 +594,6 @@ internal static unsafe partial class NativeMethods
         uint bufferLength,
         nint previousState,
         nint returnLength);
-
-    // GDI —— 面板自绘用
-
-    [LibraryImport("gdi32.dll")]
-    public static partial nint CreateSolidBrush(uint color);
-
-    /// <summary>取库存 GDI 对象。面板画空心状态点用 <c>NULL_BRUSH</c>（索引 5）。</summary>
-    [LibraryImport("gdi32.dll")]
-    public static partial nint GetStockObject(int index);
-
-    /// <summary>NULL_BRUSH（不填充，配合 pen 得到空心图形）。</summary>
-    public const int NullBrush = 5;
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool DeleteObject(nint objectHandle);
-
-    // 🔴 FillRect 是 user32.dll 的导出（winuser.h），不是 gdi32（2026-09-21 真机踩坑：
-    //    声明到 gdi32 → WM_PAINT 里 EntryPointNotFoundException，在 UnmanagedCallersOnly
-    //    窗口回调中无法穿越原生帧展开 → AOT fail-fast 0xC0000409 托盘左键闪退）。
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool FillRect(nint hdc, ref Rect rect, nint brush);
-
-    [LibraryImport("gdi32.dll", EntryPoint = "CreatePen")]
-    public static partial nint CreatePen(int style, int width, uint color);
-
-    [LibraryImport("gdi32.dll")]
-    public static partial nint SelectObject(nint hdc, nint objectHandle);
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool Ellipse(nint hdc, int left, int top, int right, int bottom);
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool Rectangle(nint hdc, int left, int top, int right, int bottom);
-
-    /// <summary>圆角矩形（当前 brush 填充 + 当前 pen 描边）。面板里的卡片/按钮都用它。</summary>
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool RoundRect(nint hdc, int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
-
-    /// <summary>圆角区域（交给 <see cref="SetWindowRgn"/> 做无边框窗口的圆角裁剪）。</summary>
-    [LibraryImport("gdi32.dll")]
-    public static partial nint CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool SetTextColor(nint hdc, uint color);
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool SetBkMode(nint hdc, int transparent);
-
-    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
-    public static partial int DrawTextW(
-        nint hdc,
-        string text,
-        int length,
-        ref Rect rect,
-        uint format);
-
-    [LibraryImport("gdi32.dll", StringMarshalling = StringMarshalling.Utf16)]
-    public static partial nint CreateFontW(
-        int height,
-        int width,
-        int escapement,
-        int orientation,
-        int weight,
-        uint italic,
-        uint underline,
-        uint strikeout,
-        uint charset,
-        uint outPrecision,
-        uint clipPrecision,
-        uint quality,
-        uint pitchAndFamily,
-        string faceName);
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool MoveToEx(nint hdc, int x, int y, nint previous);
-
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool LineTo(nint hdc, int x, int y);
 
     /// <summary>从内存中的 ICO 条目创建图标（用于嵌入资源加载）。</summary>
     [LibraryImport("user32.dll")]

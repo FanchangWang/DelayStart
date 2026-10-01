@@ -7,8 +7,8 @@ using DelayStart.Core.Models;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 隐藏消息窗口 + <c>Shell_NotifyIcon</c>。左键点击 → 打开弹出面板；右键点击 → 上下文菜单
-/// （2026-09-21 批复 D1=A：打开管理端 / 打开调度日志 / 立即启动全部剩余条目 / 立即退出(跳过剩余条目)）；
+/// 托盘气泡 + <c>Shell_NotifyIcon</c>，负责「打开管理端 / 打开调度日志 / 启动剩余项 / 跳过剩余」
+/// 四个菜单动作与状态头（2026-09-21 批复 D1=A）。面板已于 v0.6.1 取消，菜单里不再有面板项。
 /// 气泡通知点击 → 打开管理端调度日志（D18）。
 /// </para>
 /// <para>
@@ -31,7 +31,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     private const uint MenuOpenRunLog = 2;
     private const uint MenuLaunchRemaining = 3;
     private const uint MenuSkipRemaining = 4;
-    private const uint MenuShowPanel = 5;
 
     /// <summary>完成态菜单的「退出」：结束调度端进程（托盘一并移除）。</summary>
     private const uint MenuQuit = 6;
@@ -40,17 +39,12 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     private const uint MenuStatusHeader = 0;
 
     private readonly IconResources? _icons;
-    private readonly PanelWindow _panel;
     private readonly Action _openRunLog;
     private readonly Action _openManager;
     private readonly Action _launchRemainingNow;
     private readonly Action _skipRemaining;
 
-    /// <summary>面板上的「立即启动剩余 N 项」（与菜单同名动作语义不同：完成后必须留在面板给结果）。</summary>
-    private readonly Action _launchRemainingFromPanel;
 
-    /// <summary>面板上的「跳过剩余任务」（与菜单不同：不退出，留在面板看完成结果）。</summary>
-    private readonly Action _skipRemainingFromPanel;
 
     private readonly Action _quit;
     private readonly Func<bool> _hasWaitingItems;
@@ -62,61 +56,43 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
 
     /// <summary>构造托盘图标宿主。</summary>
     /// <param name="icons">图标资源（正常 / 告警两枚）；为 <see langword="null"/> 时只建窗口不显示图标。</param>
-    /// <param name="snapshotProvider">面板数据源（引擎的即时快照）。</param>
-    /// <param name="openRunLog">「查看调度日志」动作（气泡点击与面板按钮共用）。</param>
+    /// <param name="openRunLog">「查看调度日志」动作（气泡点击用）。</param>
     /// <param name="openManager">「打开管理端」动作（右键菜单）。</param>
     /// <param name="launchRemainingNow">「立即启动全部剩余条目」动作（右键菜单）。</param>
-    /// <param name="skipRemaining">「跳过剩余任务并退出」动作（启动中菜单，文案不动；行为 = 跳过后不弹面板、直接退出）。</param>
-    /// <param name="launchRemainingFromPanel">面板上的「立即启动剩余 N 项」：完成后面板切完成态并起倒计时。</param>
-    /// <param name="skipRemainingFromPanel">面板上的「跳过剩余任务」：跳过后面板切完成态并起倒计时，不退出。</param>
-    /// <param name="quit">「退出」动作（完成态菜单 / 完成态关闭面板共用）：结束调度端进程，托盘一并移除。</param>
+    /// <param name="skipRemaining">「跳过剩余任务并退出」动作（启动中菜单，文案不动；跳过后直接收尾退出）。</param>
+    /// <param name="quit">「退出」动作（完成态菜单用）：结束调度端进程，托盘一并移除。</param>
     /// <param name="hasWaitingItems">是否还有等待条目（决定启动中菜单后两项的可用态）。</param>
     /// <param name="isFinished">是否已完成（决定菜单取「启动中」还是「启动完毕」那一套）。</param>
     /// <param name="statusText">菜单顶部的状态头文案。</param>
-    /// <param name="themeProvider">面板主题偏好来源（管理端设置，2026-09-21 批复跟随设置主题）。</param>
     public TrayIconHost(
         IconResources? icons,
-        Func<PanelSnapshot> snapshotProvider,
         Action openRunLog,
         Action openManager,
         Action launchRemainingNow,
         Action skipRemaining,
-        Action launchRemainingFromPanel,
-        Action skipRemainingFromPanel,
         Action quit,
         Func<bool> hasWaitingItems,
         Func<bool> isFinished,
-        Func<string> statusText,
-        Func<ThemePreference> themeProvider)
+        Func<string> statusText)
     {
-        ArgumentNullException.ThrowIfNull(snapshotProvider);
         ArgumentNullException.ThrowIfNull(openRunLog);
         ArgumentNullException.ThrowIfNull(openManager);
         ArgumentNullException.ThrowIfNull(launchRemainingNow);
         ArgumentNullException.ThrowIfNull(skipRemaining);
-        ArgumentNullException.ThrowIfNull(launchRemainingFromPanel);
-        ArgumentNullException.ThrowIfNull(skipRemainingFromPanel);
         ArgumentNullException.ThrowIfNull(quit);
         ArgumentNullException.ThrowIfNull(hasWaitingItems);
         ArgumentNullException.ThrowIfNull(isFinished);
         ArgumentNullException.ThrowIfNull(statusText);
-        ArgumentNullException.ThrowIfNull(themeProvider);
 
         _icons = icons;
         _openRunLog = openRunLog;
         _openManager = openManager;
         _launchRemainingNow = launchRemainingNow;
         _skipRemaining = skipRemaining;
-        _launchRemainingFromPanel = launchRemainingFromPanel;
-        _skipRemainingFromPanel = skipRemainingFromPanel;
         _quit = quit;
         _hasWaitingItems = hasWaitingItems;
         _isFinished = isFinished;
         _statusText = statusText;
-        _panel = new PanelWindow(
-            snapshotProvider,
-            new PanelActions(openRunLog, openManager, launchRemainingFromPanel, skipRemainingFromPanel, quit),
-            themeProvider);
     }
 
     /// <summary>内部窗口句柄（调度引擎的定时器挂在它上面）。</summary>
@@ -147,7 +123,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
         }
 
         NativeMethods.AttachHandler(_window, this);
-        _panel.TryCreate();
 
         if (!withIcon || _icons is null)
         {
@@ -228,21 +203,9 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     /// <summary>调度引擎的定时器回调（<c>WM_TIMER</c> 节拍）。</summary>
     public Action? TimerTick { get; set; }
 
-    /// <summary>面板状态变化后的重绘入口。</summary>
-    public void RefreshPanel() => _panel.Refresh();
 
-    /// <summary>
-    /// 显示或激活完成面板（N4 后只在「面板已显示 / 收尾由面板发起」时由引擎调用 —— 收尾不再自动弹面板）。
-    /// 面板已开着则只激活，不重复弹。
-    /// </summary>
-    public void ShowCompletionPanel() => _panel.ShowOrActivate();
 
-    /// <summary>收起面板（只隐藏，不退出应用）。</summary>
-    public void HidePanel() => _panel.Hide();
 
-    /// <summary>面板当前是否显示在屏幕上。
-    /// 收尾决策用：已显示的面板必须给完成态 + 倒计时（用户手动打开过了，D73 / N4 承袭）。</summary>
-    public bool IsPanelVisible => _panel.IsVisible;
 
     /// <inheritdoc />
     public nint HandleMessage(nint hwnd, uint message, nuint wParam, nint lParam)
@@ -258,7 +221,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
             var action = (uint)(lParam.ToInt64() & 0xFFFF);
             if (action == NativeMethods.NimLup)
             {
-                _panel.Toggle();
             }
             else if (action == NativeMethods.NimRup)
             {
@@ -283,7 +245,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     public void Dispose()
     {
         RemoveIcon();
-        _panel.Dispose();
 
         if (_window != 0)
         {
@@ -327,7 +288,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
             else
             {
                 var hasWaiting = _hasWaitingItems();
-                _ = NativeMethods.AppendMenuW(menu, NativeMethods.MfString, MenuShowPanel, "查看启动进度");
                 _ = NativeMethods.AppendMenuW(menu, NativeMethods.MfSeparator, 0, string.Empty);
                 _ = NativeMethods.AppendMenuW(
                     menu,
@@ -362,9 +322,6 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
                     break;
                 case MenuOpenRunLog:
                     _openRunLog();
-                    break;
-                case MenuShowPanel:
-                    _panel.ShowOrActivate();
                     break;
                 case MenuLaunchRemaining:
                     _launchRemainingNow();

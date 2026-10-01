@@ -10,7 +10,7 @@ namespace DelayStart.Scheduler;
 /// <remarks>
 /// <para>
 /// <b>技术选型（D24 批复 B，2026-09-19）：纯 Win32，不引用任何 UI 框架。</b>
-/// 托盘图标用 <c>Shell_NotifyIcon</c>，点击弹出的面板用自绘无边框窗口，全部走 P/Invoke。
+/// 托盘气泡 + <c>Shell_NotifyIcon</c>，全部 P/Invoke，不引入任何 UI 框架（面板已于 v0.6.1 取消）。
 /// </para>
 /// <para>
 /// 进程被计划任务在登录时以交互用户身份启动（<c>LogonType=Interactive</c> +

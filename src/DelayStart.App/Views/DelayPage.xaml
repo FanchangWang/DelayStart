@@ -306,7 +306,7 @@
                                                                 BorderThickness="1"
                                                                 CornerRadius="10"
                                                                 ToolTipService.ToolTip="{x:Bind StaleToolTip}"
-                                                                Visibility="{x:Bind IsNormal}">
+                                                                Visibility="{x:Bind IsSourceLost}">
                                                                 <TextBlock
                                                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                                     Style="{StaticResource CaptionTextBlockStyle}"

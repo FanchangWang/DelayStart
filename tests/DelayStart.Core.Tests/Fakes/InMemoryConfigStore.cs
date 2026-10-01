@@ -40,6 +40,29 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
     /// </summary>
     public Exception? LoadException { get; set; }
 
+    /// <summary>
+    /// 每一次 <see cref="Load"/> 都会调用一次；参数是「本次是第几次 Load（从 1 起）」与
+    /// 「即将交给调用方的那份副本」。钩子可以就地改这份副本。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>只能改"即将返回的那份副本"，且 Items 要整体替换</b>：
+    /// <see cref="Copy"/> 对 <c>Items</c> 是<b>浅拷贝</b>（<c>Items = [.. source.Items]</c>），
+    /// <c>DelayedItem</c> 实例在所有副本之间共享 ——
+    /// 就地改某个 <c>DelayedItem</c> 会让**每一份**副本都跟着变，
+    /// 于是"在两次读之间配置变了"这个场景就造不出来。
+    /// <para>
+    /// 🔴 <b>存在的理由</b>：守卫的路径同步是"先 Load 一次用于判定、再 Load 一次用于写入"，
+    /// 中间夹着一个写入前的复核（"配置里的路径还是我判定时看到的那个吗"）。
+    /// 那道复核只能靠"两次读之间配置变了"来触发，而它<b>没有任何别的入口</b>。
+    /// </para>
+    /// </remarks>
+    public Action<int, AppConfig>? OnLoad { get; set; }
+
+    private int _loadCount;
+
+    /// <summary>到目前为止 <see cref="Load"/> 被调用的次数。</summary>
+    public int LoadCount => _loadCount;
+
     /// <inheritdoc />
     public AppConfig Load()
     {
@@ -48,7 +71,9 @@ internal sealed class InMemoryConfigStore : IAppConfigStore
             throw LoadException;
         }
 
-        return Copy(_config);
+        var copy = Copy(_config);
+        OnLoad?.Invoke(++_loadCount, copy);
+        return copy;
     }
 
     /// <inheritdoc />

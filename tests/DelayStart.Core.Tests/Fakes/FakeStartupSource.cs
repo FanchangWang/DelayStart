@@ -89,6 +89,16 @@ internal sealed class FakeStartupSource : IStartupSource
     /// <summary><see cref="Scan"/> 被调用的次数。</summary>
     public int ScanCount { get; private set; }
 
+    /// <summary>
+    /// 扫描过程中的旁路钩子；每次 <see cref="Scan"/> 进入时调用一次（<see langword="null"/> = 不调用）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 存在的理由是"判定与写入之间的竞态"没法从别处造：配置在扫描**之前**就被
+    /// <c>RunOnce</c> 读走，路径同步在扫描**之后**才重新读一次并写入 ——
+    /// 两读之间只有 <see cref="Scan"/> 这一个夹缝。
+    /// </remarks>
+    public Action? OnScan { get; set; }
+
     /// <summary><see cref="Disable"/> 被调用的次数。</summary>
     public int DisableCount { get; private set; }
 
@@ -118,6 +128,13 @@ internal sealed class FakeStartupSource : IStartupSource
     {
         ScanCount++;
         LastTakenOverKeys = takenOverKeys;
+
+        // 🔴 扫描过程中的旁路钩子（D137 / S1）：用来制造"判定之后、写入之前配置被改了"
+        // 这一种竞态 —— 它在真实机器上就是"用户刚在编辑器里换了路径"。
+        // 🔴 必须在**返回条目之前**触发：配置是在扫描**之前**被 `RunOnce` 读走的，
+        // 而路径同步会在扫描**之后**重新 `Load()` 一次，只有这个夹缝改配置才造得出
+        // "整批里一部分成功、一部分没写成"的形态。
+        OnScan?.Invoke();
 
         if (ScanException is not null)
         {

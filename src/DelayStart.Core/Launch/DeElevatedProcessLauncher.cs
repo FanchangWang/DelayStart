@@ -133,7 +133,8 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
 
         // 🔴 UWP 必须先于 RunAsAdmin 判定：
         // ① 裸 AUMID 不是文件路径，走 LaunchDirect（ShellExecute）必然报"系统找不到指定的文件"
-        //    （真机实锤：runs/current-run.json 里 SnipDo 与终端两条）；
+        //    （真机实锤：当时的实时状态文件里 SnipDo 与终端两条；
+        //      该文件已由 D125 删除，这条证据留在这里备查）；
         // ② UWP 进程实测恒为普通用户身份（D45），RunAsAdmin 对它无意义 —— 一律降权委托。
         if (IsUwpItem(item))
         {

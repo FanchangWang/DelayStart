@@ -549,7 +549,8 @@ public sealed class ConfigEditService
     /// </summary>
     /// <param name="resyncs"><see cref="Core.Services.TargetPathResync"/> 选出的待同步条目。</param>
     /// <returns>
-    /// 实际写入的条目数（跳过配置里已经没有的那些）；一条都没写时返回 0，<b>不</b>产生一次空写。
+    /// <b>实际写入成功</b>的条目主键集合。配置里已经没有、或写入前被改过的那些不在其中，
+    /// 调用方据此**逐条**判定成败。一条都没写时返回空集合，<b>不</b>产生一次空写。
     /// </returns>
     /// <remarks>
     /// <para>
@@ -567,19 +568,39 @@ public sealed class ConfigEditService
     /// 管理端里删条目，那份配置已经是另一个版本了。为一个"已经不需要修的条目"
     /// 中断整批修正没有任何好处。
     /// </para>
+    /// <para>
+    /// 🔴 <b>为什么返回集合而不是计数（S1）</b>：调用方要展示的是「哪几条同步成功了」，
+    /// <c>int</c> 承载不了这个信息，于是它只能对着入参反查，而反查必然命中自身
+    /// —— 结果是整批谎报成功。接口的表达力不足会被调用方用"猜"来补，而"猜"不会报错。
+    /// </para>
     /// </remarks>
-    public int ResyncPaths(IReadOnlyList<Core.Services.PathResync> resyncs)
+    public IReadOnlySet<string> ResyncPaths(IReadOnlyList<Core.Services.PathResync> resyncs)
     {
         ArgumentNullException.ThrowIfNull(resyncs);
 
         if (resyncs.Count == 0)
         {
-            return 0;
+            return new HashSet<string>(StringComparer.Ordinal);
         }
 
         var config = _configStore.Load();
 
-        var applied = 0;
+        // 🔴 **返回"哪几条成功了"，不是"成功几条"**（S1）。
+        //
+        // 原来返回 `int`，调用方只知道"有 N 条成功"—— 而它需要知道的是**哪几条**。
+        // 表达力不足逼得调用方去 `resyncs` 里反查"这条是不是成功了"，于是写出了
+        //   var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId);
+        // —— lambda 参数遮蔽了外层的 `int applied`，而 `Any` 查的又是 `resyncs` 自己，
+        // `resync` 取自 `resyncs` 必然匹配自身 ⇒ 恒真 ⇒ `done` 退化成 `applied > 0`：
+        // **整批只要有 1 条成功，全部 N 条都报成功**。守卫于是对用户谎报"路径已同步"。
+        //
+        // 🔴 症状之所以能潜伏：`applied == 0`（整批都没写成）与"整批都写成"两个极端
+        // 恰好都给出正确答案，**只有部分成功才暴露**。
+        //
+        // 🔴 用 `HashSet` 而不是计数，顺带解决 S4：配置里若出现重复主键，
+        // 按 `resyncs` 循环 `++` 会把同一条算两遍、日志报大；`Add` 只留一次。
+        var succeeded = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var resync in resyncs)
         {
             // 配置里已经没有这一条了（用户刚删的）—— 跳过，不为它中断整批。
@@ -599,17 +620,17 @@ public sealed class ConfigEditService
             }
 
             item.Path = resync.FreshPath;
-            applied++;
+            succeeded.Add(resync.ItemId);
         }
 
-        if (applied == 0)
+        if (succeeded.Count == 0)
         {
-            return 0;
+            return succeeded;
         }
 
         _configStore.Save(config);
-        _log.Info($"已把 {applied} 个条目的目标路径同步为系统现值（程序自更新换了可执行文件名）。");
-        return applied;
+        _log.Info($"已把 {succeeded.Count} 个条目的目标路径同步为系统现值（程序自更新换了可执行文件名）。");
+        return succeeded;
     }
 
     /// <summary>生成一个未被占用的自定义周期 id。</summary>

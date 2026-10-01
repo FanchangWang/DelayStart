@@ -3,11 +3,11 @@ using DelayStart.Core.Models;
 namespace DelayStart.Core.Abstractions;
 
 /// <summary>
-/// 运行记录的读取端（D19 / FR-5.12 / FR-5.13 / N7）。
+/// 运行记录的读取端（D19 / D125 / FR-5.12 / FR-5.13）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 🔴 这个接口只剩**归档**一条通路（N7 删掉了 <c>scheduler/current-run.json</c>）。
+/// 🔴 这个接口只剩**归档**一条通路（D125 删掉了 <c>scheduler/current-run.json</c>）。
 /// 删它的三条理由：
 /// </para>
 /// <list type="number">

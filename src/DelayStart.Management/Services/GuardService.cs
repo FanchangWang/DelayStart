@@ -413,11 +413,21 @@ public sealed class GuardService
 
         try
         {
-            var applied = _configEdit.ResyncPaths(resyncs);
+            // 🔴 直接问"这一条在不在成功集合里"，没有可猜的空间（S1）。
+            // 原来的写法是
+            //     var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId);
+            // lambda 参数 `applied` 遮蔽了外层的 `int applied`，而 `Any` 查的又是
+            // `resyncs` 自己 —— `resync` 取自 `resyncs` 必然匹配自身 ⇒ 恒真 ⇒
+            // `done` 退化成 `applied > 0`：整批只要有 1 条成功，**全部 N 条都报成功**。
+            //
+            // 🔴 为什么这个缺陷能长期潜伏：`applied == 0`（整批都没写成）与"整批都写成"
+            // 两个极端恰好都给出正确答案，**只有部分成功才暴露**。用例
+            // `RunOnce_TwoPathsDrifted_OneBecameStaleMidFlight_...` 就是补这个缺口的。
+            var succeededIds = _configEdit.ResyncPaths(resyncs);
 
             foreach (var resync in resyncs)
             {
-                var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId);
+                var done = succeededIds.Contains(resync.ItemId);
                 outcomes.Add(new GuardCorrectionOutcome(
                     resync.ItemId,
                     resync.Name,

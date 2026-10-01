@@ -339,32 +339,91 @@ public sealed class GuardServiceTests
      Assert.Equal(savesBefore, harness.Store.SaveCount);
     }
 
-    [Fact]
+[Fact]
     public void RunOnce_TargetPathDrifted_ButItemGoneFromConfig_DoesNotThrowAndDoesNotClaimSuccess()
     {
-        // 守卫跑的时候用户完全可能正在管理端里删条目 —— 那份配置已经是另一个版本了。
-        // 为一个"已经不需要修的条目"抛异常会中断整轮巡检，那才是真正的损失。
-      const string oldExe = @"C:\Users\guyue\AppData\Local\Programs\FluxDown\flux_down.exe";
+        // ⚠️ 这个用例名与它的函数体**曾经不符**（S1 能长期潜伏的原因之一）：
+        // 名字承诺"条目在配置里没了"，函数体却从头到尾没删过任何东西 ——
+        // 于是它实际重复了上一个用例，"部分成功"这个场景一直没人验。
+        // 现在真正把条目删掉。
+        const string oldExe = @"C:\Users\guyue\AppData\Local\Programs\FluxDown\flux_down.exe";
 
         var source = new FakeStartupSource
         {
-   Entries = [Entry("registry:hkcu:fluxdown", "FluxDown", isEnabled: false)],
+            Entries = [Entry("registry:hkcu:fluxdown", "FluxDown", isEnabled: false)],
         };
         using var harness = new Harness(GuardMode.Periodic, source);
 
-   // 只留一个"配置里有过期路径"的条目，让守卫扫出漂移；随后把它从配置里删掉，
-     // 模拟"判定与写入之间用户动了配置"这一种竞态。
         harness.SeedManagedItem("registry:hkcu:fluxdown", "FluxDown", oldExe);
 
-    var report = harness.Service.RunOnce();
+        // 模拟"判定之后、写入之前用户把这条删了"：守卫先 Load 一份做判定，
+        // 路径同步写入前再 Load 一份 —— 我们只在后一份里删掉它。
+        harness.MutateConfigAfterJudgement(copy => Harness.DropItem(copy, "registry:hkcu:fluxdown"));
 
-        // 正常路径：同步成功，配置已更新。
-        Assert.Equal(DemoExePath, harness.Store.Snapshot().Items.Single().Path);
-        Assert.Contains(report.Corrections, static candidate => candidate.Succeeded);
+        var report = harness.Service.RunOnce();
+
+        // 只报"未同步"，不许报成功：谎报会让用户以为路径已经跟上，而调度端仍在跳过它。
+        var outcome = Assert.Single(
+            report.Corrections,
+            static candidate => candidate.ItemId == "registry:hkcu:fluxdown");
+        Assert.False(outcome.Succeeded);
+        Assert.Contains("未同步", outcome.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunOnce_TwoPathsDrifted_OneBecameStaleMidFlight_ReportsOnlyTheOneThatSucceeded()
+    {
+        // 🔴 S1 的核心用例：整批里**一部分成功、一部分没写成**。
+        //
+        // 曾经的缺陷：
+        //   var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId);
+        // lambda 参数 `applied` 遮蔽了外层的 `int applied`，而 `Any` 查的是 `resyncs` 自己，
+        // `resync` 取自 `resyncs` 必然匹配自身 ⇒ 恒真 ⇒ `done` 退化成 `applied > 0`：
+        // 整批只要有 1 条成功，**全部 N 条都报成功**。
+        //
+        // 🔴 为什么"整批全成功"和"整批全失败"两个用例都测不出来：
+        // 前者 `applied > 0` 恰好等于正确答案，后者 `applied == 0` 也恰好等于正确答案。
+        // **只有部分成功才暴露** —— 这类"两个极端都对"的缺陷是覆盖率最容易漏掉的一类。
+        const string oldExeA = @"C:\Old\a.exe";
+        const string oldExeB = @"C:\Old\b.exe";
+
+        var source = new FakeStartupSource
+        {
+            Entries =
+            [
+                Entry("registry:hkcu:a", "甲", isEnabled: false),
+                Entry("registry:hkcu:b", "乙", isEnabled: false),
+            ],
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManagedItem("registry:hkcu:a", "甲", oldExeA);
+        harness.SeedManagedItem("registry:hkcu:b", "乙", oldExeB);
+
+        // 两条都漂移 ⇒ 判定会选出 2 条；随后在**写入前那次** Load 里把「乙」的路径换掉，
+        // 让它在复核里被跳过（现实中就是"用户刚在编辑器里换了路径"）。
+        harness.MutateConfigAfterJudgement(copy => Harness.SetPath(copy, "registry:hkcu:b", JustTypedPath));
+
+        var report = harness.Service.RunOnce();
+
+        var a = Assert.Single(report.Corrections, static candidate => candidate.ItemId == "registry:hkcu:a");
+        var b = Assert.Single(report.Corrections, static candidate => candidate.ItemId == "registry:hkcu:b");
+
+        Assert.True(a.Succeeded, $"甲本该同步成功：{a.Detail}");
+        Assert.False(b.Succeeded, $"乙没写成就不许报成功：{b.Detail}");
+        Assert.Contains("已同步", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("未同步", b.Detail, StringComparison.Ordinal);
+
+        // 配置里：甲跟上了系统现值；乙保持用户刚填的那个，不能被旧判定覆盖。
+        var saved = harness.Store.Snapshot().Items;
+        Assert.Equal(DemoExePath, saved.Single(item => item.Id == "registry:hkcu:a").Path);
+        Assert.Equal(JustTypedPath, saved.Single(item => item.Id == "registry:hkcu:b").Path);
     }
 
     /// <summary>夹具里"来源报的目标路径"。接管时配置抄的就是它。</summary>
     private const string DemoExePath = @"C:\Program Files\Demo\demo.exe";
+
+    /// <summary>"用户在守卫写入前刚填的路径"（S1 用例里那一半失败的原因）。</summary>
+    private const string JustTypedPath = @"C:\Users\guyue\just-typed.exe";
 
     private static StartupEntry Entry(string id, string name, bool isEnabled = true) => new()
     {
@@ -442,6 +501,53 @@ public sealed class GuardServiceTests
             }];
             Store.Save(config);
         }
+
+        /// <summary>
+        /// 让守卫判定之后、写入之前，配置里的某一条发生变化（模拟用户同时在编辑配置）。
+        /// </summary>
+        /// <param name="mutate">对那份副本做什么。</param>
+        /// <remarks>
+        /// 🔴 <b>跳过第一次 Load</b>：守卫巡检的第一次 <c>Load()</c> 是"拿配置做判定"用的，
+        /// 那一份不能动 —— 动了就变成"判定时就看到新值"，路径同步会照常写入，场景就丢了。
+        /// 此后每一次 <c>Load()</c>（<c>ScanService</c> 取接管键、<c>ResyncPaths</c> 写入前复核）
+        /// 都算"写入侧"，中间到底隔了几次不写死序号 —— 那取决于扫描器实现会不会也读一次配置。
+        /// </remarks>
+        public void MutateConfigAfterJudgement(Action<AppConfig> mutate) => Store.OnLoad = (ordinal, copy) =>
+        {
+            if (ordinal > 1)
+            {
+                mutate(copy);
+            }
+        };
+
+        /// <summary>把某条接管条目从那一份副本里删掉（模拟"守卫跑的时候用户正在删条目"）。</summary>
+        /// <param name="config">待改的副本。</param>
+        /// <param name="id">主键。</param>
+        public static void DropItem(AppConfig config, string id) => config.Items =
+            [.. config.Items.Where(item => !string.Equals(item.Id, id, StringComparison.Ordinal))];
+
+        /// <summary>把某条接管条目在那一份副本里的目标路径改掉（模拟"用户刚换了路径"）。</summary>
+        /// <param name="config">待改的副本。</param>
+        /// <param name="id">主键。</param>
+        /// <param name="path">新的目标路径。</param>
+        /// <remarks>
+        /// 🔴 Items 必须<b>整体替换</b>而不是就地改那个 <c>DelayedItem</c>：
+        /// <c>InMemoryConfigStore.Copy</c> 对 Items 是<b>浅拷贝</b>，
+        /// <c>DelayedItem</c> 实例在所有副本之间共享 —— 就地改会让每一份副本都跟着变。
+        /// </remarks>
+        public static void SetPath(AppConfig config, string id, string path) => config.Items =
+            [
+                .. config.Items.Select(item => string.Equals(item.Id, id, StringComparison.Ordinal)
+                    ? new DelayedItem
+                    {
+                        Id = item.Id,
+                        Name = item.Name,
+                        Path = path,
+                        Source = item.Source,
+                        Scope = item.Scope,
+                    }
+                    : item)
+            ];
 
         /// <summary>把守卫通知策略写进配置（D80）。</summary>
         public void SeedNotifyMode(GuardNotifyMode mode)

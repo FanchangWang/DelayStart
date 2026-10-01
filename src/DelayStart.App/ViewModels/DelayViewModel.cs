@@ -829,7 +829,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <para>
     /// 🔴 <b>轮询而不是假设成功</b>：<c>Process.Start</c> 返回只说明进程创建成功，不代表它
     /// 正确接管了。实测里"点了没反应、托盘图标没出现"是真实故障，而用户看到的就是"点了没反应"。
-    /// 轮询单实例互斥体是唯一不依赖状态文件的判据 —— F6 删掉了 current-run.json 之后就
+    /// 轮询单实例互斥体是唯一不依赖状态文件的判据 —— D125 删掉了 current-run.json 之后就
     /// 更没有状态文件可看了，而互斥体本来就覆盖了"正在运行"这个问题的全部含义。
     /// </para>
     /// <para>
@@ -924,7 +924,7 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <para>
     /// 🔴 <b>轮询而不是假设成功</b>：<c>Process.Start</c> 返回只说明进程创建成功，不代表它
     /// 正确接管了。实测里"点了没反应、托盘图标没出现"是真实故障，而用户看到的就是"点了没反应"。
-    /// 轮询单实例互斥体是唯一不依赖状态文件的判据 —— F6 删掉了 current-run.json 之后就
+    /// 轮询单实例互斥体是唯一不依赖状态文件的判据 —— D125 删掉了 current-run.json 之后就
     /// 更没有状态文件可看了，而互斥体本来就覆盖了"正在运行"这个问题的全部含义。
     /// </para>
     /// <para>

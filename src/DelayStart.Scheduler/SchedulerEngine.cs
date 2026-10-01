@@ -17,7 +17,9 @@ namespace DelayStart.Scheduler;
 /// 单线程消息循环驱动：<c>WM_TIMER</c> 节拍里按
 /// <see cref="DelayCalculator"/>（**绝对时间点语义**，非累加）逐项到期启动，
 /// 复查窗口（1.5 秒）到了再探测进程状态判定成败。
-/// 每次状态变化都原子重写 <c>current-run.json</c>，管理端零 IPC 读取（D19）。
+/// 🔴 每次状态变化原子重写 <c>current-run.json</c>（v0.6.1 已删，D125）：它的唯一消费者是进度面板，
+/// 面板取消后没有消费方，而留着它意味着每个状态变化都要原子写一次磁盘、收益为零。
+/// 收尾只写归档 <c>scheduler\archive\{runId}.json</c>；"调度端是否在跑"改由单实例互斥体回答。
 /// </para>
 /// <para>
 /// 失败策略为 D17 = D：保持接管、本次内按设置重试、跨登录原延时重试；
@@ -74,19 +76,8 @@ internal sealed class SchedulerEngine
 
     /// <summary>完成后已弹出面板，正在等用户关闭（关闭即退出，期间不能自行退出）。</summary>
 
-    /// <summary>退出已发起（面板倒计时与菜单「退出」可能重复触发，需要幂等）。</summary>
+    /// <summary>退出已发起（菜单「退出」与收尾到点可能重复触发，需要幂等）。</summary>
     private bool _quitRequested;
-
-    /// <summary>上一次按秒刷新面板时用的「下一项剩余秒数」（<see cref="RefreshLiveCountdown"/> 的节流签名）。</summary>
-    private int _lastCountdownSecond = int.MinValue;
-
-    /// <summary>
-    /// 收尾动作是**面板上**发起的（「立即启动剩余 N 项」/「跳过剩余任务」）。
-    /// 用户已经手动弹出面板在看，完成时就必须给结果：面板切完成态并起倒计时，
-    /// 🔴 原先这里判定"收尾**要不要等**"，由 Core 的 CompletionPolicy 回答
-    /// （判定表可单测；D71–D73 三个缺陷都出在那一处）。面板已于 v0.6.1 取消 ——
-    /// 没有第二个进程需要等，收尾只剩"什么时候退"一个决定，CompletionPolicy 随之删除。
-    /// </summary>
 
     /// <summary>
     /// 辅助进程拉起器（懒建）：既发"发系统通知"（<b>降权</b>拉起通知中转器）、
@@ -242,7 +233,7 @@ internal sealed class SchedulerEngine
                 // FR-15.26：今天一条都不启动时，"为什么"必须留下痕迹 ——
                 // 照旧走 FR-5.10 静默退出的话，调度日志里连一行都不会有，
                 // 用户看到的是一个没动静的早晨，而答案在延时页的一条徽标上。
-                RecordAllSkippedRun(outcome.SkippedToday);
+                RecordNoLaunchRun([], outcome.SkippedToday);
             }
             else
             {
@@ -274,25 +265,14 @@ internal sealed class SchedulerEngine
 
         if (launchable.Count == 0)
         {
-            // S1.3：两种"空"要给**不同的**通知文案。
-            // "全部不在周期内"和"全部目标程序不存在"在用户看来是两件完全不同的事：
-            // 前者是设置问题，后者是软件被卸载了。若都发"0 项成功"，
+            // 🔴 筛掉的条目必须**进调度日志**（P1-4）：哪怕一项都启动不了，
+            // 也要留下这份归档。否则用户看到"我配了 5 个，一条都没启动"，
+            // 而调度日志页上什么都没有 —— "那 5 个去哪了"就成了无解的问题。
+            //
+            // 两种"空"给**不同的**通知文案：「今天不在周期内」是设置问题，
+            // 「目标程序不存在」是软件被卸载了。都发"0 项成功"的话，
             // 用户会以为设置生效了，而真正的原因要翻日志才看得见。
-            var allTargetsMissing = missingTargets.Count > 0
-                && missingTargets.Count == outcome.SkippedToday.Count + missingTargets.Count;
-
-            if (allTargetsMissing && missingTargets.Count > 0)
-            {
-                _log.Warn($"本轮 {missingTargets.Count} 项的目标程序全部已不存在，"
-                    + "按通知策略通报后立即退出（S1.2：不空等延时）。");
-                SendNoLaunchableTargetsNotification(missingTargets);
-                return false;
-            }
-
-            // 走到这里只可能是：预筛之后还剩 0 项，而 plan 本来就非空 ——
-            // 那说明筛选逻辑与计划生成不一致，属于不该发生的状态。仍按失败处理，
-            // 但要说清是"目标都没了"而不是"没配置"。
-            _log.Warn("计划非空但预筛后无一可启动，已按目标缺失处理。");
+            RecordNoLaunchRun(missingTargets, outcome.SkippedToday);
             SendNoLaunchableTargetsNotification(missingTargets);
             return false;
         }
@@ -301,7 +281,7 @@ internal sealed class SchedulerEngine
         {
             _log.Warn(
                 $"本轮跳过 {missingTargets.Count} 项目标程序已不存在的条目："
-                + $"{DescribeNames(missingTargets)}（仍全部记入调度日志，不静默丢弃）。");
+                + $"{DescribeNames(missingTargets)}（已记入调度日志，不静默丢弃）。");
         }
 
         plan = launchable;
@@ -327,6 +307,14 @@ internal sealed class SchedulerEngine
         // 🔴 只进日志、**不进 _items**：它们没有到点时刻，不参与 Tick 与收尾判定，
         // 也不该出现在进度面板的计数里（面板回答的是"这次跑得怎么样"）。
         AppendNotInCycleItems(outcome.SkippedToday, _record.Items);
+
+        // 🔴 目标已不存在的条目同样进本次日志（审计 P1-4），记为 `Failed` + 原因。
+        // 它们**不进 `_items`**：没有到点时刻，也不该被起停表管。
+        //
+        // 为什么要记 Failed 而不是 Skipped：Failed 是"试过且没成"，
+        // 用户会去装回软件或删条目；Skipped 是"没轮到"，用户不该为它做任何事。
+        // 混起来的话，最该被看见的那一批会伪装成"正常跳过"。
+        AppendMissingTargetItems(missingTargets, _record.Items);
 
         for (var index = 0; index < plan.Count; index++)
         {
@@ -372,36 +360,127 @@ internal sealed class SchedulerEngine
         }
     }
 
+    /// <summary>目标程序已不存在的条目的固定原因文案。</summary>
+    private const string MissingTargetReason = "目标程序已不存在（可能被卸载），本次未启动";
+
+    /// <summary>
+    /// 把"目标程序已不存在"的条目追加进调度日志（审计 P1-4）。
+    /// </summary>
+    /// <param name="entries">被预筛掉的目标已缺失条目。</param>
+    /// <param name="target">要追加到的运行记录条目表。</param>
+    /// <remarks>
+    /// 🔴 记 <see cref="RunItemState.Failed"/> 而不是 <see cref="RunItemState.Skipped"/>：
+    /// Failed = "试过且没成"，用户会去装回软件或删条目；Skipped = "没轮到"，
+    /// 用户不该为它做任何事。混起来的话，最该被看见的那一批会伪装成"正常跳过"。
+    /// <para>
+    /// <see cref="RunItemResult.LaunchedAt"/> 留空 —— 它没有被发起过，
+    /// 而"没有发起时刻"正是该字段的既有语义。
+    /// </para>
+    /// </remarks>
+    private static void AppendMissingTargetItems(List<ScheduleEntry> entries, List<RunItemResult> target)
+    {
+        foreach (var entry in entries)
+        {
+            target.Add(new RunItemResult
+            {
+                Id = entry.Item.Id,
+                Name = entry.Item.Name,
+                Delay = entry.Item.DelaySeconds,
+                State = RunItemState.Failed,
+                Reason = MissingTargetReason,
+            });
+        }
+    }
+
+    /// <summary>
+    /// 本轮**一个条目都没执行**时的运行记录（FR-15.26 / 审计 P1-4）。
+    /// </summary>
+    /// <param name="missingTargets">目标程序已不存在的条目；无则传空表。</param>
+    /// <param name="notInCycle">今天不在周期内的启用条目；无则传空表。</param>
+    /// <remarks>
+    /// <para>
+    /// 🔴 这份记录的**全部意义就是回答一个问题**："今天为什么什么都没启动？"
+    /// 它没有任何条目被执行过，因此不进消息循环、不建托盘 —— 写完就与 FR-5.10 一样退出
+    /// （通知照旧按策略发）。
+    /// </para>
+    /// <para>
+    /// 🔴 两类跳过都要记进去（审计 P1-4）：用户看到"配了 8 项，今天启动 0 项"，
+    /// 需要分别知道"哪几项的目标没了"与"哪几项今天本来就不轮"。只给一类，
+    /// 另一类就成了无解的问题。
+    /// </para>
+    /// <para>
+    /// 两类都为空时不写空归档 —— 那是"配置里一条启用项都没有"，
+    /// 写一份零条目归档只会让调度日志页多一行没有信息量的记录。
+    /// </para>
+    /// </remarks>
+    private void RecordNoLaunchRun(List<ScheduleEntry> missingTargets, IReadOnlyList<DelayedItem> notInCycle)
+    {
+        if (missingTargets.Count == 0 && notInCycle.Count == 0)
+        {
+            _log.Info("本轮没有可启动的条目，且没有任何需要记录的跳过项。");
+            return;
+        }
+
+        var now = DateTimeOffset.Now;
+        var record = new RunRecord
+        {
+            RunId = RunStateService.CreateRunId(now),
+            StartedAt = now,
+            FinishedAt = now,
+            CompletedNormally = true,
+            PlannedCount = 0,
+            Items = [],
+        };
+
+        AppendMissingTargetItems(missingTargets, record.Items);
+        AppendNotInCycleItems(notInCycle, record.Items);
+
+        try
+        {
+            _runState.Archive(record);
+
+            // 有目标缺失时走 Warn：那不是"正常的今天不轮"，是软件被卸载了。
+            if (missingTargets.Count > 0)
+            {
+                _log.Warn(
+                    $"本轮无一可启动，已写入归档 {record.RunId}："
+                    + $"{missingTargets.Count} 项目标程序不存在、{notInCycle.Count} 项今天不在周期内。");
+            }
+            else
+            {
+                _log.Info(
+                    $"今天没有条目在启动周期内：{notInCycle.Count} 个启用条目全部跳过，已写入调度日志。");
+            }
+        }
+        catch (Exception ex)
+        {
+            // 写不进去也不该让登录路径上的这个进程卡住或报错 —— 与 FR-5.10 的静默退出等价。
+            _log.Warn(ex, "写入「本轮无一可启动」的运行记录失败（用户已从通知得到结论，不阻断收尾）。");
+        }
+    }
+
     /// <summary>
     /// 按"目标程序还在不在"把计划分成两拨（S1.1）。
     /// </summary>
     /// <param name="plan">SchedulePlan 产出的本轮计划。</param>
     /// <returns>（可启动项，目标已不存在的项）。</returns>
     /// <remarks>
-    /// 🔴 判据是 <see cref="TargetFileProbe.IsMissing"/>，它对无路径、UWP 解析名、
-    /// 裸命令名、相对路径**一律返回 false**（按"在"处理）。所以这一筛**只会少启动，
+    /// 🔴 <b>直接委托给 Core 的 <see cref="TargetPrefilter"/>，不自己实现一遍。</b>
+    /// 审计 P1-1：原先这里是逐行相同的一份拷贝，于是 Core 那份成了**死代码** ——
+    /// 14 个单测测的是一个没有任何生产代码调用的函数，而真正跑的那份无人覆盖。
+    /// 两份可以静默漂移，而漂移的方向是"少启动还是多判失败"，判错代价很大。
+    /// <para>
+    /// 判据（<see cref="TargetFileProbe.IsMissing"/>）对无路径、UWP 解析名、裸命令名、
+    /// 相对路径**一律返回 false**（按"在"处理）。所以这一筛**只会少启动，
     /// 绝不会多判失败** —— 方向与 D87/D90 一致：兜底只能更宽松。
     /// 而"少启动"的那些项仍全部进调度日志（记 Failed + 原因），不是静默丢弃。
+    /// </para>
     /// </remarks>
     private static (List<ScheduleEntry> Launchable, List<ScheduleEntry> MissingTargets)
         SplitByTargetExistence(IReadOnlyList<ScheduleEntry> plan)
     {
-        var launchable = new List<ScheduleEntry>(plan.Count);
-        var missing = new List<ScheduleEntry>();
-
-        foreach (var entry in plan)
-        {
-            if (TargetFileProbe.IsMissing(entry.Item.Path))
-            {
-                missing.Add(entry);
-            }
-            else
-            {
-                launchable.Add(entry);
-            }
-        }
-
-        return (launchable, missing);
+        var split = TargetPrefilter.Split(plan);
+        return (split.Launchable, split.MissingTargets);
     }
 
     /// <summary>列出若干条目的名字（超过三个时截断并给"等 N 项"）。</summary>
@@ -438,47 +517,16 @@ internal sealed class SchedulerEngine
                 + "这些条目已保留在延时启动页，装回软件后会自动恢复；也可在那里删除。");
     }
 
-    /// <summary>
-    /// 今天所有启用条目都不在周期内：写一份"只有跳过项"的运行记录（FR-15.26）。
-    /// </summary>
-    /// <param name="skipped">全部被跳过的启用条目。</param>
+
+    /// <summary>归档里因"目标程序已不存在"而记为失败的条目数（审计 P1-4）。</summary>
+    /// <returns>计数。</returns>
     /// <remarks>
-    /// <para>
-    /// 🔴 这份记录的**全部意义就是回答一个问题**："今天为什么什么都没启动？"
-    /// 它没有任何条目被执行过，因此不进消息循环、不建托盘、不弹面板 ——
-    /// 写完就与 FR-5.10 一样静默退出（通知照旧按策略发）。
-    /// </para>
-    /// <para>
-    /// 实时状态（<c>current-run.json</c>）也一并写：总览页的"最近一次运行"读的是它，
-    /// 只写归档会让总览页停在上一次、与调度日志页说两套话。
-    /// </para>
+    /// 按 <see cref="RunItemResult.Reason"/> 判而不是靠一个字段：归档里没有"这是预筛掉的"
+    /// 这样的标记，而 <see cref="MissingTargetReason"/> 是本类唯一的产地。
     /// </remarks>
-    private void RecordAllSkippedRun(IReadOnlyList<DelayedItem> skipped)
-    {
-        var now = DateTimeOffset.Now;
-        var record = new RunRecord
-        {
-            RunId = RunStateService.CreateRunId(now),
-            StartedAt = now,
-            FinishedAt = now,
-            CompletedNormally = true,
-            PlannedCount = 0,
-            Items = [],
-        };
-
-        AppendNotInCycleItems(skipped, record.Items);
-
-        try
-        {
-            _runState.Archive(record);
-            _log.Info($"今天没有条目在启动周期内：{skipped.Count} 个启用条目全部跳过，已写入调度日志。");
-        }
-        catch (Exception ex)
-        {
-            // 写不进去也不该让登录路径上的这个进程卡住或报错 —— 与 FR-5.10 的静默退出等价。
-            _log.Warn(ex, "写入「今天全部条目不在周期内」的运行记录失败。");
-        }
-    }
+    private int CountMissingTargetsInRecord()
+        => _record.Items.Count(static result =>
+            result.State == RunItemState.Failed && result.Reason == MissingTargetReason);
 
     private TrayIconHost? CreateTrayHost(IconResources? icons)
     {
@@ -508,7 +556,6 @@ internal sealed class SchedulerEngine
     private void Tick()
     {
         var elapsed = _stopwatch.Elapsed;
-        var changed = false;
 
         foreach (var runtime in _items)
         {
@@ -516,18 +563,13 @@ internal sealed class SchedulerEngine
                 && elapsed >= runtime.LaunchAt) // LaunchAt 初值=配置延时；「立即启动」把它拨到当下
             {
                 Launch(runtime);
-                changed = true;
             }
             else if (runtime.Result.State == RunItemState.Launching && elapsed >= runtime.RecheckAt)
             {
                 Evaluate(runtime);
-                changed = true;
             }
         }
 
-        if (changed)
-        {
-        }
 
         if (!_finishing && _items.All(static runtime => runtime.Result.State is RunItemState.Done or RunItemState.Failed or RunItemState.Skipped))
         {
@@ -543,43 +585,8 @@ internal sealed class SchedulerEngine
         }
 
         _tray?.UpdateTip(BuildTooltip());
-        RefreshLiveCountdown();
     }
 
-    /// <summary>
-    /// 面板开着时让启动中的实时数字**走秒**：「下一项 N 秒后启动」与当前项 ETA。
-    /// 只在状态变化时才重绘的话，这些秒数要等到下一个条目启动才动一次，
-    /// 看起来就像卡住几秒才跳（2026-09-21 实测反馈）。
-    /// 节流：剩余秒数没变就不重绘（节拍 250ms，实际每秒一次）。
-    /// 完成态不在此列 —— 那边由面板自带的 1 秒倒计时定时器驱动。
-    /// </summary>
-    private void RefreshLiveCountdown()
-    {
-        if (_finishing)
-        {
-            return;
-        }
-
-        var soonest = TimeSpan.MaxValue;
-        foreach (var runtime in _items)
-        {
-            if (runtime.Result.State == RunItemState.Waiting && runtime.LaunchAt < soonest)
-            {
-                soonest = runtime.LaunchAt;
-            }
-        }
-
-        var second = soonest == TimeSpan.MaxValue
-            ? -1
-            : (int)Math.Ceiling(Math.Max((soonest - _stopwatch.Elapsed).TotalSeconds, 0));
-
-        if (second == _lastCountdownSecond)
-        {
-            return;
-        }
-
-        _lastCountdownSecond = second;
-    }
 
     /// <summary>发起一次启动；失败且仍有重试额度时立即重试（同一次运行内，FR-9.6）。</summary>
     /// <remarks>
@@ -787,7 +794,12 @@ internal sealed class SchedulerEngine
 
         _log.Info($"调度结束：{_record.RunId}。");
 
-        var failedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed);
+        // 🔴 失败计数要**同时**包含"起停表里启动失败的"与"预筛时目标就没了���"
+        // （P1-4）：后者写进了归档但不在 `_items` 里，只数前者的话，
+        // 5 项配了 3 项启动成功、2 项目标没了，通知却说"3 项全部成功" ——
+        // 用户被告知了一个与归档不一致的结论。
+        var failedCount = _items.Count(static runtime => runtime.Result.State == RunItemState.Failed)
+            + CountMissingTargetsInRecord();
         _tray?.SetIcon(IconFor(failedCount > 0));
 
         // N5：通知是通知，面板是面板 —— 面板已于 v0.6.1 取消，这里只剩"发不发系统通知"一件事。

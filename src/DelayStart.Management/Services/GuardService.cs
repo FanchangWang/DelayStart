@@ -68,11 +68,17 @@ public sealed class GuardService
     /// <param name="sources">全部来源实例（纠正动作要按来源定位）。</param>
     /// <param name="log">日志接收端。</param>
     /// <param name="clock">时间源（给巡检结果打完成时间戳，D116）。</param>
+    /// <param name="configEdit">
+    /// 配置编辑服务（写配置的唯一出口）。🔴 注入它而不是直接用 <see cref="IAppConfigStore"/> 写：
+    /// D137 的路径同步要落盘，而所有配置写入都在 <see cref="ConfigEditService"/> 收口 ——
+    /// 绕过它就意味着守卫这条路上少了一层版本校验与原子写保护。
+    /// </param>
     public GuardService(
         ScanService scanner,
         IAppConfigStore configStore,
         GuardBaselineStore baselineStore,
         IReadOnlyList<IStartupSource> sources,
+        ConfigEditService configEdit,
         ILogSink log,
         IClock clock)
     {
@@ -80,6 +86,7 @@ public sealed class GuardService
         ArgumentNullException.ThrowIfNull(configStore);
         ArgumentNullException.ThrowIfNull(baselineStore);
         ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(configEdit);
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(clock);
 
@@ -87,9 +94,13 @@ public sealed class GuardService
         _configStore = configStore;
         _baselineStore = baselineStore;
         _sources = sources;
+        _configEdit = configEdit;
         _log = log;
         _clock = clock;
     }
+
+    /// <summary>配置编辑服务（D137 路径同步的唯一写入出口）。</summary>
+    private readonly ConfigEditService _configEdit;
 
     /// <summary>执行一次巡检。</summary>
     /// <param name="reusedScan">
@@ -220,6 +231,21 @@ public sealed class GuardService
 
         var corrections = CorrectWrittenBackItems(config.Items, scan.Entries, failureArray, takenOverKeys);
 
+        // 🔴 D137：把"源还在、但配置里记的目标路径已经过期"的条目同步为系统现值。
+        //
+        // 为什么必须在守卫里做（而不是只在管理端加载时做）：守卫是**唯一在用户不在场时
+        // 也定期跑**的那个入口。管理端只在他打开窗口的那几十秒里活着，而路径漂移是
+        // 程序自更新造成的 —— 那件事发生在用户看不见的时候。放在管理端意味着
+        // 用户不打开管理端、那条路径就永远过期下去。
+        //
+        // 为什么**修正配置**而不是让调度端改判据：调度端刻意不扫描（登录早期、
+        // 依赖未就绪），它手里只有配置。判据要统一，就只能让配置跟上真相。
+        //
+        // 归入 Corrections 而不新开一个字段：Corrections 已经是"守卫改了什么"的通用出口，
+        // 加字段会改归档 schema —— 而守卫归档的 schema 一旦变动，旧归档就读不出来了
+        // （P1-2 刚把这件事从"静默消失"改成"看得见"）。Detail 字段本来就是一句话说明。
+        corrections.AddRange(CorrectStaleTargetPaths(config.Items, scan.Entries, failureArray));
+
         var baseline = _baselineStore.Read();
         var newItems = GuardNewItemPolicy.SelectNewItems(
             scan.Entries,
@@ -342,6 +368,81 @@ public sealed class GuardService
 
         return outcomes;
     }
+
+    /// <summary>
+    /// 把"源还在、但配置里记的目标路径已过期"的条目同步为系统现值（D137）。
+    /// </summary>
+    /// <param name="managedItems">接管清单。</param>
+    /// <param name="scannedEntries">本次全量扫描结果。</param>
+    /// <param name="failures">本次不可用的来源作用域。</param>
+    /// <returns>可展示的纠正结果；没有则为空列表。</returns>
+    /// <remarks>
+    /// 🔴 写入失败**必须逐条记出来**而不是整批放弃：整批写是一次原子操作，
+    /// 而"这一条修好了、那一条没修"对用户是有价值的差别 —— 他至少知道还剩哪些要手动处理。
+    /// 静默吞掉的话，用户会以为路径已经被同步了，而调度端仍在跳过那个程序。
+    /// </remarks>
+    private List<GuardCorrectionOutcome> CorrectStaleTargetPaths(
+        IReadOnlyList<DelayedItem> managedItems,
+        IReadOnlyList<StartupEntry> scannedEntries,
+        IReadOnlyCollection<ScanScope> failures)
+    {
+        var outcomes = new List<GuardCorrectionOutcome>();
+
+        IReadOnlyList<Core.Services.PathResync> resyncs;
+        try
+        {
+            resyncs = Core.Services.TargetPathResync.SelectResyncs(managedItems, scannedEntries, failures);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "判定目标路径漂移失败（本轮不同步任何路径）");
+            return outcomes;
+        }
+
+        if (resyncs.Count == 0)
+        {
+            return outcomes;
+        }
+
+        foreach (var resync in resyncs)
+        {
+            _log.Warn(
+                $"目标路径已过期：『{resync.Name}』{Describe(resync.CurrentPath)}"
+                + $" → {Describe(resync.FreshPath)}（程序自更新换了可执行文件名，正在同步）");
+        }
+
+        try
+        {
+            var applied = _configEdit.ResyncPaths(resyncs);
+
+            foreach (var resync in resyncs)
+            {
+                var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId);
+                outcomes.Add(new GuardCorrectionOutcome(
+                    resync.ItemId,
+                    resync.Name,
+                    done,
+                    done ? $"路径已同步为 {resync.FreshPath}" : "路径未同步（配置可能已变更）"));
+            }
+        }
+        catch (Exception ex)
+        {
+            foreach (var resync in resyncs)
+            {
+                outcomes.Add(new GuardCorrectionOutcome(resync.ItemId, resync.Name, false, ex.Message));
+            }
+
+            _log.Error(ex, $"同步目标路径失败（{resyncs.Count} 条待同步）");
+        }
+
+        return outcomes;
+    }
+
+    /// <summary>路径为空时给一句人话，不在日志里留一个裸空串。</summary>
+    /// <param name="path">路径。</param>
+    /// <returns>可读的路径说明。</returns>
+    private static string Describe(string path)
+        => string.IsNullOrWhiteSpace(path) ? "（空）" : path;
 
     /// <summary>复读该来源，确认同一主键的条目已经处于禁用态。</summary>
     private bool ReReadDisabled(IStartupSource source, string itemId, IReadOnlySet<string> takenOverKeys)

@@ -70,7 +70,15 @@ internal static class Program
         var sources = StartupSourceFactory.Create(new ShellLinkResolver(log), clock, log);
         var scanner = new ScanService(sources, configStore, log);
         var baselineStore = new GuardBaselineStore(paths, log, clock);
-        var guard = new GuardService(scanner, configStore, baselineStore, sources, log, clock);
+        // 🔴 D137：守卫要能把「配置里已过期的目标路径」同步为系统现值，而配置写入的
+        // 唯一出口是 ConfigEditService。TaskRegistrationService 在这里只是为了满足它的
+        // 构造签名 —— 路径同步不碰计划任务（它只需要 paths + log，构造极轻）。
+        var configEdit = new ConfigEditService(
+            configStore,
+            new TaskRegistrationService(paths, log),
+            log);
+
+        var guard = new GuardService(scanner, configStore, baselineStore, sources, configEdit, log, clock);
 
         // 巡检归档（D116）：每次巡检完成后落一份结构化记录，守卫日志页与总览卡读它。
         // 写入失败只记 Warn（store 内部吞掉），不阻塞巡检 —— 见 GuardInspectionStore 的 remarks。

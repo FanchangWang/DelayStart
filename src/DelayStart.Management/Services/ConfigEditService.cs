@@ -544,6 +544,74 @@ public sealed class ConfigEditService
         return true;
     }
 
+    /// <summary>
+    /// 把一批"目标路径已过期"的条目同步为系统现值（D137，整批一次原子写）。
+    /// </summary>
+    /// <param name="resyncs"><see cref="Core.Services.TargetPathResync"/> 选出的待同步条目。</param>
+    /// <returns>
+    /// 实际写入的条目数（跳过配置里已经没有的那些）；一条都没写时返回 0，<b>不</b>产生一次空写。
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b>必须走配置服务，不能就地改完内存对象就完事</b>：所有配置写入都在这里
+    /// 收口（AGENTS 代码地图），而 <c>ConfigService.Save</c> 自带版本校验与原子写。
+    /// 绕过它就意味着守卫这条路上少了一层保护。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>整批一次写</b>，而不是一条一次：守卫可能在一次巡检里发现多条漂移
+    /// （同一个程序升级、连带几个条目），逐条写就是逐次落盘 + 逐次版本校验；
+    /// 整批写还有一个好处 —— 中途失败不会留下"改了一半"的配置。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>找不到的 id 直接跳过而不是抛异常</b>：守卫跑的时候用户完全可能正在
+    /// 管理端里删条目，那份配置已经是另一个版本了。为一个"已经不需要修的条目"
+    /// 中断整批修正没有任何好处。
+    /// </para>
+    /// </remarks>
+    public int ResyncPaths(IReadOnlyList<Core.Services.PathResync> resyncs)
+    {
+        ArgumentNullException.ThrowIfNull(resyncs);
+
+        if (resyncs.Count == 0)
+        {
+            return 0;
+        }
+
+        var config = _configStore.Load();
+
+        var applied = 0;
+        foreach (var resync in resyncs)
+        {
+            // 配置里已经没有这一条了（用户刚删的）—— 跳过，不为它中断整批。
+            var item = config.Items.Find(candidate =>
+                string.Equals(candidate.Id, resync.ItemId, StringComparison.Ordinal));
+
+            if (item is null)
+            {
+                continue;
+            }
+
+            // 🔴 再核一次：判定与写入之间配置可能被改过（用户刚在编辑器里换了路径），
+            // 别拿旧判定覆盖新值 —— 那会把用户刚填的东西冲掉。
+            if (!string.Equals(item.Path?.Trim(), resync.CurrentPath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            item.Path = resync.FreshPath;
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            return 0;
+        }
+
+        _configStore.Save(config);
+        _log.Info($"已把 {applied} 个条目的目标路径同步为系统现值（程序自更新换了可执行文件名）。");
+        return applied;
+    }
+
     /// <summary>生成一个未被占用的自定义周期 id。</summary>
     private static string NewCycleId(AppConfig config)
     {

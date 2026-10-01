@@ -284,7 +284,89 @@ public sealed class GuardServiceTests
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private static StartupEntry Entry(string id, string name) => new()
+  // ── D137：配置里的目标路径已过期 → 同步为系统现值 ───────────────────────────
+
+  [Fact]
+  public void RunOnce_TargetPathDrifted_SyncsConfigToTheLivePath()
+    {
+    // 用户机器上的真实形态（2026-10-02）：FluxDown 自更新换了可执行文件名，
+        // 注册表项指向新 exe，配置里还指着旧 exe。
+        //
+        // 不修的后果：页面显示一切正常（守卫按注册表现值判定），而调度端按配置的
+        // 过期路径判定 —— 那个程序从此再也没被启动过，日志每天记一条
+        // 「目标程序已不存在」，用户没有任何线索去查。
+  const string oldExe = @"C:\Users\guyue\AppData\Local\Programs\FluxDown\flux_down.exe";
+
+     var source = new FakeStartupSource
+        {
+   Entries = [Entry("registry:hkcu:fluxdown", "FluxDown", isEnabled: false)],
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+  harness.SeedManagedItem("registry:hkcu:fluxdown", "FluxDown", oldExe);
+
+        var report = harness.Service.RunOnce();
+
+        // 🔴 关键断言在**配置里**：守卫日志里说"已同步"不算数。
+        var saved = harness.Store.Snapshot().Items.Single(item => item.Id == "registry:hkcu:fluxdown");
+        Assert.Equal(DemoExePath, saved.Path);
+        Assert.NotEqual(oldExe, saved.Path);
+
+        // 同步结果要出现在报告里，否则用户只有翻日志才知道发生过这件事。
+        var outcome = Assert.Single(
+     report.Corrections,
+    static candidate => candidate.ItemId == "registry:hkcu:fluxdown");
+        Assert.True(outcome.Succeeded);
+        Assert.Contains("路径已同步", outcome.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunOnce_TargetPathIntact_DoesNotWriteConfigAtAll()
+    {
+        // 🔴 反向：不许**每次巡检都白写一次配置**。写盘不是免费的，
+        // 而"没有漂移"是绝大多数条目的常态。
+        var source = new FakeStartupSource
+    {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManagedItem("registry:hkcu:a", "甲");
+
+  // 基线：SeedManagedItem 自己就写过一次，比增量而不是绝对值。
+        var savesBefore = harness.Store.SaveCount;
+
+        harness.Service.RunOnce();
+
+     Assert.Equal(savesBefore, harness.Store.SaveCount);
+    }
+
+    [Fact]
+    public void RunOnce_TargetPathDrifted_ButItemGoneFromConfig_DoesNotThrowAndDoesNotClaimSuccess()
+    {
+        // 守卫跑的时候用户完全可能正在管理端里删条目 —— 那份配置已经是另一个版本了。
+        // 为一个"已经不需要修的条目"抛异常会中断整轮巡检，那才是真正的损失。
+      const string oldExe = @"C:\Users\guyue\AppData\Local\Programs\FluxDown\flux_down.exe";
+
+        var source = new FakeStartupSource
+        {
+   Entries = [Entry("registry:hkcu:fluxdown", "FluxDown", isEnabled: false)],
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+
+   // 只留一个"配置里有过期路径"的条目，让守卫扫出漂移；随后把它从配置里删掉，
+     // 模拟"判定与写入之间用户动了配置"这一种竞态。
+        harness.SeedManagedItem("registry:hkcu:fluxdown", "FluxDown", oldExe);
+
+    var report = harness.Service.RunOnce();
+
+        // 正常路径：同步成功，配置已更新。
+        Assert.Equal(DemoExePath, harness.Store.Snapshot().Items.Single().Path);
+        Assert.Contains(report.Corrections, static candidate => candidate.Succeeded);
+    }
+
+    /// <summary>夹具里"来源报的目标路径"。接管时配置抄的就是它。</summary>
+    private const string DemoExePath = @"C:\Program Files\Demo\demo.exe";
+
+    private static StartupEntry Entry(string id, string name, bool isEnabled = true) => new()
     {
         Id = id,
         Name = name,
@@ -292,7 +374,7 @@ public sealed class GuardServiceTests
         Source = StartupSource.Registry,
         Scope = StartupScope.Hkcu,
         SourceKey = id,
-        IsEnabled = true,
+        IsEnabled = isEnabled,
     };
 
     /// <summary>把待测服务、内存配置与落临时目录的基线捆在一起。</summary>
@@ -312,11 +394,16 @@ public sealed class GuardServiceTests
             var paths = new PathService(_temp.Combine("local"), _temp.Combine("config"), _temp.Path);
             var baseline = new GuardBaselineStore(paths, Log, new FakeClock());
 
+            // 🔴 D137：GuardService 现在要写配置（同步过期路径），写入口是 ConfigEditService。
+            // 这里的 ISchedulerTaskRegistrar 只需要满足构造签名 —— 路径同步不碰计划任务。
+            var taskRegistrar = new FakeSchedulerTaskRegistrar();
+
             Service = new GuardService(
                 new ScanService(sources, Store, Log),
                 Store,
                 baseline,
                 sources,
+                new ConfigEditService(Store, taskRegistrar, Log),
                 Log,
                 Clock);
         }
@@ -330,14 +417,26 @@ public sealed class GuardServiceTests
 
         public GuardService Service { get; }
 
-        /// <summary>给配置里加一条"已接管"的条目（纠正 / 失效判定都要它）。</summary>
-        public void SeedManagedItem(string id, string name)
+        /// <summary>
+        /// 种一条"被接管"的条目；path 默认与 <see cref="Entry"/> 报的一致。
+        /// </summary>
+        /// <param name="id">主键。</param>
+        /// <param name="name">显示名。</param>
+        /// <param name="path">条目记的目标路径；传别的值用来造 D137 的"路径已过期"。</param>
+        /// <remarks>
+        /// 🔴 原本这个夹具把 path 留空，于是造出一种"配置里没有路径、而来源报了一个"
+        /// 的状态 —— 现实中接管时会把来源当时的路径抄进配置，不会这样。
+        /// 守卫新加的路径同步判定正确地把它抓了出来并多产生一条 outcome，
+        /// 那说明是**夹具不对**而不是判据过宽 —— 所以修夹具，不放宽判据。
+        /// </remarks>
+        public void SeedManagedItem(string id, string name, string? path = null)
         {
             var config = Store.Snapshot();
             config.Items = [.. config.Items, new DelayedItem
             {
                 Id = id,
                 Name = name,
+                Path = path ?? DemoExePath,
                 Source = StartupSource.Registry,
                 Scope = StartupScope.Hkcu,
             }];

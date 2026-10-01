@@ -281,7 +281,7 @@ public sealed partial class ItemsViewModel : ObservableObject
   {
       var ok = report.Corrections.Count(static outcome => outcome.Succeeded);
       _log.Info(
-         $"加载自启动项数据时顺带巡检：纠正 {ok}/{report.Corrections.Count} 项被写回启用的接管项。");
+         $"加载自启动项数据时顺带巡检：纠正 {ok}/{report.Corrections.Count} 项（重新禁用 / 目标路径同步）。");
 
       // 🔴 **必须把缓存标脏**（审计 P2-3）：守卫纠正的是**系统状态**
       //（StartupApproved 软禁用标记），而这一页显示的"已接管 / 已启用"是从
@@ -290,7 +290,7 @@ public sealed partial class ItemsViewModel : ObservableObject
       InvalidateAfterCorrections();
 
         // 只有真的动了系统状态才上副标题 —— 每次进页面都加一句"巡检正常"是噪声。
-        Subtitle += $" · 已纠正 {ok} 项被写回启用的接管项";
+        Subtitle += $" · 已纠正 {ok} 项（重新禁用 / 目标路径同步）";
 
         return true;
         }

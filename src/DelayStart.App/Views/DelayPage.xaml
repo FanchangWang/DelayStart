@@ -83,6 +83,7 @@
                 Margin="0,8,0,0"
                 HorizontalAlignment="Left"
                 Click="OnRunSchedulerClicked"
+      IsEnabled="{x:Bind ViewModel.IsRunSchedulerAvailable, Mode=OneWay}"
                 Style="{StaticResource RowButtonStyle}">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <ProgressRing
@@ -471,6 +472,7 @@
                                                         <Button
                                                             Click="OnLaunchOneClicked"
                                                             Content="启动"
+IsEnabled="{x:Bind IsLaunching}"
                                                             Style="{StaticResource RowButtonStyle}"
                                                             ToolTipService.ToolTip="现在启动这一项（按它自己的身份设置走，与登录时同一套降权链）" />
 

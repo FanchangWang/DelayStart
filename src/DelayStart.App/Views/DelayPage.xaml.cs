@@ -171,6 +171,9 @@ public sealed partial class DelayPage : Page, IReloadablePage
     {
         if (sender is Button { DataContext: DelayRow row })
         {
+            // 🔴 刻意**不 await**：命令内部已把降权链放到后台线程（Task.Run），
+            // 这里等它只会把"按钮在飞行中置灰"这件事推迟到启动完成之后 ——
+            // 而那正是最需要置灰的时候（降权链最长要 30 秒）。
             ViewModel.LaunchOneCommand.Execute(row);
         }
     }

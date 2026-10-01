@@ -681,6 +681,45 @@ public sealed partial class DelayViewModel : ObservableObject
     [ObservableProperty]
     public partial bool IsSchedulerRunning { get; set; } = SchedulerProbe.IsSchedulerRunning();
 
+    /// <summary>「运行调度」按钮此刻该不该可点（审计 P2-1）。</summary>
+    /// <remarks>
+    /// 🔴 判据是"调度端已在跑"而不是"空闲"：第二个实例会**秒退**，
+    /// 点下去用户只会看到"没反应" —— 而那正是最容易被反复点击的时刻。
+    /// <para>
+    /// 之所以之前没生效：属性写了、注释也写了，但 XAML 上没有 <c>IsEnabled</c> 绑定，
+    /// 于是那段注释描述的是一个不存在的行为。
+    /// </para>
+    /// </remarks>
+    public bool IsRunSchedulerAvailable => !IsSchedulerRunning && !IsSchedulerBusy;
+
+    /// <summary><see cref="IsSchedulerRunning"/> 变化时连带刷新按钮可用态。</summary>
+    /// <param name="value">新值。</param>
+    partial void OnIsSchedulerRunningChanged(bool value)
+        => OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+
+    /// <summary><see cref="IsSchedulerBusy"/> 变化时连带刷新按钮可用态。</summary>
+    /// <param name="value">新值。</param>
+    partial void OnIsSchedulerBusyChanged(bool value)
+  => OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+
+    /// <summary>
+    /// 「运行调度」：确认 → 单实例预检 → 启动调度端 → 轮询等它接管（F11.3）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>确认框里必须有摘要</b>：这个按钮会真的启动程序，而"启动了哪些"决定用户要不要
+    /// 先把某些程序关掉（带锁文件的应用最典型）。只写"确定要运行吗"等于让他在不知情的情况下
+    /// 替自己做决定 —— 那违反三原则里的"不替用户做决定"。
+    /// <para>
+    /// 🔴 <b>轮询而不是假设成功</b>：<c>Process.Start</c> 返回只说明进程创建成功，不代表它
+    /// 正确接管了。实测里"点了没反应、托盘图标没出现"是真实故障，而用户看到的就是"点了没反应"。
+    /// 轮询单实例互斥体是唯一不依赖状态文件的判据 —— F6 删掉了 current-run.json 之后就
+    /// 更没有状态文件可看了，而互斥体本来就覆盖了"正在运行"这个问题的全部含义。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>30 秒上限</b>：不等就是"假装成功"；不设上限就是"按钮永远转圈"。
+    /// 两者的失败症状都比一个明确的超时提示难查。
+    /// </para>
+    /// </remarks>
     /// <summary>
     /// 单条启动：按条目配置走**同一条**降权链启动它，结果进应用内 toast（F11.1）。
     /// </summary>
@@ -694,40 +733,55 @@ public sealed partial class DelayViewModel : ObservableObject
     /// 令牌复制 / CreateProcess），每一条都有自己的处置办法。只报"启动失败"等于让用户猜。
     /// </para>
     /// <para>
+    /// 🔴 <b>必须 async</b>（审计 P2-2）：降权链里有两段同线程长等待 ——
+    /// <c>WaitForShellWindow</c> 最多 10 秒、<c>PollBrokerResult</c> 最多 20 秒。
+    /// 调度端能忍（后台进程，且它的 1.5 秒复查窗口本来就是同步的）；
+    /// WinUI 里就是**窗口冻结最长 30 秒且无任何反馈** —— 用户只会以为程序卡死了，
+    /// 于是反复点「启动」，反而起更多进程。
+    /// </para>
+    /// <para>
     /// 🔴 <b>不判"程序是否真的起来了"</b>：判定要等 1.5 秒复查窗口，而那属于调度端的职责。
     /// 这里只报"已发起"，不假装成功。
     /// </para>
     /// </remarks>
     [RelayCommand]
-    private void LaunchOne(DelayRow row)
+    private async Task LaunchOneAsync(DelayRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
 
+     // 在途标记：飞行中把该行的「启动」按钮禁掉。不做的话用户会以为没点上而连点，
+        // 而每次点击都会真的再走一遍降权链 —— 那是"重复启动多个实例"最直接的来源。
+        row.IsLaunching = true;
+
         try
         {
-            var outcome = _launcher.Launch(row.Item);
+            var outcome = await Task.Run(() => _launcher.Launch(row.Item)).ConfigureAwait(true);
 
             if (outcome.Created)
             {
                 _toast.ShowSuccess(
-                    $"已启动：{row.Name}",
-                    outcome.DeElevationFellBack
-                        ? "降权失败，已按调度端同样的方式交给系统处理。"
-                        : null);
+  $"已启动：{row.Name}",
+         outcome.DeElevationFellBack
+   ? "降权失败，已按调度端同样的方式交给系统处理。"
+             : null);
 
-                _log.Info($"用户在延时启动页手动启动了『{row.Name}』。");
+   _log.Info($"用户在延时启动页手动启动了『{row.Name}』。");
                 return;
             }
 
-            var reason = outcome.FailureMessage ?? "未知原因";
+   var reason = outcome.FailureMessage ?? "未知原因";
             _log.Warn($"手动启动『{row.Name}』失败：{reason}");
-            _toast.ShowError($"启动失败：{row.Name}", reason);
+ _toast.ShowError($"启动失败：{row.Name}", reason);
         }
         catch (Exception ex)
         {
             // 🔴 绝不让异常逃到 UI：管理端会静默消失，而用户只看到"点了没反应"。
-            _log.Error(ex, $"手动启动『{row.Name}』时异常");
-            _toast.ShowError($"启动失败：{row.Name}", ex.Message);
+       _log.Error(ex, $"手动启动『{row.Name}』时异常");
+     _toast.ShowError($"启动失败：{row.Name}", ex.Message);
+        }
+        finally
+     {
+            row.IsLaunching = false;
         }
     }
 

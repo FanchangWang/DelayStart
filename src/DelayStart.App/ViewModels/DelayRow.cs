@@ -254,6 +254,25 @@ public sealed class DelayRow : ObservableObject
     /// <summary>失效徽标的悬停说明（复用 <see cref="StaleReason"/>，它已写清"还会不会启动"）。</summary>
     public string StaleToolTip => StaleReason;
 
+    /// <summary>这一行是否正在被手动启动（F11.1 / 审计 P2-2）。</summary>
+    /// <remarks>
+    /// 🔴 放在行上而不是 ViewModel 的字典里：<c>x:Bind</c> 的 <c>DataContext</c> 就是
+    /// <see cref="DelayRow"/> 本身，<c>x:Bind</c> 绑不了方法、也没有转换器可挂 ——
+    /// 而"这行的按钮该不该禁用"恰恰是这一行自己的状态。
+    /// <para>
+    /// 🔴 没有它用户会以为没点上而连点，而每次点击都会真的再走一遍降权链 ——
+    /// 那是"重复启动多个实例"最直接的来源。降权链最长要等 30 秒（外壳 10s + 中转器 20s），
+    /// 这段时间足够点四五次。
+    /// </para>
+    /// </remarks>
+    public bool IsLaunching
+        {
+  get => _isLaunching;
+   set => SetProperty(ref _isLaunching, value);
+        }
+
+    private bool _isLaunching;
+
     /// <summary>
     /// 能否转成手动条目（D81）。
     /// </summary>

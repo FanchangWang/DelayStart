@@ -176,7 +176,13 @@ public sealed partial class ItemsViewModel : ObservableObject
             ApplyIfChanged(snapshot);
 
             // ── 第三段：拿着这一份扫描结果跑一次守卫 ────────────────────
-            RunGuardAlongsideLoad(snapshot);
+            if (RunGuardAlongsideLoad(snapshot))
+            {
+     // 守卫动过系统状态 ⇒ 缓存已标脏，必须重扫一次并重画，
+                // 否则列表会一直停在"已启用"（审计 P2-3）。
+    var after = await LoadSnapshotAsync(CancellationToken.None).ConfigureAwait(true);
+      ApplyIfChanged(after);
+            }
         }
         catch (Exception ex)
         {
@@ -235,7 +241,7 @@ public sealed partial class ItemsViewModel : ObservableObject
     /// 结果只进日志；确实纠正了东西时补一行副标题，让他知道发生了什么。
     /// </para>
     /// </remarks>
-    private void RunGuardAlongsideLoad(ScanSnapshot snapshot)
+    private bool RunGuardAlongsideLoad(ScanSnapshot snapshot)
     {
         try
         {
@@ -254,13 +260,13 @@ public sealed partial class ItemsViewModel : ObservableObject
             if (report.AlreadyRunning)
             {
                 _log.Info("加载自启动项数据时顺带巡检：已有一轮守卫在进行，本次跳过。");
-                return;
+                return false;
             }
 
             if (report.GuardDisabled)
             {
                 _log.Info("加载自启动项数据时顺带巡检：守卫处于关闭档位，未执行巡检。");
-                return;
+                return false;
             }
 
             if (report.ConfigUnavailable)
@@ -268,22 +274,56 @@ public sealed partial class ItemsViewModel : ObservableObject
                 // 🔴 入口接住整体失败：GuardService 自己不抛，但 ConfigUnavailable 必须有人看得见 ——
                 // 静默跳过就变成"守卫今天什么都没做"而没人知道。
                 _log.Warn("加载自启动项数据时顺带巡检：配置不可用，本轮未纠正任何项目。");
-                return;
+                return false;
             }
 
             if (report.Corrections.Count > 0)
-            {
-                var ok = report.Corrections.Count(static outcome => outcome.Succeeded);
-                _log.Info(
-                    $"加载自启动项数据时顺带巡检：纠正 {ok}/{report.Corrections.Count} 项被写回启用的接管项。");
+  {
+      var ok = report.Corrections.Count(static outcome => outcome.Succeeded);
+      _log.Info(
+         $"加载自启动项数据时顺带巡检：纠正 {ok}/{report.Corrections.Count} 项被写回启用的接管项。");
 
-                // 只有真的动了系统状态才上副标题 —— 每次进页面都加一句"巡检正常"是噪声。
-                Subtitle += $" · 已纠正 {ok} 项被写回启用的接管项";
-            }
+      // 🔴 **必须把缓存标脏**（审计 P2-3）：守卫纠正的是**系统状态**
+      //（StartupApproved 软禁用标记），而这一页显示的"已接管 / 已启用"是从
+      // **扫描快照**派生的。不标脏的话副标题说「已纠正 N 项」而行里还写着「已启用」——
+         // 自相矛盾，而且要等到下一次真的重扫才会对（缓存是进程级的，可能整个会话都不重扫）。
+      InvalidateAfterCorrections();
+
+        // 只有真的动了系统状态才上副标题 —— 每次进页面都加一句"巡检正常"是噪声。
+        Subtitle += $" · 已纠正 {ok} 项被写回启用的接管项";
+
+        return true;
         }
+
+     return false;
+  }
         catch (Exception ex)
+  {
+    _log.Error(ex, "加载自启动项数据时顺带巡检失败（已忽略，不影响本页显示）");
+   return false;
+        }
+    }
+
+    /// <summary>守卫纠正系统状态之后，把受影响的来源在扫描缓存里标脏（审计 P2-3）。</summary>
+    /// <remarks>
+    /// 🔴 <b>为什么标当前页的来源就够</b>：纠正只可能落在"被接管的项"上，而被接管的项
+  /// 要么在当前来源里、要么不在这页的显示范围内 —— 不在这页的那些，用户看不到，
+    /// 也就不需要为它们付重扫代价。
+ /// <para>
+    /// 本页无来源筛选（全量视图）时逐个标脏全部来源：那种情况下所有行都在屏幕上。
+    /// </para>
+    /// </remarks>
+    private void InvalidateAfterCorrections()
+    {
+        if (SourceFilter is { } shown)
         {
-            _log.Error(ex, "加载自启动项数据时顺带巡检失败（已忽略，不影响本页显示）");
+   _cache.Invalidate(shown);
+            return;
+        }
+
+        foreach (var kind in _sources.Select(static source => source.Kind).Distinct())
+        {
+            _cache.Invalidate(kind);
         }
     }
 
@@ -325,7 +365,15 @@ public sealed partial class ItemsViewModel : ObservableObject
 
             // 🔴 「刷新本页」只重扫了一个来源，所以守卫也只能处理刷到的那些（F11.3）——
             // 快照的 CoveredScopes 就是这句话的数据形式。
-            RunGuardAlongsideLoad(snapshot);
+            
+if (RunGuardAlongsideLoad(snapshot))
+            {
+                // 同上：纠正动了系统状态 ⇒ 重扫一次（审计 P2-3）。
+                var after = SourceFilter is { } kind2
+                    ? await _cache.RefreshSourceAsync(kind2, cancellationToken).ConfigureAwait(true)
+                    : await _cache.RefreshAsync(cancellationToken).ConfigureAwait(true);
+                ApplyIfChanged(after);
+            }
         }
         catch (OperationCanceledException)
         {

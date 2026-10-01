@@ -198,6 +198,24 @@ public sealed class CycleInfoProvider
             out degraded);
 
         reason = ReasonOf(resolved.Kind, date, degraded);
+
+        // 🔴 缺该年法定数据而走星期近似时，**按"会启动"处理**（审计 P2-4）。
+   //
+        // ScheduleRulePolicy 在这种情况下退回星期规则，于是 12-31 看 1-1 这样一个
+  // `legal-holiday` 项会真的报「明天不启动」，旁边还跟一句
+        // "缺 2027 年法定数据，暂按周六日判定" —— 而它自己的文档就写着不该这样。
+        //
+    // 后果是具体的：1 月 1 日按星期规则多半落在"法定假日"那一侧，于是
+        // **除夕前一天的每个节日档条目都会报一条并不存在的"明天不启动"**。
+        // 用户会去反复检查一个没坏的东西。
+        //
+        // 🔴 这个判断只影响**展示**（周期列与 tooltip），不影响调度 ——
+        // 调度端自己判定，不读这个方法；那才是真正决定启不启动的地方。
+    if (degraded)
+        {
+            return false;
+    }
+
         return !matched;
     }
 

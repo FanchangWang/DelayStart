@@ -7,6 +7,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace DelayStart.App;
 
@@ -106,33 +107,67 @@ public sealed partial class MainWindow : Window
             WinRT.Interop.WindowNative.GetWindowHandle(this));
     }
 
-    /// <summary>显示右下角应用内通知，3.5 秒后自动消失（连发时重置计时）。</summary>
-    /// <param name="message">要展示的文本。</param>
+    /// <summary>显示右下角应用内通知（连发时重置计时）。</summary>
+    /// <param name="request">通知内容。</param>
     /// <remarks>
     /// 事件来自 <see cref="ToastService"/> 的广播。⚠️ 广播线程不保证是 UI 线程
     /// （ViewModel 侧都是 UI 线程调用，但契约上不承诺），经 DispatcherQueue 切回 UI 线程。
+    /// <para>
+    /// 🔴 计时**只在 <see cref="ToastRequest.AutoDismiss"/> 为真时启动**：失败通知必须留着，
+    /// 让用户读完原因再关。上一条若留了计时器，这里先停掉 —— 否则"成功 → 失败"连发时，
+    /// 计时器会把失败那条一起收走，而那条正是用户唯一能照着做的线索。
+    /// </para>
     /// </remarks>
-    private void ShowToast(string message)
+    private void ShowToast(ToastRequest request)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            ToastText.Text = message;
+            ToastTitle.Text = request.Title;
+            ToastText.Text = request.Detail ?? string.Empty;
+            ToastText.Visibility = request.HasDetail ? Visibility.Visible : Visibility.Collapsed;
+
+            // 失败用警示色 + 叉号图标，成功用成功色 + 对勾 —— 与 D98 一致：
+            // 差别靠**颜色**表达，不靠给文字塞符号（那些符号不在同一套度量里）。
+            ToastIcon.Foreground = request.IsError
+                ? (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"]
+                : (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+            ToastIcon.Glyph = request.IsError ? "\uE783" : "\uE73E";
+
             ToastPanel.Visibility = Visibility.Visible;
+
+            // 整块要能点关闭按钮，所以打开命中测试；不可见时始终不挡内容。
+            ToastPanel.IsHitTestVisible = true;
 
             _toastTimer ??= DispatcherQueue.CreateTimer();
             _toastTimer.Stop();
-            _toastTimer.Interval = TimeSpan.FromMilliseconds(3500);
-            _toastTimer.IsRepeating = false;
-            _toastTimer.Tick += OnToastTimerTick;
-            _toastTimer.Start();
+            _toastTimer.Tick -= OnToastTimerTick;
+
+            if (request.AutoDismiss)
+            {
+                _toastTimer.Interval = TimeSpan.FromSeconds(ToastService.SuccessSeconds);
+                _toastTimer.IsRepeating = false;
+                _toastTimer.Tick += OnToastTimerTick;
+                _toastTimer.Start();
+            }
         });
     }
 
+    /// <summary>计时到 → 收起面板。</summary>
     private void OnToastTimerTick(DispatcherQueueTimer sender, object args)
     {
         sender.Tick -= OnToastTimerTick;
         sender.Stop();
+        HideToast();
+    }
+
+    /// <summary>点关闭按钮 → 收起面板（失败通知只有这一条出路，所以它必须管用）。</summary>
+    private void OnToastCloseClicked(object sender, RoutedEventArgs e) => HideToast();
+
+    /// <summary>收起面板并恢复不命中测试。</summary>
+    private void HideToast()
+    {
         ToastPanel.Visibility = Visibility.Collapsed;
+        ToastPanel.IsHitTestVisible = false;
     }
 
     /// <summary>在指定 Tag 的顶层菜单项之后插入分隔线。</summary>

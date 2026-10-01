@@ -40,6 +40,7 @@ public sealed partial class ItemsViewModel : ObservableObject
     private readonly ConfigEditService _editor;
     private readonly IReadOnlyList<IStartupSource> _sources;
     private readonly IAppConfigStore _configStore;
+    private readonly GuardService _guard;
     private readonly ILogSink _log;
 
     /// <summary>当前页面对应的来源；<see langword="null"/> 表示全部来源（保留给潜在的全量入口）。</summary>
@@ -82,6 +83,7 @@ public sealed partial class ItemsViewModel : ObservableObject
     /// <param name="editor">条目级编辑服务（改已接管项的延时 / 参数 / 工作目录）。</param>
     /// <param name="sources">全部来源实例（纯禁用 / 启用写 StartupApproved 用）。</param>
     /// <param name="configStore">配置读取端（预设值、上限、接管判定）。</param>
+    /// <param name="guard">守卫巡检服务（v0.6.1：加载本页数据时同步跑一次）。</param>
     /// <param name="log">日志接收端。</param>
     public ItemsViewModel(
         ScanCacheService cache,
@@ -89,6 +91,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         ConfigEditService editor,
         IReadOnlyList<IStartupSource> sources,
         IAppConfigStore configStore,
+        GuardService guard,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(cache);
@@ -96,6 +99,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(editor);
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(configStore);
+        ArgumentNullException.ThrowIfNull(guard);
         ArgumentNullException.ThrowIfNull(log);
 
         _cache = cache;
@@ -103,6 +107,7 @@ public sealed partial class ItemsViewModel : ObservableObject
         _editor = editor;
         _sources = [.. sources];
         _configStore = configStore;
+        _guard = guard;
         _log = log;
 
         Subtitle = "正在读取…";
@@ -169,6 +174,9 @@ public sealed partial class ItemsViewModel : ObservableObject
             // ── 第二段：后台重扫（必要时），指纹变了才应用 ──────────────────
             var snapshot = await LoadSnapshotAsync(CancellationToken.None).ConfigureAwait(true);
             ApplyIfChanged(snapshot);
+
+            // ── 第三段：拿着这一份扫描结果跑一次守卫 ────────────────────
+            RunGuardAlongsideLoad(snapshot);
         }
         catch (Exception ex)
         {
@@ -203,6 +211,80 @@ public sealed partial class ItemsViewModel : ObservableObject
         }
 
         Apply(snapshot);
+    }
+
+    /// <summary>拿这一份扫描结果跑一次守卫巡检（v0.6.1 / F11.2）。</summary>
+    /// <param name="snapshot">本轮刚拿到的快照。</param>
+    /// <remarks>
+    /// 🔴 <b>为什么是"加载自启动项数据时"而不是"管理端启动时"</b>：
+    /// 用户打开这一页就是想确认"系统里到底有什么、哪些被我接管了"。守卫纠正的正是
+    /// **同一批对象**（被接管项有没有被写回启用），而巡检要的就是刚扫出来的这份数据 ——
+    /// 两者一起做只多一次策略判定，不多一次扫描，也不必再派生一个守卫进程。
+    /// <para>
+    /// 🔴 <b>不派生 <c>DelayStart.Guard.exe</c></b>：派生就意味着多一个进程、多一次提权握手，
+    /// 而且它会**再扫一遍**，于是用户看到的列表与守卫看到的可能不是同一时刻的状态 ——
+    /// 表现出来就是"刚纠正完，列表里还写着已启用"。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>同步跑，且吞掉所有异常</b>：<c>IsBusy</c> 此时为真，界面本就显示"正在读"，
+    /// 多花几百毫秒是可接受的；而异常一旦逃出去就会变成"自启动项页打不开"。
+    /// 巡检失败**不影响**这一页的数据显示 —— 列表是读操作，守卫是写操作，两件事必须解耦。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>不派生系统通知</b>：管理端就在用户眼前，弹通知既多余又会打断他。
+    /// 结果只进日志；确实纠正了东西时补一行副标题，让他知道发生了什么。
+    /// </para>
+    /// </remarks>
+    private void RunGuardAlongsideLoad(ScanSnapshot snapshot)
+    {
+        try
+        {
+            // 把快照还原成 Management 层的形状好让守卫复用它；守卫不认识 App 层的 Pixels，
+            // 它要的只是条目 + 失败 + 配置可用性。UWP 兜底解析后的名字一并带过去 ——
+            // 那才是用户看到的名字，用它判定"哪一项被写回了"才对得上界面。
+            var scan = new ScanResult
+            {
+                Entries = snapshot.Entries,
+                Failures = snapshot.Failures,
+                ConfigUnavailable = snapshot.ConfigUnavailable,
+            };
+
+            var report = _guard.RunOnce(scan, snapshot.CoveredScopes);
+
+            if (report.AlreadyRunning)
+            {
+                _log.Info("加载自启动项数据时顺带巡检：已有一轮守卫在进行，本次跳过。");
+                return;
+            }
+
+            if (report.GuardDisabled)
+            {
+                _log.Info("加载自启动项数据时顺带巡检：守卫处于关闭档位，未执行巡检。");
+                return;
+            }
+
+            if (report.ConfigUnavailable)
+            {
+                // 🔴 入口接住整体失败：GuardService 自己不抛，但 ConfigUnavailable 必须有人看得见 ——
+                // 静默跳过就变成"守卫今天什么都没做"而没人知道。
+                _log.Warn("加载自启动项数据时顺带巡检：配置不可用，本轮未纠正任何项目。");
+                return;
+            }
+
+            if (report.Corrections.Count > 0)
+            {
+                var ok = report.Corrections.Count(static outcome => outcome.Succeeded);
+                _log.Info(
+                    $"加载自启动项数据时顺带巡检：纠正 {ok}/{report.Corrections.Count} 项被写回启用的接管项。");
+
+                // 只有真的动了系统状态才上副标题 —— 每次进页面都加一句"巡检正常"是噪声。
+                Subtitle += $" · 已纠正 {ok} 项被写回启用的接管项";
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "加载自启动项数据时顺带巡检失败（已忽略，不影响本页显示）");
+        }
     }
 
     /// <summary>
@@ -240,6 +322,10 @@ public sealed partial class ItemsViewModel : ObservableObject
                 ? await _cache.RefreshSourceAsync(kind, cancellationToken).ConfigureAwait(true)
                 : await _cache.RefreshAsync(cancellationToken).ConfigureAwait(true);
             ApplyIfChanged(snapshot);
+
+            // 🔴 「刷新本页」只重扫了一个来源，所以守卫也只能处理刷到的那些（F11.3）——
+            // 快照的 CoveredScopes 就是这句话的数据形式。
+            RunGuardAlongsideLoad(snapshot);
         }
         catch (OperationCanceledException)
         {

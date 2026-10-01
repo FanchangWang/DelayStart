@@ -261,7 +261,19 @@ public sealed class ScanCacheService : IDisposable
         entries.Sort(CompareEntries);
         var resolved = await ResolveUwpNamesAsync(entries, pixels, cancellationToken).ConfigureAwait(false);
         ((List<StartupEntry>)resolved).Sort(CompareEntries);
-        return new ScanSnapshot(resolved, pixels, failures, configLoad.Available ? existing.ConfigUnavailable : true);
+
+        // 🔴 明确记下"只覆盖了这些"：其余来源的条目是从缓存复制来的旧值。
+        // 消费者（守卫）据此只处理刷到的那些，而不是拿整份快照当最新事实（F11.3）。
+        var covered = new HashSet<ScanScope>();
+        foreach (var source in _sources.Where(source => source.Kind == kind))
+        {
+            covered.Add(new ScanScope(source.Kind, source.Scope));
+        }
+
+        return new ScanSnapshot(resolved, pixels, failures, configLoad.Available ? existing.ConfigUnavailable : true)
+        {
+            CoveredScopes = covered,
+        };
     }
 
     /// <summary>
@@ -399,6 +411,20 @@ public sealed record ScanSnapshot(
     IReadOnlyList<ScanFailure> Failures,
     bool ConfigUnavailable = false)
 {
+    /// <summary>
+    /// 本快照里**真的重新扫过**的来源作用域；<see langword="null"/> 表示"全部都扫了"（全量扫描）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 局部重扫（<c>RescanSourceAsync</c>）产出的快照里，其余来源的条目是<b>缓存里的旧值</b> ——
+    /// 这一点以前只体现在代码结构里（哪些行是刚扫的、哪些是复制来的），任何拿到快照的消费者
+    /// 都无从分辨。v0.6.1 守卫要接进来（F11.3："异步刷新只处理刷到的"）就需要这个信息，
+    /// 所以把它变成数据的一部分而不是让人从调用路径去猜。
+    /// <para>
+    /// 用 <see langword="null"/> 表示"全部"而不是空集合：全量扫描是常态，
+    /// 而"空集合"读起来像"一个来源都没扫"，那不是任何一种真实状态。
+    /// </para>
+    /// </remarks>
+    public IReadOnlySet<ScanScope>? CoveredScopes { get; init; }
     /// <summary>
     /// 内容指纹：<b>界面上能看到的一切</b>的摘要（A2.3）。
     /// </summary>

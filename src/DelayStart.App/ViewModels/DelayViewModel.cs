@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using DelayStart.Core.Abstractions;
+using DelayStart.Core.Launch;
 using DelayStart.Core.Models;
 using DelayStart.App.Services;
 using DelayStart.Core.Services;
@@ -39,6 +41,9 @@ public sealed partial class DelayViewModel : ObservableObject
     private readonly IconProvider _icons;
     private readonly ScanCacheService _scanCache;
     private readonly PathService _paths;
+    private readonly SchedulerProbe _scheduler;
+    private readonly DeElevatedProcessLauncher _launcher;
+    private readonly ToastService _toast;
     private readonly ILogSink _log;
 
     /// <summary>最近一次刷新用到的周期信息（今天 + 法定日历 + 周期表）。行对象在构造时读它。</summary>
@@ -75,6 +80,9 @@ public sealed partial class DelayViewModel : ObservableObject
     /// <param name="scanCache">扫描缓存（移出后标记对应来源过期，供来源页重扫，D41）。</param>
     /// <param name="paths">路径服务（法定日历的落点）。</param>
     /// <param name="log">日志接收端。</param>
+    /// <param name="scheduler">调度端手动启动 + 单实例探测（F11.3）。</param>
+    /// <param name="launcher">降权启动链（F11.1：每行「启动」按钮）。</param>
+    /// <param name="toast">应用内右下角通知（F11.1/F11.3 的结果出口）。</param>
     public DelayViewModel(
         IAppConfigStore configStore,
         ScanService scanner,
@@ -83,6 +91,9 @@ public sealed partial class DelayViewModel : ObservableObject
         IconProvider icons,
         ScanCacheService scanCache,
         PathService paths,
+        SchedulerProbe scheduler,
+        DeElevatedProcessLauncher launcher,
+        ToastService toast,
         ILogSink log)
     {
         ArgumentNullException.ThrowIfNull(configStore);
@@ -92,6 +103,9 @@ public sealed partial class DelayViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(icons);
         ArgumentNullException.ThrowIfNull(scanCache);
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(scheduler);
+        ArgumentNullException.ThrowIfNull(launcher);
+        ArgumentNullException.ThrowIfNull(toast);
         ArgumentNullException.ThrowIfNull(log);
 
         _configStore = configStore;
@@ -101,6 +115,9 @@ public sealed partial class DelayViewModel : ObservableObject
         _icons = icons;
         _scanCache = scanCache;
         _paths = paths;
+        _scheduler = scheduler;
+        _launcher = launcher;
+        _toast = toast;
         _log = log;
 
         DelayPresets = new Settings().DelayPresets;
@@ -645,4 +662,186 @@ public sealed partial class DelayViewModel : ObservableObject
         DelayPresets = settings.DelayPresets;
         DefaultPreset = settings.DefaultPreset;
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // F11.1 / F11.3：单条启动 + 运行调度
+    // ══════════════════════════════════════════════════════════════════
+
+    /// <summary>调度端抢到单实例互斥体的最长等待秒数（F11.3）。</summary>
+    private const int SchedulerTakeoverTimeoutSeconds = 30;
+
+    /// <summary>轮询间隔。</summary>
+    private static readonly TimeSpan SchedulerPollInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>「运行调度」是否正在进行中（单实例预检 → 启动 → 等待接管）。</summary>
+    [ObservableProperty]
+    public partial bool IsSchedulerBusy { get; set; }
+
+    /// <summary>调度端当前是否已在运行（按钮的禁用依据，构造时探一次）。</summary>
+    [ObservableProperty]
+    public partial bool IsSchedulerRunning { get; set; } = SchedulerProbe.IsSchedulerRunning();
+
+    /// <summary>
+    /// 单条启动：按条目配置走**同一条**降权链启动它，结果进应用内 toast（F11.1）。
+    /// </summary>
+    /// <param name="row">要启动的那一行。</param>
+    /// <remarks>
+    /// 🔴 <b>失效条目也能点</b>：条目"失效"说的是系统锚点没了或目标程序不在，
+    /// 而"程序还在、只是没有接管关系"的情况（源丢失）恰恰是用户最想手动试一下的时候 ——
+    /// 把它一并禁用掉，用户就只能回日志里去猜它还能不能跑。
+    /// <para>
+    /// 🔴 <b>失败必带原因</b>：启动链里有五六个可能失败的点（UWP / 快捷方式 / uiAccess /
+    /// 令牌复制 / CreateProcess），每一条都有自己的处置办法。只报"启动失败"等于让用户猜。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>不判"程序是否真的起来了"</b>：判定要等 1.5 秒复查窗口，而那属于调度端的职责。
+    /// 这里只报"已发起"，不假装成功。
+    /// </para>
+    /// </remarks>
+    [RelayCommand]
+    private void LaunchOne(DelayRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        try
+        {
+            var outcome = _launcher.Launch(row.Item);
+
+            if (outcome.Created)
+            {
+                _toast.ShowSuccess(
+                    $"已启动：{row.Name}",
+                    outcome.DeElevationFellBack
+                        ? "降权失败，已按调度端同样的方式交给系统处理。"
+                        : null);
+
+                _log.Info($"用户在延时启动页手动启动了『{row.Name}』。");
+                return;
+            }
+
+            var reason = outcome.FailureMessage ?? "未知原因";
+            _log.Warn($"手动启动『{row.Name}』失败：{reason}");
+            _toast.ShowError($"启动失败：{row.Name}", reason);
+        }
+        catch (Exception ex)
+        {
+            // 🔴 绝不让异常逃到 UI：管理端会静默消失，而用户只看到"点了没反应"。
+            _log.Error(ex, $"手动启动『{row.Name}』时异常");
+            _toast.ShowError($"启动失败：{row.Name}", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 「运行调度」：确认 → 单实例预检 → 启动调度端 → 轮询等它接管（F11.3）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>确认框里必须有摘要</b>：这个按钮会真的启动程序，而"启动了哪些"决定用户要不要
+    /// 先把某些程序关掉（带锁文件的应用最典型）。只写"确定要运行吗"等于让他在不知情的情况下
+    /// 替自己做决定 —— 那违反三原则里的"不替用户做决定"。
+    /// <para>
+    /// 🔴 <b>轮询而不是假设成功</b>：<c>Process.Start</c> 返回只说明进程创建成功，不代表它
+    /// 正确接管了。实测里"点了没反应、托盘图标没出现"是真实故障，而用户看到的就是"点了没反应"。
+    /// 轮询单实例互斥体是唯一不依赖状态文件的判据 —— F6 删掉了 current-run.json 之后就
+    /// 更没有状态文件可看了，而互斥体本来就覆盖了"正在运行"这个问题的全部含义。
+    /// </para>
+    /// <para>
+    /// 🔴 <b>30 秒上限</b>：不等就是"假装成功"；不设上限就是"按钮永远转圈"。
+    /// 两者的失败症状都比一个明确的超时提示难查。
+    /// </para>
+    /// </remarks>
+    [RelayCommand]
+    private async Task RunSchedulerAsync()
+    {
+        if (IsSchedulerBusy)
+        {
+            return;
+        }
+
+        // 单实例预检：已经在跑就别再起一个 —— 第二个会秒退，用户看到的是"点了没反应"。
+        if (SchedulerProbe.IsSchedulerRunning())
+        {
+            _toast.ShowSuccess("调度已在运行中", "本轮已经在执行，无需重复启动。");
+            IsSchedulerRunning = true;
+            return;
+        }
+
+        var confirmed = await ConfirmLaunchAsync(_scheduler.DescribeLaunch()).ConfigureAwait(true);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        IsSchedulerBusy = true;
+        try
+        {
+            if (!_scheduler.Launch())
+            {
+                _log.Error("启动调度端失败：可执行文件不存在（安装不完整或文件被删）。");
+                _toast.ShowError("运行调度失败", $"找不到调度端程序：{_paths.SchedulerExecutablePath}");
+                return;
+            }
+
+            if (await WaitForSchedulerAsync().ConfigureAwait(true))
+            {
+                IsSchedulerRunning = true;
+                _toast.ShowSuccess("调度已启动", "本次启动计划正在执行。");
+                return;
+            }
+
+            IsSchedulerRunning = false;
+            _log.Error($"启动调度端后 {SchedulerTakeoverTimeoutSeconds} 秒内未抢到单实例互斥体。");
+            _toast.ShowError(
+                "调度未接管",
+                $"已拉起进程，但 {SchedulerTakeoverTimeoutSeconds} 秒内没有接管。"
+                + "请在「查看调度日志」里看它为什么退出。");
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "「运行调度」异常");
+            _toast.ShowError("运行调度失败", ex.Message);
+        }
+        finally
+        {
+            IsSchedulerBusy = false;
+        }
+    }
+
+    /// <summary>轮询单实例互斥体，等调度端真正接管。</summary>
+    /// <returns>在超时前接管为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 逐段 <c>Task.Delay</c> 而不是一把 <c>Thread.Sleep</c>：等的那 30 秒里 UI 必须还能动，
+    /// 用户随时可以切走或关掉窗口。
+    /// </remarks>
+    private static async Task<bool> WaitForSchedulerAsync()
+    {
+        var deadline = Stopwatch.StartNew();
+        var timeout = TimeSpan.FromSeconds(SchedulerTakeoverTimeoutSeconds);
+
+        while (deadline.Elapsed < timeout)
+        {
+            if (SchedulerProbe.IsSchedulerRunning())
+            {
+                return true;
+            }
+
+            await Task.Delay(SchedulerPollInterval).ConfigureAwait(true);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 弹确认框的实现：入参是要显示的摘要，返回用户是否点了确定。
+    /// 默认返回 <see langword="false"/>（没人接 = 不擅自替用户决定）。
+    /// </summary>
+    /// <remarks>
+    /// ViewModel 不该直接构造 <c>ContentDialog</c>（要 XamlRoot，且无头测试里没有窗口），
+    /// 所以由 <c>DelayPage</c> 在构造时把真实现赋进来。
+    /// <para>
+    /// 🔴 <b>默认值是"不确认"</b>而不是"直接执行"：万一某条路径漏了赋值，按钮表现为点了没反应
+    /// （一眼能看出没接上）；反过来默认执行的代价是"没接上"时静默启动了程序。
+    /// </para>
+    /// </remarks>
+    public Func<string, Task<bool>> ConfirmLaunchAsync { get; set; } =
+        static _ => Task.FromResult(false);
 }

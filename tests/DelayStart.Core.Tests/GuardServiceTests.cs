@@ -3,6 +3,7 @@ using DelayStart.Core.Models;
 using DelayStart.Core.Services;
 using DelayStart.Core.Tests.Fakes;
 using DelayStart.Management.Abstractions;
+using DelayStart.Management.Models;
 using DelayStart.Management.Services;
 
 namespace DelayStart.Core.Tests;
@@ -380,7 +381,9 @@ public sealed class GuardServiceTests
         var source = new BlockingStartupSource(entered, mayFinish);
         using var harness = new Harness(GuardMode.OnceAfterLogin, source);
 
-        var first = Task.Run(harness.Service.RunOnce, TestContext.Current.CancellationToken);
+        // RunOnce 现在有两个可选参数（复用扫描 / 作用域限定），方法组不再能隐式转成
+        // Action —— 显式写出零参调用，别让它以后再加参数时又静默坏一次。
+        var first = Task.Run(() => harness.Service.RunOnce(), TestContext.Current.CancellationToken);
 
         // 等第一轮真的进到扫描里再发起第二次，否则第二次可能在第一轮抢标志之前就跑了。
         Assert.True(
@@ -449,6 +452,116 @@ public sealed class GuardServiceTests
         Assert.False(report.AlreadyRunning);
         Assert.False(report.GuardDisabled);
         Assert.False(report.ConfigUnavailable);
+    }
+
+    /// <summary>
+    /// 复用了调用方给的扫描结果 ⇒ 一次来源都不再自己扫（F11.1 / F11.2）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这条钉的是"**没有第二次扫描**"，不是"结果一样"。两次扫描之间系统状态可能变，
+    /// 守卫拿到第二份就会与用户看到的列表对不上 ——
+    /// 表现出来是"刚纠正完，列表里还写着已启用"。
+    /// </remarks>
+    [Fact]
+    public void RunOnce_WithReusedScan_DoesNotScanAgain()
+    {
+        var source = new FakeStartupSource
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+
+        var reused = new ScanResult { Entries = [] };
+
+        var report = harness.Service.RunOnce(reused);
+
+        Assert.False(report.AlreadyRunning);
+        Assert.Equal(0, source.ScanCount);
+    }
+
+    /// <summary>作用域限定之后，没重扫到的来源里的接管项**不纠正**（F11.3）。</summary>
+    /// <remarks>
+    /// 场景：管理端「刷新本页」只重扫了 UWP，其余来源的条目是缓存里的旧值。
+    /// 若照单全收，守卫就会拿几轮之前的旧状态去判断"有没有人把它写回启用"——
+    /// 那时它看到的不是真相。
+    /// </remarks>
+    [Fact]
+    public void RunOnce_ScopedToOtherScopes_DoesNotCorrectItemsInUnprocessedScope()
+    {
+        var source = new FakeStartupSource
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+            DisableTakesEffect = true,
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManagedItem("registry:hkcu:a", "甲");
+
+        // 快照里带着那条"看起来已被写回启用"的条目，但本轮限定到 UWP 作用域。
+        var reused = new ScanResult
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+        };
+        var processed = new HashSet<ScanScope> { new(StartupSource.Uwp, StartupScope.UserFolder) };
+
+        var report = harness.Service.RunOnce(reused, processed);
+
+        Assert.Empty(report.Corrections);
+        Assert.Equal(0, source.DisableCount);
+    }
+
+    /// <summary>作用域限定之内的那一条**照常纠正**（F11.3 的另一半）。</summary>
+    /// <remarks>
+    /// 与上一条成对：只钉"该跳的跳了"的话，一个把 processedScopes 传反的实现也能全绿。
+    /// </remarks>
+    [Fact]
+    public void RunOnce_ScopedToOwnScope_StillCorrects()
+    {
+        var source = new FakeStartupSource
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+            DisableTakesEffect = true,
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManagedItem("registry:hkcu:a", "甲");
+
+        var reused = new ScanResult
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+        };
+        var processed = new HashSet<ScanScope> { new(StartupSource.Registry, StartupScope.Hkcu) };
+
+        var report = harness.Service.RunOnce(reused, processed);
+
+        var outcome = Assert.Single(report.Corrections);
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(1, source.DisableCount);
+    }
+
+    /// <summary>合成的"未重扫"**不上报成扫描失败**（F11.3）。</summary>
+    /// <remarks>
+    /// 🔴 报上去的话用户会看到"3 个来源扫描失败"而实际上一个都没失败 ——
+    /// 那是凭空造出来的问题，比不处理更坏（用户会去查根本不存在的故障）。
+    /// </remarks>
+    [Fact]
+    public void RunOnce_ScopedRun_DoesNotReportSyntheticFailuresAsScanFailures()
+    {
+        var source = new FakeStartupSource
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+            DisableTakesEffect = true,
+        };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManagedItem("registry:hkcu:a", "甲");
+
+        var reused = new ScanResult
+        {
+            Entries = [Entry("registry:hkcu:a", "甲")],
+        };
+        var processed = new HashSet<ScanScope> { new(StartupSource.Registry, StartupScope.Hkcu) };
+
+        var report = harness.Service.RunOnce(reused, processed);
+
+        Assert.Empty(report.Failures);
     }
 
     /// <summary>卡住 <c>Scan</c> 的来源，用来把一轮巡检"钉"在运行中以便制造真并发。</summary>

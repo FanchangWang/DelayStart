@@ -68,6 +68,31 @@
                 Text="{x:Bind ViewModel.CycleSummary, Mode=OneWay}"
                 TextWrapping="Wrap"
                 Visibility="{x:Bind ViewModel.HasCycleSummary, Mode=OneWay}" />
+
+            <!--
+                F11.3「运行调度」：与计划任务跑的是同一个调度端、同一份判定、同一批条目，
+                只是时刻由用户点出来（跟"重试守卫"改叫"立即巡检"是同一条理由：按钮名要说它真的做什么）。
+                放在这里而不是总览页：它的对象是**延时条目列表**，而那一页在"扫到哪些自启动项"，
+                两页的数据不在同一个语境里。
+                🔴 禁用依据是"调度端已在跑"而不是"空闲"：第二实例会秒退，
+                点下去用户只会看到"没反应"。
+                🔴 忙碌态在等调度端接管那 30 秒里一直转 —— 那个窗口里"不知道有没有生效"
+                正是最容易让人重复点击的时刻。
+            -->
+            <Button
+                Margin="0,8,0,0"
+                HorizontalAlignment="Left"
+                Click="OnRunSchedulerClicked"
+                Style="{StaticResource RowButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <ProgressRing
+                        Width="14"
+                        Height="14"
+                        IsActive="{x:Bind ViewModel.IsSchedulerBusy, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.IsSchedulerBusy, Mode=OneWay}" />
+                    <TextBlock Text="运行调度" />
+                </StackPanel>
+            </Button>
         </StackPanel>
 
         <!-- 顶部两条横幅共用一个 StackPanel：它们可能同时出现（配置坏了 + 次年数据没到），
@@ -158,7 +183,7 @@
                                         <ColumnDefinition Width="80" />
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="76" />
-                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="230" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock
                                         Grid.Column="0"
@@ -223,7 +248,7 @@
                                                         <ColumnDefinition Width="80" />
                                                         <ColumnDefinition Width="70" />
                                                         <ColumnDefinition Width="76" />
-                                                        <ColumnDefinition Width="170" />
+                                                        <ColumnDefinition Width="230" />
                                                     </Grid.ColumnDefinitions>
 
                                                     <!-- 顺序：与调度端的发起顺序一致（组内 ↑↓ 局部更新时联动） -->
@@ -424,45 +449,67 @@
                                                             ToolTipService.ToolTip="下移（同一延时内）" />
                                                     </StackPanel>
 
-                                                    <!-- 正常条目：编辑 / 移出延时 -->
+                                                    <!--
+                                                        操作列（v0.6.1 起多了一个「启动」）。
+                                                        🔴 整个操作列包在**一个** StackPanel 里，而不是让三个
+                                                        元素各自占 Grid.Column="8" —— 那样「启动」与两组
+                                                        互斥按钮会叠在同一格里，看起来像按了没反应。
+                                                    -->
                                                     <StackPanel
                                                         Grid.Column="8"
                                                         VerticalAlignment="Center"
                                                         Orientation="Horizontal"
-                                                        Spacing="6"
-                                                        Visibility="{x:Bind IsNormal, Mode=OneTime}">
-                                                        <Button
-                                                            Click="OnEditRequested"
-                                                            Content="编辑"
-                                                            Style="{StaticResource RowButtonStyle}" />
+                                                        Spacing="6">
 
-                                                        <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
+                                                        <!--
+                                                            F11.1「启动」：**始终可点，含失效条目**。
+                                                            失效说的是系统锚点没了或目标程序不在，而"程序还在、
+                                                            只是没有接管关系"（源丢失）恰恰是用户最想手动试一下的时候。
+                                                            禁用掉的话用户只能回日志里猜它还能不能跑。
+                                                            点了没起来会有 toast 说明原因，所以"能点"不等于"保证成功"。
+                                                        -->
                                                         <Button
-                                                            Click="OnRemoveRequested"
-                                                            Content="移出延时"
-                                                            Style="{StaticResource RowButtonStyle}" />
-                                                    </StackPanel>
+                                                            Click="OnLaunchOneClicked"
+                                                            Content="启动"
+                                                            Style="{StaticResource RowButtonStyle}"
+                                                            ToolTipService.ToolTip="现在启动这一项（按它自己的身份设置走，与登录时同一套降权链）" />
 
-                                                    <!-- 失效条目（D81）：删除 / 转为手动。
-                                                         🔴 两者不能互相替代：删除只动配置；
-                                                         「转为手动」留着条目、但要求目标程序还在。 -->
-                                                    <StackPanel
-                                                        Grid.Column="8"
-                                                        VerticalAlignment="Center"
-                                                        Orientation="Horizontal"
-                                                        Spacing="6"
-                                                        Visibility="{x:Bind IsStale, Mode=OneTime}">
-                                                        <Button
-                                                            Click="OnDeleteRequested"
-                                                            Content="删除"
-                                                            Style="{StaticResource RowButtonStyle}"
-                                                            ToolTipService.ToolTip="从延时列表里删除这条记录（不动系统任何设置）" />
-                                                        <Button
-                                                            Click="OnConvertRequested"
-                                                            Content="转为手动"
-                                                            Style="{StaticResource RowButtonStyle}"
-                                                            ToolTipService.ToolTip="脱离系统来源，变成一个手动添加的条目"
-                                                            Visibility="{x:Bind CanConvertToManual, Mode=OneTime}" />
+                                                        <!-- 正常条目：编辑 / 移出延时 -->
+                                                        <StackPanel
+                                                            Orientation="Horizontal"
+                                                            Spacing="6"
+                                                            Visibility="{x:Bind IsNormal, Mode=OneTime}">
+                                                            <Button
+                                                                Click="OnEditRequested"
+                                                                Content="编辑"
+                                                                Style="{StaticResource RowButtonStyle}" />
+
+                                                            <!-- 移出延时：这是「全部可逆」的出口，任何条目都必须能走（FR-2.7 / D17） -->
+                                                            <Button
+                                                                Click="OnRemoveRequested"
+                                                                Content="移出延时"
+                                                                Style="{StaticResource RowButtonStyle}" />
+                                                        </StackPanel>
+
+                                                        <!-- 失效条目（D81）：删除 / 转为手动。
+                                                             🔴 两者不能互相替代：删除只动配置；
+                                                             「转为手动」留着条目、但要求目标程序还在。 -->
+                                                        <StackPanel
+                                                            Orientation="Horizontal"
+                                                            Spacing="6"
+                                                            Visibility="{x:Bind IsStale, Mode=OneTime}">
+                                                            <Button
+                                                                Click="OnDeleteRequested"
+                                                                Content="删除"
+                                                                Style="{StaticResource RowButtonStyle}"
+                                                                ToolTipService.ToolTip="从延时列表里删除这条记录（不动系统任何设置）" />
+                                                            <Button
+                                                                Click="OnConvertRequested"
+                                                                Content="转为手动"
+                                                                Style="{StaticResource RowButtonStyle}"
+                                                                ToolTipService.ToolTip="脱离系统来源，变成一个手动添加的条目"
+                                                                Visibility="{x:Bind CanConvertToManual, Mode=OneTime}" />
+                                                        </StackPanel>
                                                     </StackPanel>
                                                 </Grid>
                                             </DataTemplate>

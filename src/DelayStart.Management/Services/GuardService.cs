@@ -91,18 +91,28 @@ public sealed class GuardService
         _clock = clock;
     }
 
-    /// <summary>执行一次完整巡检。</summary>
+    /// <summary>执行一次巡检。</summary>
+    /// <param name="reusedScan">
+    /// 调用方**已经扫好的**结果（管理端加载自启动项数据时用）；为 <see langword="null"/> 时
+    /// 本方法自己调 <see cref="ScanService.Scan"/>。见方法说明里的"复用扫描结果"。
+    /// </param>
+    /// <param name="processedScopes">
+    /// 本轮**真的重新扫过**的来源作用域；为 <see langword="null"/> 表示"全部都扫了"
+    /// （守卫进程走的就是这一路）。见方法说明里的"只处理刷到的"。
+    /// </param>
     /// <returns>
     /// 巡检结果；守卫关闭时返回 <see cref="GuardRunReport.Disabled"/>；
     /// 已有巡检在进行时返回 <see cref="GuardRunReport.AlreadyRunningReport"/>。
     /// </returns>
     /// <remarks>
-    /// 🔴 单实例保护在这里，而不在任何调用方：三个入口（守卫进程 / 管理端启动时后台跑 /
-    /// 「真跑守卫」按钮）都调它，保护放在调用方就要复制三遍，漏一处等于没有保护。
+    /// 🔴 单实例保护在这里，而不在任何调用方：两个入口（守卫进程 / 管理端加载自启动项数据时）
+    /// 都调它，保护放在调用方就要复制两遍，漏一处等于没有保护。
     /// 两层锁各管一段：<c>_runningInProcess</c> 管同进程重入（内核互斥体对此完全透明），
     /// 命名互斥体管跨进程。
     /// </remarks>
-    public GuardRunReport RunOnce()
+    public GuardRunReport RunOnce(
+        Management.Models.ScanResult? reusedScan = null,
+        IReadOnlySet<ScanScope>? processedScopes = null)
     {
         // 先抢进程内标志再抢内核互斥体：反过来会出现"本进程已经有一轮在跑，却先在内核上
         // 占了个位再白等一轮"的顺序问题。
@@ -132,12 +142,12 @@ public sealed class GuardService
                 // 这里**不能**抛：一次巡检的机会比一个"完美"的并发保护更值钱，
                 // 而真出并发时的后果只是多跑一轮（幂等，不会损坏状态）。
                 _log.Error(ex, "获取守卫单实例互斥体失败，本次巡检照常执行（并发保护不可用）");
-                return RunInspection();
+                return RunInspection(reusedScan, processedScopes);
             }
 
             try
             {
-                return RunInspection();
+                return RunInspection(reusedScan, processedScopes);
             }
             finally
             {
@@ -158,7 +168,7 @@ public sealed class GuardService
     }
 
     /// <summary>真正干活的巡检（<see cref="RunOnce"/> 已确保单实例之后调用）。</summary>
-    private GuardRunReport RunInspection()
+    private GuardRunReport RunInspection(Management.Models.ScanResult? reusedScan, IReadOnlySet<ScanScope>? processedScopes)
     {
         AppConfig config;
         try
@@ -182,35 +192,52 @@ public sealed class GuardService
             return GuardRunReport.Disabled();
         }
 
-        var scan = _scanner.Scan();
-        var failures = scan.Failures
-            .Select(static failure => new ScanScope(failure.Source, failure.Scope))
-            .ToArray();
+        // 🔴 复用调用方已经扫好的结果（v0.6.1 / F11.1）：管理端为了显示自启动项列表本来就要扫一遍，
+        // 守卫再扫一遍是纯浪费 —— 而且两次扫描之间系统状态可能变，守卫拿到的与用户看到的不一致，
+        // 会出现"列表里显示已启用、守卫却按已软禁用处理"这种自相矛盾。
+        var scan = reusedScan ?? _scanner.Scan();
+
+        // 🔴 "只处理刷到的"（v0.6.1 / F11.3）：管理端「刷新本页」只重扫了一个来源，
+        // 其余来源的数据是缓存里的**旧值**。若照单全收，守卫就会拿着陈旧数据去判断
+        // "有没有人把接管项写回启用" —— 那时它看到的是几轮之前的世界。
+        //
+        // 处理办法不是"跳过不处理的来源"，而是**把它们算进失败集合**：`failures` 在下面
+        // 一路贯穿纠正 / 新增 / 失效 / 基线四个策略，每个策略遇到失败作用域都跳过。
+        // 于是"没重扫过"与"重扫失败"走了**同一条**已经验证过的路径，不用新增分支。
+        var failures = new HashSet<ScanScope>(
+            scan.Failures.Select(static failure => new ScanScope(failure.Source, failure.Scope)));
+
+        if (processedScopes is { } processed)
+        {
+            AddUnprocessedScopes(failures, processed);
+        }
+
+        var failureArray = failures.ToArray();
 
         var takenOverKeys = new HashSet<string>(
             config.Items.Select(static item => item.Id),
             StringComparer.Ordinal);
 
-        var corrections = CorrectWrittenBackItems(config.Items, scan.Entries, failures, takenOverKeys);
+        var corrections = CorrectWrittenBackItems(config.Items, scan.Entries, failureArray, takenOverKeys);
 
         var baseline = _baselineStore.Read();
         var newItems = GuardNewItemPolicy.SelectNewItems(
             scan.Entries,
             GuardBaselineStore.ToIdSet(baseline),
-            failures);
-        var staleItems = GuardStalePolicy.SelectStaleItems(config.Items, scan.Entries, failures);
+            failureArray);
+        var staleItems = GuardStalePolicy.SelectStaleItems(config.Items, scan.Entries, failureArray);
 
         // 基线必须最后更新（用纠正后的状态），否则"刚被纠正回来的项"会在下一轮又被看成没变。
         // 返回 null = 本次不落盘（首扫不完整，B6）：宁可下一轮重扫，也不要把残缺结果写成永久事实。
-        if (MergeBaselineForNext(baseline, scan.Entries, failures) is { } nextBaseline)
+        if (MergeBaselineForNext(baseline, scan.Entries, failureArray) is { } nextBaseline)
         {
             _baselineStore.Write(nextBaseline);
         }
         else
         {
             _log.Warn(
-                $"首次巡检有 {failures.Length} 个来源扫描失败，本次不更新基线"
-                + "（否则失败来源里的条目会永久从基线消失、守卫再也不会看见它们）。");
+                $"本轮有 {failureArray.Length} 个来源不可用（真失败或未重扫），本次不更新基线"
+                + "（否则这些来源里的条目会永久从基线消失、守卫再也不会看见它们）。");
         }
 
         return new GuardRunReport
@@ -220,12 +247,49 @@ public sealed class GuardService
             Corrections = corrections,
             NewItems = newItems,
             StaleItems = staleItems,
+
+            // 🔴 报**真的**失败，不报"未重扫"合成的那批：用户看到"3 个来源扫描失败"而实际上
+            // 一个都没失败，那是凭空造出来的问题。合成的失败只参与上面的策略判定。
             Failures = scan.Failures,
 
             // 一起读出来而不是让守卫入口再读一次配置：配置在本次巡检里已经加载过一次，
             // 再读一遍既多一次 IO，也可能与上面判定失效时用的那份不是同一版本。
             NotifyMode = config.Settings.GuardNotifyMode,
         };
+    }
+
+    /// <summary>把"本轮没重新扫过"的来源作用域并进失败集合。</summary>
+    /// <param name="failures">就地扩充的失败集合。</param>
+    /// <param name="processed">本轮真的重新扫过的作用域。</param>
+    /// <remarks>
+    /// 🔴 遍历的是 <c>_sources</c>（依赖注入的七个来源实例）而不是扫描结果里的条目：
+    /// 一个来源本轮一条条目都没有，它同样属于"没重新扫过"—— 而按条目反推会漏掉它，
+    /// 漏掉的后果是这个来源的旧条目被当成"确认还在"，基线因此被错误地改写。
+    /// </remarks>
+    private void AddUnprocessedScopes(HashSet<ScanScope> failures, IReadOnlySet<ScanScope> processed)
+    {
+        var added = 0;
+
+        foreach (var source in _sources)
+        {
+            var scope = new ScanScope(source.Kind, source.Scope);
+
+            // 已经有真失败的不要重复加：那一条要按"真失败"上报给用户，不能被合成的顶掉。
+            if (processed.Contains(scope) || failures.Contains(scope))
+            {
+                continue;
+            }
+
+            failures.Add(scope);
+            added++;
+        }
+
+        if (added > 0)
+        {
+            _log.Info(
+                $"本轮只重扫了 {processed.Count} 个作用域，另 {added} 个沿用缓存数据"
+                + "（守卫对它们按\"未重扫\"处理：既不纠正、也不改基线）。");
+        }
     }
 
     /// <summary>对每一个"被写回启用"的已接管项重新软禁用，并复读确认。</summary>

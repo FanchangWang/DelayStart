@@ -47,6 +47,10 @@ public sealed partial class DelayPage : Page, IReloadablePage
 
         InitializeComponent();
 
+        // 🔴 确认框由页面提供而不是 ViewModel 自己造（要 XamlRoot，且无头测试里没有窗口）。
+        // ViewModel 的默认值是"不确认"，所以这里漏赋值的表现是"点了没反应"——一眼能看出。
+        ViewModel.ConfirmLaunchAsync = ShowRunSchedulerConfirmAsync;
+
         Loaded += OnLoaded;
     }
 
@@ -148,6 +152,56 @@ public sealed partial class DelayPage : Page, IReloadablePage
     /// <param name="sender">触发按钮。</param>
     /// <param name="e">事件参数。</param>
     private void OnMoveUp(object sender, RoutedEventArgs e) => MoveCore(sender, -1);
+
+    /// <summary>「运行调度」按钮（F11.3）：命令在 ViewModel，这里只做转发。</summary>
+    /// <param name="sender">按钮。</param>
+    /// <param name="e">事件参数。</param>
+    private async void OnRunSchedulerClicked(object sender, RoutedEventArgs e)
+        => await ViewModel.RunSchedulerCommand.ExecuteAsync(null).ConfigureAwait(true);
+
+    /// <summary>
+    /// 每行的「启动」按钮（F11.1）。
+    /// </summary>
+    /// <param name="sender">按钮。</param>
+    /// <param name="e">事件参数。</param>
+    /// <remarks>
+    /// 行对象按本页既有写法从 <c>DataContext</c> 取（与编辑 / 移出 / 删除那几个按钮一致）。
+    /// </remarks>
+    private void OnLaunchOneClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: DelayRow row })
+        {
+            ViewModel.LaunchOneCommand.Execute(row);
+        }
+    }
+
+    /// <summary>「运行调度」的确认框（F11.3）。</summary>
+    /// <param name="summary">要展示的摘要（ViewModel 算好）。</param>
+    /// <returns>用户点了确定为 <see langword="true"/>。</returns>
+    private async Task<bool> ShowRunSchedulerConfirmAsync(string summary)
+    {
+        // 🔴 XamlRoot 必须现取：页面在可视树里之后才有值，构造期取会拿到 null。
+        if (XamlRoot is null)
+        {
+            return false;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "立即运行一次调度",
+            Content = summary,
+            PrimaryButtonText = "运行",
+            CloseButtonText = "取消",
+
+            // 默认按钮给"运行"：这个对话框只有一个安全问题（会不会启动程序），
+            // 回车 = 确认动作符合直觉；误按的代价由摘要挡住（用户读到了会知道要点什么）。
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        var result = await dialog.ShowAsync();
+        return result == ContentDialogResult.Primary;
+    }
 
     /// <summary>在同一延时组内下移一位。</summary>
     /// <param name="sender">触发按钮。</param>

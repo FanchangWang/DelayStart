@@ -1,6 +1,7 @@
 using DelayStart.App.ViewModels;
 using DelayStart.App.Views;
 using DelayStart.Core.Abstractions;
+using DelayStart.Core.Launch;
 using DelayStart.Core.Logging;
 using DelayStart.Core.Models;
 using DelayStart.Core.Services;
@@ -123,6 +124,15 @@ internal static class ServiceRegistration
 
         // 应用内右下角通知（2026-09-21 批复）：成功类提示经它广播到主窗口的通知面板。
         services.AddSingleton<ToastService>();
+
+        // F11.3：调度端的手动启动 + 单实例探测。瞬时对象（无状态），但注册成单例是为了
+        // 让「按钮禁用依据」与「点击时的预检」读到同一个逻辑，避免两处各探一次互斥体。
+        services.AddSingleton<SchedulerProbe>();
+
+        // F11.1：单条启动复用调度端那条**同一条**降权链（v0.6.1 已从 Scheduler 下沉到 Core）。
+        // 🔴 绝不能图省事写 `Process.Start`：管理端自己是提权进程，那样标着「普通用户」的条目
+        // 手动点一下会拿到 High 令牌，而登录那一轮是 0x2000 Medium。
+        services.AddSingleton<DeElevatedProcessLauncher>();
 
         // 系统通知的身份登记（D80，2026-09-22 批复）：开始菜单快捷方式写 AUMID +
         // 注册 delaystart:// 协议处理器。守卫进程发 Toast 需要 AUMID 先存在，

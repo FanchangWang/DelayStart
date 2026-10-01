@@ -398,7 +398,15 @@ Tests ──> Core (+ Management)
 
 ### 7.6 调度端实现
 
-纯 Win32 + NativeAOT（D24）：`SchedulerEngine`（`SetTimer` 逐条绝对时刻点火 + 逐条落盘）、`TrayIconHost`（`Shell_NotifyIconW`）、`PanelWindow`（失焦即关）、`DeElevatedProcessLauncher`（机制 6）、`IconResources`（多尺寸 ICO 按目标尺寸挑条目，托盘底色取 32 非 `SM_CXSMICON`）。**AOT 硬约束**：`OutputType=WinExe`；图标走 `GetManifestResourceStream` 禁 `.resx`；JSON 源生成；绑定手工赋值；`LibraryImport` + `[return: MarshalAs(UnmanagedType.Bool)]`；**不设 `InvariantGlobalization`**（R13）；禁 Reflection.Emit / BinaryFormatter / 动态 COM。手动构造、无 DI 容器。
+纯 Win32 + NativeAOT（D24）：`SchedulerEngine`（`SetTimer` 逐条绝对时刻点火 + 逐条落盘）、`TrayIconHost`（`Shell_NotifyIconW`）、`IconResources`（多尺寸 ICO 按目标尺寸挑条目，托盘底色取 32 非 `SM_CXSMICON`）。**AOT 硬约束**：`OutputType=WinExe`；图标走 `GetManifestResourceStream` 禁 `.resx`；JSON 源生成；绑定手工赋值；`LibraryImport` + `[return: MarshalAs(UnmanagedType.Bool)]`；**不设 `InvariantGlobalization`**（R13）；禁 Reflection.Emit / BinaryFormatter / 动态 COM。手动构造、无 DI 容器。
+
+> `PanelWindow`（GDI 自绘面板）已于 v0.6.1 整体删除，**调度端现在不画任何窗口**：
+> 消息窗口只承载定时器与托盘回调，`backgroundBrush` 传 0、不处理 `WM_PAINT`。
+> 进度信息改由托盘悬停三行提示 + 收尾系统通知承载（D135）。
+>
+> 🔴 `DeElevatedProcessLauncher` **现在住在 `Core\Launch\`**（D128），不是调度端私有类 ——
+> 它被依赖方向逼过去的：调度端绝不引用 Management（F11 让管理端每行的「启动」也要用同一条链），
+> 一个"两边都要用、谁都不能引用谁"的东西只能住 Core。
 
 ### 7.7 错误处理与日志
 

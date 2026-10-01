@@ -219,10 +219,16 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
         if (message == NativeMethods.WmTrayCallback)
         {
             var action = (uint)(lParam.ToInt64() & 0xFFFF);
-            if (action == NativeMethods.NimLup)
-            {
-            }
-            else if (action == NativeMethods.NimRup)
+            // 🔴 左右键**都**弹同一个菜单。
+            //
+            // 之前左键是 `_panel.Toggle()`，而面板已于 v0.6.1 取消 —— 左键若还留 Toggle
+            // 就没有任何调用方了，那一行会变成死代码，"左键什么也不发"对用户来说
+            // 就是托盘图标坏了。
+            //
+            // ⚠️ 待验：左键弹菜单在 Windows 惯例上略反常（惯例是左键直接单击），
+            // 需真机确认 ShowContextMenu 里的前台约束处理（SetForegroundWindow + KB135788）
+            // 在左键下同样成立 —— 那个约束是菜单能正常消失的关键。
+            if (action is NativeMethods.NimLup or NativeMethods.NimRup)
             {
                 ShowContextMenu();
             }

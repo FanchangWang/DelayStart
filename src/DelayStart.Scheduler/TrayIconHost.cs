@@ -105,7 +105,12 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
     /// <summary>创建隐藏窗口并（可选地）注册托盘图标。</summary>
     /// <param name="initialTip">初始 tooltip。</param>
     /// <param name="withIcon">是否注册托盘图标。短任务或用户关闭设置时为 <see langword="false"/>，窗口只承载定时器。</param>
-    /// <returns>是否成功。失败时调用方按「无托盘」降级运行（图标本就是可关闭设置）。</returns>
+    /// <returns>
+    /// <see cref="WindowReady"/> 为真表示**可以正常驱动定时器**。
+    /// 🔴 图标注册失败**不算**失败（返回 true 而 <see cref="HasIcon"/> 为假）：
+    /// 窗口在，定时器就能跑，调度照常进行 —— 用户只是看不见图标、点不到右键菜单。
+    /// 这与「窗口建不起来」是完全不同的两种故障。
+    /// </returns>
     public bool TryCreate(string initialTip, bool withIcon = true)
     {
         if (!NativeMethods.RegisterClass("DelayStart.TrayWnd", backgroundBrush: 0))
@@ -153,9 +158,18 @@ internal sealed unsafe class TrayIconHost : IDisposable, NativeMethods.IMessageH
 
         CopyTip(ref data, initialTip);
 
+   // 🔴 图标注册失败**不**返回 false：窗口已经在了，定时器照样能驱动整个调度。
+        // 调用方据 <see cref="HasIcon"/> 决定要不要提示用户"看不见图标"。
+  // 这与「窗口建不起来」是完全不同的两种故障，混为一谈会让一个纯 UI 故障升级成功能停摆。
         _iconAdded = NativeMethods.Shell_NotifyIconW(NativeMethods.NimAdd, ref data);
-        return _iconAdded;
+        return true;
     }
+
+    /// <summary>消息窗口是否已建好（定时器能否驱动调度）。</summary>
+  public bool WindowReady => _window != 0;
+
+    /// <summary>托盘图标是否真的注册成功（<see langword="false"/> = 用户看不见图标）。</summary>
+    public bool HasIcon => _iconAdded;
 
     /// <summary>更新悬停 tooltip（超长自动截断到 63 字符）。</summary>
     /// <param name="tip">单行文案。</param>

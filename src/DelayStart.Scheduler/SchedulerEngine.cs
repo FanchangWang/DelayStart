@@ -140,18 +140,29 @@ internal sealed class SchedulerEngine
         _tray = CreateTrayHost(_icons);
         if (_tray is null)
         {
-            // 🔴 托盘创建失败**不放弃调度**：它只是"用户能看到什么"的通道，不是启动目标的能力。
-            // 早先这里 return 1，等于"图标画不出来 ⇒ 今天什么都不启动" —— 一个纯 UI 故障
-            // 升级成了功能停摆，而且用户连原因都看不到（托盘本来就没出来）。
-            // 现在降级为继续调度：到点照常启动，失败与结果照常落盘；代价只是没有托盘菜单
-            // （也就没有「立即启动 / 跳过剩余」这两个手动入口），这个代价远小于"全部不启动"。
-            _log.Error("托盘图标注册失败，本次按无托盘运行（不显示图标，但调度照常进行）。");
+            // 🔴 只有**消息窗口建不起来**（RegisterClass / CreateWindowExW 失败）才走到这里 ——
+   // 而定时器就挂在这个窗口上，没有它就没有 Tick 的驱动源。
+   //
+            // 所以这里**不能**"降级为继续调度然后进消息循环等着"：那样进程会安静地挂到用户注销，
+            // 一个条目都不会启动，而日志里只有一行「按无托盘运行」—— 症状是最坏的那一类
+            // （静默停摆），且用户无从判断是程序坏了还是没装全。
+   // 明确失败退出，让计划任务的重试与用户可见的"没启动"对得上。
+            _log.Error(
+           "消息窗口创建失败，无法驱动调度定时器，本次退出"
+          + "（这不是托盘图标的问题，是进程连一个窗口都建不出来）。");
+            return 1;
         }
-        else
+
+        if (!_tray.HasIcon)
         {
-            _tray.TimerTick = Tick;
-            _tray.StartTimer(TimerIntervalMilliseconds);
+   // 图标没出来但窗口在 ⇒ 定时器照常驱动，到点照常启动，失败与结果照常落盘。
+            // 代价只是用户看不见图标、点不到右键菜单（也就没有「立即启动 / 跳过剩余」
+            // 这两个手动入口）—— 那个代价远小于"全部不启动"。
+    _log.Warn("托盘图标注册失败，本次按无托盘运行（不显示图标，但调度照常进行）。");
         }
+
+   _tray.TimerTick = Tick;
+  _tray.StartTimer(TimerIntervalMilliseconds);
 
         _ = NativeMethods.RunMessageLoop();
         return 0;
@@ -530,8 +541,10 @@ internal sealed class SchedulerEngine
 
     private TrayIconHost? CreateTrayHost(IconResources? icons)
     {
-        // 托盘只属调度端、恒显示（用户批复 2026-09-19：托盘设置已移除）。
+     // 托盘只承载**展示**（图标、悬停提示、右键菜单）；启动目标的能力在别处。
         // 生命周期 = 调度期间显示 → 收尾延迟结束后退出（托盘随之消失）。
+        // 🔴 返回 null 的唯一含义是"消息窗口建不起来" —— 定时器挂在那个窗口上，
+        // 没有它就没有 Tick 的驱动源。图标注册失败**不**返回 null（见 TrayIconHost.TryCreate）。
         var host = new TrayIconHost(
             icons,
             OpenRunLog,

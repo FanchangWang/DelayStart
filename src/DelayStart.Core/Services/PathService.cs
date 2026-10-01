@@ -150,8 +150,6 @@ public sealed class PathService
     /// </remarks>
     public string UiRequestFilePath => Path.Combine(LocalRoot, "ui-request.json");
 
-    /// <summary>调度实时状态文件完整路径（<c>scheduler\current-run.json</c>；D116 起从 <c>state\</c> 迁来）。</summary>
-    public string CurrentRunFilePath => Path.Combine(SchedulerRoot, "current-run.json");
 
     /// <summary>管理端可执行文件完整路径，注册计划任务时不用它（计划任务指向调度端），仅用于诊断展示。</summary>
     public string ManagerExecutablePath => Path.Combine(InstalledRoot, ManagerExecutableName);

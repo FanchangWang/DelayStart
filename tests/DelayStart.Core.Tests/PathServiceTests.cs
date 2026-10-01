@@ -78,9 +78,6 @@ public sealed class PathServiceTests : IDisposable
         Assert.True(
             paths.SchedulerLogPath.StartsWith(paths.LocalRoot, StringComparison.OrdinalIgnoreCase),
             "日志必须落在 Local 根下");
-        Assert.True(
-            paths.CurrentRunFilePath.StartsWith(paths.LocalRoot, StringComparison.OrdinalIgnoreCase),
-            "实时状态必须落在 Local 根下");
     }
 
     [Fact]
@@ -105,7 +102,6 @@ public sealed class PathServiceTests : IDisposable
         Assert.Equal(Path.Combine(paths.ConfigRoot, "config.json"), paths.ConfigFilePath);
         Assert.Equal(Path.Combine(paths.LogsRoot, "scheduler.log"), paths.SchedulerLogPath);
         Assert.Equal(Path.Combine(paths.LogsRoot, "manager.log"), paths.ManagerLogPath);
-        Assert.Equal(Path.Combine(paths.SchedulerRoot, "current-run.json"), paths.CurrentRunFilePath);
         Assert.Equal(Path.Combine(paths.LocalRoot, "logs"), paths.LogsRoot);
         Assert.Equal(Path.Combine(paths.LocalRoot, "scheduler"), paths.SchedulerRoot);
         Assert.Equal(Path.Combine(paths.SchedulerRoot, "archive"), paths.SchedulerArchiveRoot);

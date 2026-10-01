@@ -243,6 +243,56 @@ internal sealed class SchedulerEngine
             return false;
         }
 
+        // 🔴 S1.1 目标存活预筛，在**建计划之后、起停表之前**。
+        //
+        // 为什么在这：SchedulePlan 已经按"启用 + 今天在周期内"过滤过了，
+        // 剩下的就是"本该启动的"。而在这一步再问一次"目标程序还在不在"，
+        // 答"不在"的那些是**必然失败**的项 —— 让它们进计划就等于排一个注定失败的队列，
+        // 用户要盯着进度条等完整个延时，最后收到一条失败通知。
+        //
+        // 筛掉的条目**仍然全部进调度日志**（记 Failed + 原因），不能静默丢弃：
+        // 否则用户看到"我配了 5 个，只启动了 2 个"，而日志里只有 2 行，
+        // 那 3 个去哪了就成了无解的问题。
+        //
+        // 🔴 兜底已够宽：TargetFileProbe.IsMissing 对无路径、UWP 解析名、裸命令名、
+        // 相对路径一律返回 false（按"在"处理）。四个来源的 IsMissing 早就复用它，
+        // 所以这里不会误杀任何一类。方向只能是"少启动"，不能是"多判失败"。
+        var (launchable, missingTargets) = SplitByTargetExistence(plan);
+
+        if (launchable.Count == 0)
+        {
+            // S1.3：两种"空"要给**不同的**通知文案。
+            // "全部不在周期内"和"全部目标程序不存在"在用户看来是两件完全不同的事：
+            // 前者是设置问题，后者是软件被卸载了。若都发"0 项成功"，
+            // 用户会以为设置生效了，而真正的原因要翻日志才看得见。
+            var allTargetsMissing = missingTargets.Count > 0
+                && missingTargets.Count == outcome.SkippedToday.Count + missingTargets.Count;
+
+            if (allTargetsMissing && missingTargets.Count > 0)
+            {
+                _log.Warn($"本轮 {missingTargets.Count} 项的目标程序全部已不存在，"
+                    + "按通知策略通报后立即退出（S1.2：不空等延时）。");
+                SendNoLaunchableTargetsNotification(missingTargets);
+                return false;
+            }
+
+            // 走到这里只可能是：预筛之后还剩 0 项，而 plan 本来就非空 ——
+            // 那说明筛选逻辑与计划生成不一致，属于不该发生的状态。仍按失败处理，
+            // 但要说清是"目标都没了"而不是"没配置"。
+            _log.Warn("计划非空但预筛后无一可启动，已按目标缺失处理。");
+            SendNoLaunchableTargetsNotification(missingTargets);
+            return false;
+        }
+
+        if (missingTargets.Count > 0)
+        {
+            _log.Warn(
+                $"本轮跳过 {missingTargets.Count} 项目标程序已不存在的条目："
+                + $"{DescribeNames(missingTargets)}（仍全部记入调度日志，不静默丢弃）。");
+        }
+
+        plan = launchable;
+
         var now = DateTimeOffset.Now;
         var planned = plan.Select(static entry => new RunItemResult
         {
@@ -277,7 +327,6 @@ internal sealed class SchedulerEngine
 
         // D40：调度端亲自降权，没有代理进程，也就没有预热这一步。
         _stopwatch.Start();
-        PersistState();
         _log.Info($"调度开始：{_record.RunId}，共 {_record.PlannedCount} 项"
             + (outcome.SkippedToday.Count > 0
                 ? $"，另有 {outcome.SkippedToday.Count} 项今天不在周期内（记入日志，不启动）。"
@@ -308,6 +357,72 @@ internal sealed class SchedulerEngine
                 Reason = NotInCycleReason,
             });
         }
+    }
+
+    /// <summary>
+    /// 按"目标程序还在不在"把计划分成两拨（S1.1）。
+    /// </summary>
+    /// <param name="plan">SchedulePlan 产出的本轮计划。</param>
+    /// <returns>（可启动项，目标已不存在的项）。</returns>
+    /// <remarks>
+    /// 🔴 判据是 <see cref="TargetFileProbe.IsMissing"/>，它对无路径、UWP 解析名、
+    /// 裸命令名、相对路径**一律返回 false**（按"在"处理）。所以这一筛**只会少启动，
+    /// 绝不会多判失败** —— 方向与 D87/D90 一致：兜底只能更宽松。
+    /// 而"少启动"的那些项仍全部进调度日志（记 Failed + 原因），不是静默丢弃。
+    /// </remarks>
+    private static (List<ScheduleEntry> Launchable, List<ScheduleEntry> MissingTargets)
+        SplitByTargetExistence(IReadOnlyList<ScheduleEntry> plan)
+    {
+        var launchable = new List<ScheduleEntry>(plan.Count);
+        var missing = new List<ScheduleEntry>();
+
+        foreach (var entry in plan)
+        {
+            if (TargetFileProbe.IsMissing(entry.Item.Path))
+            {
+                missing.Add(entry);
+            }
+            else
+            {
+                launchable.Add(entry);
+            }
+        }
+
+        return (launchable, missing);
+    }
+
+    /// <summary>列出若干条目的名字（超过三个时截断并给"等 N 项"）。</summary>
+    private static string DescribeNames(List<ScheduleEntry> entries)
+    {
+        const int limit = 3;
+        var names = string.Join("、", entries.Take(limit).Select(static entry => entry.Item.Name));
+        return entries.Count > limit ? $"{names} 等 {entries.Count} 项" : names;
+    }
+
+    /// <summary>
+    /// 目标程序全部不存在时的收尾通知（S1.3）。
+    /// </summary>
+    /// <param name="missingTargets">被预筛掉的条目。</param>
+    /// <remarks>
+    /// 🔴 文案必须写明是**"目标程序没了"**而不是"你没配置" —— 这两件事的处置完全相反：
+    /// 前者要去装回软件或清理条目，后者要去检查"启用"开关。
+    /// 而通用收尾通知写的是"0 项成功"，用户读到它会以为设置生效了。
+    /// <para>
+    /// 🔴 这一步**不排任何延时**（S1.2）：没有可启动的项却还要等 10 分钟才收到通知，
+    /// 是纯粹的浪费；而且用户在这 10 分钟里完全可以先去把软件装回来。
+    /// </para>
+    /// </remarks>
+    private void SendNoLaunchableTargetsNotification(List<ScheduleEntry> missingTargets)
+    {
+        var detail = DescribeNames(missingTargets);
+        _log.Warn(
+            $"本轮无一可启动：{missingTargets.Count} 项目标程序已不存在（{detail}）。"
+            + "已记入调度日志；装回软件后会自动恢复。");
+
+        SendCompletionNotification(
+            failedCount: missingTargets.Count,
+            summaryOverride: $"0 项成功 · {missingTargets.Count} 项目标程序已不存在（{detail}）。"
+                + "这些条目已保留在延时启动页，装回软件后会自动恢复；也可在那里删除。");
     }
 
     /// <summary>
@@ -342,7 +457,6 @@ internal sealed class SchedulerEngine
 
         try
         {
-            _runState.WriteCurrent(record);
             _runState.Archive(record);
             _log.Info($"今天没有条目在启动周期内：{skipped.Count} 个启用条目全部跳过，已写入调度日志。");
         }
@@ -404,7 +518,6 @@ internal sealed class SchedulerEngine
 
         if (changed)
         {
-            PersistState();
             _tray?.RefreshPanel();
         }
 
@@ -654,7 +767,6 @@ internal sealed class SchedulerEngine
         _finishing = true;
         _record.FinishedAt = DateTimeOffset.Now;
         _record.CompletedNormally = true;
-        PersistState();
 
         try
         {
@@ -702,6 +814,9 @@ internal sealed class SchedulerEngine
     /// 按 <see cref="NotifyDecision"/> 经通知中转器发"调度完成"系统通知（N1/N2，2026-09-22 批复）。
     /// </summary>
     /// <param name="failedCount">本批次失败条目数（供策略判定与文案）。</param>
+    /// <param name="summaryOverride">
+    /// 覆盖正文；<see langword="null"/> 时按常规口径拼（成功 / 失败 / 跳过）。
+    /// </param>
     /// <remarks>
     /// <para>
     /// 🔴 best-effort（N12）：策略判"不发"只记一行日志；中转器缺失 / 拉起失败 / 任何异常
@@ -711,8 +826,18 @@ internal sealed class SchedulerEngine
     /// 🔴 必须**降权**拉起中转器：调度端提权运行，Win10/11 抑制提权进程的系统通知，
     /// 通知必须以中完整性发出（见 <c>design.md</c> FR-14）。
     /// </para>
+    /// <para>
+    /// 🔴 <paramref name="summaryOverride"/> 存在只为 S1.3 那条"目标程序全没了"的路径：
+    /// 常规口径写的是"0 项成功"，用户读到会以为设置生效了，而真正的原因是软件被卸载了。
+    /// 两种"空"必须给不同的文案 —— 处置方向完全相反（装回软件 vs 检查启用开关）。
+    /// <para>
+    /// 🔴 覆盖正文时 <paramref name="failedCount"/> 仍要如实给：它决定
+    /// <see cref="NotifyDecision.Decide"/> 是发还是不发 —— "目标全没了"属于失败，
+    /// 必须走"有失败就通知"的那一档，否则用户在"从不通知"档位下什么也看不到。
+    /// </para>
+    /// </para>
     /// </remarks>
-    private void SendCompletionNotification(int failedCount)
+    private void SendCompletionNotification(int failedCount, string? summaryOverride = null)
     {
         if (!NotifyDecision.Decide(Settings.NotifyMode, failedCount))
         {
@@ -744,7 +869,8 @@ internal sealed class SchedulerEngine
                 // 值 = delaystart://runs-log（D82：点击直达调度日志页）。
                 Launch = NotifyToastJob.ScheduleDoneLaunch,
                 Title = ScheduleToastComposer.Title,
-                Message = ScheduleToastComposer.ComposeMessage(doneCount, failedCount, skippedCount, failedNames),
+                Message = summaryOverride
+                    ?? ScheduleToastComposer.ComposeMessage(doneCount, failedCount, skippedCount, failedNames),
             };
 
             // 作业走 %TEMP% 下的一次性目录（与 LaunchBroker 同款；无标签对象按 Medium 处理，
@@ -1135,7 +1261,6 @@ internal sealed class SchedulerEngine
             }
 
             _log.Info($"用户跳过剩余 {count} 个条目，本次调度收尾（来源：{(fromPanel ? "面板" : "托盘菜单")}）。");
-            PersistState();
         }
 
         // 直接退出的那条路径上刷新没有意义（托盘马上就没了）。
@@ -1146,18 +1271,5 @@ internal sealed class SchedulerEngine
         }
 
         return count;
-    }
-
-    private void PersistState()
-    {
-        try
-        {
-            _runState.WriteCurrent(_record);
-        }
-        catch (Exception ex)
-        {
-            // 实时状态写失败不影响调度本身 —— 归档与日志仍然完整。
-            _log.Warn(ex, "实时状态写入失败。");
-        }
     }
 }

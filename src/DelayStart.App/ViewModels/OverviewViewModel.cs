@@ -410,15 +410,13 @@ public partial class OverviewViewModel : ObservableObject
     /// <remarks>
     /// 数据取**最近一次已归档**的运行（<see cref="IRunStateStore.ReadRecent"/>)，
     /// 而不是实时状态 —— 卡片的语义是"上次怎么样"；一次还在进行中的调度，
-    /// 等它归档了自然会顶上来。仅当从来没有归档（刚装好、第一次调度还在跑）时
-    /// 回落读实时状态，避免"明明在跑、卡片却说没有"。
+    /// 等它归档了自然会顶上来。
+    /// 🔴 **不再回落到实时状态**（`ReadCurrent`）：那条通路连同 `current-run.json` 已随 N7 删除。
     /// </remarks>
     private async Task FillRecentRun()
     {
         var records = await Task.Run(() => _runState.ReadRecent(1)).ConfigureAwait(true);
-        var record = records.Count > 0
-            ? records[0]
-            : await Task.Run(_runState.ReadCurrent).ConfigureAwait(true);
+        var record = records.Count > 0 ? records[0] : null;
 
         if (record is null || record.Items.Count == 0)
         {

@@ -45,7 +45,6 @@ public sealed class RunStateService : IRunStateStore
     }
 
     /// <inheritdoc />
-    public string CurrentStateFilePath => _paths.CurrentRunFilePath;
 
     /// <inheritdoc />
     public string ArchiveRoot => _paths.SchedulerArchiveRoot;
@@ -56,47 +55,6 @@ public sealed class RunStateService : IRunStateStore
     public static string CreateRunId(DateTimeOffset localTime)
         => localTime.ToString(RunIdFormat, CultureInfo.InvariantCulture);
 
-    /// <inheritdoc />
-    public RunRecord? ReadCurrent()
-    {
-        string? json;
-        try
-        {
-            json = AtomicFileWriter.ReadAllTextOrNull(CurrentStateFilePath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _log.Warn(ex, $"读取实时状态失败，按「无调度进行中」处理：{CurrentStateFilePath}");
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return null;
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize(json, JsonContext.Default.RunRecord);
-        }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException)
-        {
-            // 实时状态是**易失**数据：读不懂就当没有。它会随下一次调度被整体重写，
-            // 不像 config.json 那样承载着不可再生的信息，因此不值得打断调用方。
-            _log.Warn(ex, $"实时状态文件无法解析，按「无调度进行中」处理：{CurrentStateFilePath}");
-            return null;
-        }
-    }
-
-    /// <inheritdoc />
-    public void WriteCurrent(RunRecord record)
-    {
-        ArgumentNullException.ThrowIfNull(record);
-
-        _paths.EnsureCreated();
-        var json = JsonSerializer.Serialize(record, JsonContext.Default.RunRecord);
-        AtomicFileWriter.WriteAllText(CurrentStateFilePath, json);
-    }
 
     /// <inheritdoc />
     public void Archive(RunRecord record)

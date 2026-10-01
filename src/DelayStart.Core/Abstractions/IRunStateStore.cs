@@ -3,38 +3,37 @@ using DelayStart.Core.Models;
 namespace DelayStart.Core.Abstractions;
 
 /// <summary>
-/// 调度运行状态的读写抽象（D19 / FR-5.12 / FR-5.13）。
+/// 运行记录的读取端（D19 / FR-5.12 / FR-5.13 / N7）。
 /// </summary>
 /// <remarks>
-/// 调度端写、管理端读，通过文件而不是 IPC 通信 —— 这使管理端的「调度进行中」判断
-/// 不依赖任何跨进程协议，也让调度端崩溃后的现场得以保留（E9）。
+/// <para>
+/// 🔴 这个接口只剩**归档**一条通路（N7 删掉了 <c>scheduler/current-run.json</c>）。
+/// 删它的三条理由：
+/// </para>
+/// <list type="number">
+/// <item><description>一轮调度要写它几十次（每个条目状态变化一次），而它承载的"最新 RunId"
+/// 归档里已经有了 —— 纯重复的 I/O。</description></item>
+/// <item><description>消费方（总览卡、结果轮询）会在"刚写完还没收尾"的时候读到**半截状态**，
+/// 显示出一个用户从没见过的中间态。归档是收尾时才写的，天然是一个自洽的快照。</description></item>
+/// <item><description>"有没有归档"本来就是更好的信号：没有归档 = 还没有哪一轮跑完过，
+/// 而这正是空态要表达的事。</description></item>
+/// </list>
+/// <para>
+/// 代价（刻意接受）：一轮调度**正在进行中**时，总览卡仍显示上一轮的结果。
+/// 这是对的 —— 卡片语义是"上次怎么样"，"正在跑"由托盘图标与进度面板表达。
+/// </para>
 /// </remarks>
 public interface IRunStateStore
 {
-    /// <summary>调度实时状态文件完整路径（<c>scheduler/current-run.json</c>，D116 起从 <c>state/</c> 迁来）。</summary>
-    string CurrentStateFilePath { get; }
-
-    /// <summary>运行归档目录（<c>scheduler/archive/</c>，D116 起从 <c>runs/</c> 迁来）。</summary>
+    /// <summary>归档目录（<c>scheduler/archive/</c>，D116 从 <c>runs/</c> 迁移而来）。</summary>
     string ArchiveRoot { get; }
 
-    /// <summary>读取实时状态。文件不存在或已损坏时返回 <see langword="null"/>。</summary>
-    /// <returns>当前运行记录，或 <see langword="null"/>。</returns>
-    RunRecord? ReadCurrent();
-
-    /// <summary>
-    /// 原子重写实时状态（机制 8）。每次状态变化都应调用，管理端据此显示进度。
-    /// </summary>
-    /// <param name="record">当前运行记录。</param>
-    void WriteCurrent(RunRecord record);
-
-    /// <summary>
-    /// 归档一次已完成的运行，并清理超出上限的旧文件（FR-5.13：保留最近 30 次）。
-    /// </summary>
-    /// <param name="record">已完成的运行记录，<see cref="RunRecord.RunId"/> 必须非空。</param>
+    /// <summary>归档一轮刚跑完的运行记录；<see cref="RunRecord.RunId"/> 是幂等键（FR-5.13）。</summary>
+    /// <param name="record">刚跑完的那一轮记录。</param>
     void Archive(RunRecord record);
 
-    /// <summary>按开始时间倒序读取最近若干份归档，供调度日志页与失败连击统计使用（FR-8.3）。</summary>
-    /// <param name="maxCount">最多读取数量。</param>
-    /// <returns>倒序排列（最新在前）的运行记录集合；无归档时为空集合。</returns>
+    /// <summary>按开始时刻倒序读取最近若干份已归档记录（日志页；失败时按空列表处理，FR-8.3）。</summary>
+    /// <param name="maxCount">最多读取的条数。</param>
+    /// <returns>最近若干轮记录；无可用归档时为空列表。</returns>
     IReadOnlyList<RunRecord> ReadRecent(int maxCount);
 }

@@ -1,9 +1,9 @@
 using System.Runtime.InteropServices;
 
-namespace DelayStart.Scheduler;
+namespace DelayStart.Core.Launch;
 
 /// <summary>
-/// <see cref="NativeMethods"/> 的清单资源读取面（D70）：从目标 exe 里读 RT_MANIFEST，
+/// <see cref="LaunchNative"/> 的清单资源读取面（D70）：从目标 exe 里读 RT_MANIFEST，
 /// 判 <c>uiAccess</c> 声明 —— 只读资源，不执行任何目标代码。
 /// </summary>
 /// <remarks>
@@ -11,8 +11,12 @@ namespace DelayStart.Scheduler;
 /// 🔴 必须 <c>LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE</c>：
 /// 只把 PE 当数据文件映射（不重定位、不执行 DllMain、不加载依赖），读资源零副作用。
 /// </para>
+/// <para>
+/// v0.6.1 从调度端下沉到 Core，随 <see cref="DeElevatedProcessLauncher"/> 一起来 ——
+/// uiAccess 判定是那条降权链的一个分支，两个调用方共用同一份。
+/// </para>
 /// </remarks>
-internal static partial class NativeMethods
+internal static unsafe partial class LaunchNative
 {
     /// <summary>RT_MANIFEST 资源类型 ID（winuser.h：CREATEPROCESS_MANIFEST_RESOURCE_ID = 1）。</summary>
     private static readonly nint RtManifestType = 24;
@@ -59,12 +63,9 @@ internal static partial class NativeMethods
                     continue;
                 }
 
-                unsafe
-                {
-                    // 清单通常 UTF-8（可带 BOM）；按 UTF-8 解码，BOM 由 GetString 处理为 U+FEFF，
-                    // 对标签正则无影响。
-                    return System.Text.Encoding.UTF8.GetString((byte*)pointer, (int)size);
-                }
+                // 清单通常 UTF-8（可带 BOM）；按 UTF-8 解码，BOM 由 GetString 处理为 U+FEFF，
+                // 对标签正则无影响。
+                return System.Text.Encoding.UTF8.GetString((byte*)pointer, (int)size);
             }
 
             return null;

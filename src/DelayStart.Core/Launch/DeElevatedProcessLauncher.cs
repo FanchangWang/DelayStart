@@ -3,17 +3,23 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 using DelayStart.Core.Abstractions;
-using DelayStart.Core.Launch;
 using DelayStart.Core.Models;
 using DelayStart.Core.Serialization;
 using DelayStart.Core.Services;
 
-namespace DelayStart.Scheduler;
+namespace DelayStart.Core.Launch;
 
 /// <summary>
-/// 调度端进程启动器（D40，2026-09-20 用户批复）：提权调度端**亲自降权**启动普通用户条目。
+/// 进程启动器（D40，2026-09-20 用户批复）：提权进程**亲自降权**启动普通用户条目。
 /// </summary>
 /// <remarks>
+/// <para>
+/// 🔴 <b>v0.6.1 从调度端下沉到 Core</b>，因为它现在有两个调用方：调度端（每条计划）与
+/// 管理端（延时启动页每行的「启动」按钮）。两者必须走<b>同一份</b>实现 —— 管理端同样是
+/// 提权进程（D20），若手写第二份"直接 Process.Start"，标着「普通用户」的条目手动点一下
+/// 就会拿到 High 令牌，而登录那一轮是 0x2000 Medium。症状是"登录时启动得好好的，
+/// 手动点一下行为变了"，极难归因。
+/// </para>
 /// <para>
 /// <b>三条路由</b>：
 /// <list type="bullet">
@@ -67,7 +73,7 @@ namespace DelayStart.Scheduler;
 /// 一律判本条目失败并继续下一条 —— 绝不退回"用提权令牌启动"。
 /// </para>
 /// </remarks>
-internal sealed class DeElevatedProcessLauncher : IProcessLauncher
+public sealed class DeElevatedProcessLauncher : IProcessLauncher
 {
     /// <summary>等待交互式桌面（shell 窗口）就绪的上限（用户批复 D4：最多 10 秒）。</summary>
     private static readonly TimeSpan ShellWaitTimeout = TimeSpan.FromSeconds(10);
@@ -208,7 +214,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
         finally
         {
-            NativeMethods.CloseHandle(primaryToken);
+            LaunchNative.CloseHandle(primaryToken);
         }
     }
 
@@ -312,7 +318,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             return false;
         }
 
-        var manifest = NativeMethods.TryReadEmbeddedManifest(path);
+        var manifest = LaunchNative.TryReadEmbeddedManifest(path);
         return manifest is not null && UiAccessManifest.HasUiAccessFlag(manifest);
     }
 
@@ -441,7 +447,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
         finally
         {
-            NativeMethods.CloseHandle(primaryToken);
+            LaunchNative.CloseHandle(primaryToken);
             TryDeleteDirectory(brokerTempDir);
         }
     }
@@ -607,7 +613,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
         finally
         {
-            NativeMethods.CloseHandle(primaryToken);
+            LaunchNative.CloseHandle(primaryToken);
         }
     }
 
@@ -673,7 +679,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
         finally
         {
-            NativeMethods.CloseHandle(primaryToken);
+            LaunchNative.CloseHandle(primaryToken);
         }
     }
 
@@ -715,14 +721,14 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             return 0;
         }
 
-        if (NativeMethods.GetWindowThreadProcessId(shellWindow, out var shellProcessId) == 0)
+        if (LaunchNative.GetWindowThreadProcessId(shellWindow, out var shellProcessId) == 0)
         {
             Fail("GetWindowThreadProcessId", label);
             return 0;
         }
 
-        var shellProcess = NativeMethods.OpenProcess(
-            NativeMethods.ProcessQueryLimitedInformation, false, shellProcessId);
+        var shellProcess = LaunchNative.OpenProcess(
+            LaunchNative.ProcessQueryLimitedInformation, false, shellProcessId);
 
         if (shellProcess == 0)
         {
@@ -733,8 +739,8 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         try
         {
             // 先只申请 TOKEN_DUPLICATE，最终权限在 DuplicateTokenEx 时再要（Chromium 同款组合）。
-            if (!NativeMethods.OpenProcessToken(
-                    shellProcess, NativeMethods.TokenDuplicate, out var shellToken))
+            if (!LaunchNative.OpenProcessToken(
+                    shellProcess, LaunchNative.TokenDuplicate, out var shellToken))
             {
                 Fail("OpenProcessToken", label);
                 return 0;
@@ -743,18 +749,18 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             try
             {
                 const uint duplicateAccess =
-                    NativeMethods.TokenQuery |
-                    NativeMethods.TokenAssignPrimary |
-                    NativeMethods.TokenDuplicate |
-                    NativeMethods.TokenAdjustDefault |
-                    NativeMethods.TokenAdjustSessionId;
+                    LaunchNative.TokenQuery |
+                    LaunchNative.TokenAssignPrimary |
+                    LaunchNative.TokenDuplicate |
+                    LaunchNative.TokenAdjustDefault |
+                    LaunchNative.TokenAdjustSessionId;
 
-                if (!NativeMethods.DuplicateTokenEx(
+                if (!LaunchNative.DuplicateTokenEx(
                         shellToken,
                         duplicateAccess,
                         0,
-                        NativeMethods.SecurityImpersonation,
-                        NativeMethods.TokenPrimaryType,
+                        LaunchNative.SecurityImpersonation,
+                        LaunchNative.TokenPrimaryType,
                         out var primaryToken))
                 {
                     Fail("DuplicateTokenEx", label);
@@ -765,12 +771,12 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             }
             finally
             {
-                NativeMethods.CloseHandle(shellToken);
+                LaunchNative.CloseHandle(shellToken);
             }
         }
         finally
         {
-            NativeMethods.CloseHandle(shellProcess);
+            LaunchNative.CloseHandle(shellProcess);
         }
     }
 
@@ -797,16 +803,16 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
 
         // Desktop/Environment 都留 0：不指定 winsta0\default，也不加载用户配置 ——
         // 这两项正是实测里 CreateProcessWithTokenW 失败的诱因之一。
-        var startupInfo = new NativeMethods.StartupInfoW
+        var startupInfo = new LaunchNative.StartupInfoW
         {
-            CbSize = (uint)Marshal.SizeOf<NativeMethods.StartupInfoW>(),
+            CbSize = (uint)Marshal.SizeOf<LaunchNative.StartupInfoW>(),
         };
 
         unsafe
         {
             fixed (char* commandLinePointer = commandLine)
             {
-                if (!NativeMethods.CreateProcessWithTokenW(
+                if (!LaunchNative.CreateProcessWithTokenW(
                         primaryToken,
                         0,
                         applicationName,
@@ -832,8 +838,8 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
                     return LaunchOutcome.Failure(message);
                 }
 
-                NativeMethods.CloseHandle(processInfo.Thread);
-                NativeMethods.CloseHandle(processInfo.Process);
+                LaunchNative.CloseHandle(processInfo.Thread);
+                LaunchNative.CloseHandle(processInfo.Process);
 
                 return LaunchOutcome.Success(checked((int)processInfo.ProcessId));
             }
@@ -843,7 +849,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// <summary>等交互式桌面就绪；已就绪则立即返回（正常路径不阻塞）。</summary>
     private nint WaitForShellWindow()
     {
-        var window = NativeMethods.GetShellWindow();
+        var window = LaunchNative.GetShellWindow();
         if (window != 0)
         {
             return window;
@@ -855,7 +861,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         {
             Thread.Sleep(ShellPollInterval);
 
-            window = NativeMethods.GetShellWindow();
+            window = LaunchNative.GetShellWindow();
             if (window != 0)
             {
                 _log.Info("交互式桌面已就绪（shell 窗口出现）。");
@@ -883,9 +889,9 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
         {
             using var current = Process.GetCurrentProcess();
 
-            if (!NativeMethods.OpenProcessToken(
+            if (!LaunchNative.OpenProcessToken(
                     current.Handle,
-                    NativeMethods.TokenAdjustPrivileges | NativeMethods.TokenQuery,
+                    LaunchNative.TokenAdjustPrivileges | LaunchNative.TokenQuery,
                     out var token))
             {
                 _log.Warn($"打开本进程令牌失败，跳过特权启用（Win32Error={Marshal.GetLastWin32Error()}）。");
@@ -894,24 +900,24 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
 
             try
             {
-                if (!NativeMethods.LookupPrivilegeValueW(0, SeImpersonatePrivilege, out var luid))
+                if (!LaunchNative.LookupPrivilegeValueW(0, SeImpersonatePrivilege, out var luid))
                 {
                     _log.Warn($"取 {SeImpersonatePrivilege} 的 LUID 失败（Win32Error={Marshal.GetLastWin32Error()}）。");
                     return;
                 }
 
-                var state = new NativeMethods.TokenPrivileges
+                var state = new LaunchNative.TokenPrivileges
                 {
                     PrivilegeCount = 1,
                     Luid = luid,
-                    Attributes = NativeMethods.SePrivilegeEnabled,
+                    Attributes = LaunchNative.SePrivilegeEnabled,
                 };
 
-                NativeMethods.AdjustTokenPrivileges(
+                LaunchNative.AdjustTokenPrivileges(
                     token,
                     false,
                     ref state,
-                    (uint)Marshal.SizeOf<NativeMethods.TokenPrivileges>(),
+                    (uint)Marshal.SizeOf<LaunchNative.TokenPrivileges>(),
                     0,
                     0);
 
@@ -929,7 +935,7 @@ internal sealed class DeElevatedProcessLauncher : IProcessLauncher
             }
             finally
             {
-                NativeMethods.CloseHandle(token);
+                LaunchNative.CloseHandle(token);
             }
         }
         catch (Exception ex)

@@ -58,7 +58,7 @@ public sealed partial class MainWindow : Window
         _themeService.ThemeChanged += theme =>
             RootGrid.RequestedTheme = ThemeService.ToElementTheme(theme);
 
-        // 右下角通知：广播 → 显示 → 3.5 秒后自动消失；连发时重置计时。
+  // 广播通道与定时器；自动消失时长见 ToastService.SuccessSeconds（成功 3 秒，失败不自动消失）。
         toastService.Requested += ShowToast;
 
         ExtendsContentIntoTitleBar = true;

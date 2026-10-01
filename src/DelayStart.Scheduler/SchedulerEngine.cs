@@ -84,11 +84,16 @@ internal sealed class SchedulerEngine
     /// 也发"启动守卫"（<b>继承提权</b>拉起 <c>DelayStart.Guard.exe</c>）。
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>本类不是 <see cref="IProcessLauncher"/></b>：接口住在 Core 且只有
-    /// <c>Launch(DelayedItem)</c> 一个成员，够不着 <c>LaunchResultEvaluator</c> 的纯判定要能单测；
-    /// 而 Core 的 AOT 门禁不允许它引用 <c>Process.Start</c>。降权探路需要大量
-    /// <c>LaunchAuxiliary</c> / <c>LaunchElevatedAuxiliary</c> 的强类型参数和几处
-    /// <c>CreateProcess</c> 的细节，薄封装更适合只留在 Scheduler 里，依赖方向上零破例。
+    /// 🔴 <b>本类不是 <see cref="IProcessLauncher"/></b>：那个接口住在 Core 且只有
+    /// <c>Launch(DelayedItem)</c> 一个成员，是为了 <c>LaunchResultEvaluator</c> 的纯判定能单测。
+    /// 而降权探路需要大量 <c>LaunchAuxiliary</c> / <c>LaunchElevatedAuxiliary</c> 的强类型参数
+    /// 和几处 <c>CreateProcess</c> 的细节 —— v0.6.1 已把整条链下沉到
+    /// <c>Core\Launch\DeElevatedProcessLauncher</c>，两边共用同一份实现。
+    /// <para>
+    /// 🔴 它**住在 Core** 是被依赖方向逼出来的，不是随手放的：调度端绝不引用 Management
+    /// （否则 NativeAOT 发布直接失败），而它现在管理端也要用（F11 每行的「启动」按钮）。
+    /// 一个"两边都要用、谁都不能引用谁"的东西只能住 Core。
+    /// </para>
     /// <para>
     /// 字段懒建还有个并发理由：调度线程与 fire-and-forget 的收尾路径都可能在首次使用时
     /// 撞上，构造提前到构造函数里既无必要也容易在它之前就去碰配置。
@@ -807,7 +812,7 @@ internal sealed class SchedulerEngine
 
         _log.Info($"调度结束：{_record.RunId}。");
 
-        // 🔴 失败计数要**同时**包含"起停表里启动失败的"与"预筛时目标就没了���"
+        // 🔴 失败计数要**同时**包含"起停表里启动失败的"与"预筛时目标就没了的"（P1-4）：
         // （P1-4）：后者写进了归档但不在 `_items` 里，只数前者的话，
         // 5 项配了 3 项启动成功、2 项目标没了，通知却说"3 项全部成功" ——
         // 用户被告知了一个与归档不一致的结论。

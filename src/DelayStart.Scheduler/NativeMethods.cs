@@ -20,12 +20,9 @@ internal static unsafe partial class NativeMethods
     // ---- 常量 ----
 
     public const uint WmDestroy = 0x0002;
-    public const uint WmPaint = 0x000F;
     public const uint WmTimer = 0x0113;
-    public const uint WmActivate = 0x0006;
     public const uint WmLButtonDown = 0x0201;
     public const uint WmLButtonUp = 0x0202;
-    public const uint WmEraseBkgnd = 0x0014;
     public const ushort WaInactive = 0;
 
     /// <summary>鼠标在窗口内移动（面板用它首帧判定"指针已进入"）。</summary>

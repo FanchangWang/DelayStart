@@ -38,15 +38,21 @@ internal static class Program
     private static int Main()
     {
         // ── 第 0 步：入口自检 ────────────────────────────────────────────────
-        // 🔴 单实例互斥**不在这里**：它已下沉到 GuardService.RunOnce() 内部（G3）。
-        // 守卫是三个入口里最晚才出现的那个 —— 管理端启动时也会跑一次巡检 ——
-        // 保护放在这里就只护住了三个入口中的一个。
+   // 🔴 单实例互斥**不在这里**：它已下沉到 GuardService.RunOnce() 内部（G3）。
+   // 守卫是几个入口里最晚才出现的那个 —— 管理端加载自启动项数据时也会跑一次巡检、
+        // 调度收尾后还会 fire-and-forget 拉一次 —— 保护放在这里就只护住了其中一个。
 
         if (!ElevationCheck.IsElevated())
         {
-            GuardLog.Error("守卫未以管理员身份运行（疑似手动双击启动），自动退出。");
-            return 0;
-        }
+   // ⚠️ 这里的"吵"是有代价的：用户连点几次双击，每次都会先写一行
+      //「守卫未提权」错误日志。互斥体下沉之后这个顺序被反转了（原先是先抢互斥再查提权），
+   // 而反转的理由是对的 —— 保护要覆盖所有入口，就不能只护在这里。
+      // 所以这里改成 Info：手动双击不是故障，是一次正常的、被拒绝的尝试。
+    // 真出问题时（计划任务被改成非提权、UAC 被关）看的是**计划任务自己的历史**，
+        // 不是这几行。
+    GuardLog.Info("守卫未以管理员身份运行（疑似手动双击启动），本次巡检已跳过。");
+  return 0;
+     }
 
         AppDomain.CurrentDomain.UnhandledException += static (_, e) => GuardLog.Error(
             e.ExceptionObject as Exception ?? new InvalidOperationException("非 Exception 的未捕获错误"),

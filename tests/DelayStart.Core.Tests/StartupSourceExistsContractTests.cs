@@ -74,7 +74,11 @@ public sealed class StartupSourceExistsContractTests
         //     legitimately 要 catch —— 按全文断言会把正确的代码判成错的。
         var body = ReadMethodBody(sourceName, "Exists");
 
-        Assert.DoesNotContain("catch", body, StringComparison.Ordinal);
+        // 🔴 匹配的是**真正的 catch 子句**，而不是"catch"这个词 ——
+  // 否则方法体里任何一句提到 catch 的注释都会让这条变红，
+        // 而那是一次无害的注释改动。剥注释是另一半：不然"没 catch"这条
+  // 会被一句提到它的注释变成红的。
+        Assert.DoesNotMatch(@"\bcatch\s*[\(\{]", body);
     }
 
     [Theory]
@@ -86,7 +90,9 @@ public sealed class StartupSourceExistsContractTests
         //   改键的 ACL 与最后写入时间，权限不足时还会抛 UnauthorizedAccessException ——
         //   于是"读一下在不在"变成了"改一下系统"，即**读操作产生了系统写入**
         //   （违反硬约束 7）。
-        Assert.Contains("writable: false", ReadMethodBody(sourceName, "Exists"), StringComparison.Ordinal);
+        // 用正则容忍 `writable:false` 与 `writable: false` 两种写法 ——
+    // 同一份代码，两种拼写，行为完全一样。
+        Assert.Matches(@"writable:\s*false", ReadMethodBody(sourceName, "Exists"));
     }
 
     [Theory]
@@ -100,7 +106,7 @@ public sealed class StartupSourceExistsContractTests
         //
         //   注意这与"拿不准就抛"的保守化方向**相反**，但在这里是安全的：
         //   多试几个候选名只会更常常答 true（更宽松），不会误判 false。
-        Assert.Contains("GetCandidateNames", ReadMethodBody(sourceName, "Exists"), StringComparison.Ordinal);
+  Assert.Contains("GetCandidateNames", ReadMethodBody(sourceName, "Exists"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -137,36 +143,19 @@ public sealed class StartupSourceExistsContractTests
             => throw new InvalidOperationException($"Exists 不该调用链接解析器（{shortcutPath}）。");
     }
 
-    /// <summary>
-    /// 读某个来源里<strong>某一个方法的方法体</strong>（用于断言"实现形状"这类
-    /// 无法在单测里构造的契约）。
-    /// </summary>
-    /// <param name="sourceName">来源类名。</param>
-    /// <param name="methodName">方法名。</param>
-    /// <returns>从方法签名到其闭合大括号之间的源码文本。</returns>
-    /// <remarks>
-    /// 🔴 必须按方法切，不能按文件切：这些来源类里还有收集、建条目、写状态等方法，
-    /// 它们**本来就该** catch 各自的异常。按文件断言会把正确的代码判成错的 ——
-    /// 而一个"永远红"的测试等于没有测试。
-    /// </remarks>
-    private static string ReadMethodBody(string sourceName, string methodName)
+  private static string ReadMethodBody(string sourceName, string methodName)
     {
-        var path = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "DelayStart.Management", "Sources", sourceName + ".cs"));
-
-        Assert.True(File.Exists(path), $"找不到来源源码：{path}");
-
+    var path = LocateSource(sourceName);
         var lines = File.ReadAllLines(path);
-        var start = -1;
+   var start = -1;
         for (var i = 0; i < lines.Length; i++)
         {
-            if (lines[i].Contains($"public bool {methodName}(", StringComparison.Ordinal))
-            {
-                start = i;
-                break;
+  if (lines[i].Contains($"public bool {methodName}(", StringComparison.Ordinal))
+     {
+          start = i;
+       break;
             }
-        }
+     }
 
         Assert.True(start >= 0, $"{sourceName}.{methodName} 不在 {path} 里");
 
@@ -174,19 +163,77 @@ public sealed class StartupSourceExistsContractTests
         var depth = 0;
         var opened = false;
         for (var i = start; i < lines.Length; i++)
-        {
-            foreach (var c in lines[i])
-            {
-                if (c == '{') { depth++; opened = true; }
-                else if (c == '}') { depth--; }
-            }
+  {
+          foreach (var c in lines[i])
+       {
+          if (c == '{') { depth++; opened = true; }
+           else if (c == '}') { depth--; }
+          }
 
-            if (opened && depth == 0)
-            {
-                return string.Join('\n', lines[start..(i + 1)]);
-            }
-        }
+    if (opened && depth == 0)
+   {
+    return StripComments(string.Join('\n', lines[start..(i + 1)]));
+ }
+    }
 
         throw new InvalidOperationException($"{sourceName}.{methodName} 的方法体没配平（源码格式异常）。");
+    }
+
+    /// <summary>剥掉行注释与块注释，只留代码本身。</summary>
+    /// <param name="source">源码文本。</param>
+    /// <returns>去掉注释后的文本。</returns>
+    /// <remarks>
+    /// 🔴 断言"实现形状"时**必须**先剥注释，否则一句提到 <c>catch</c> 或 <c>writable</c>
+    /// 的说明文字就会把断言带偏 —— 那既会让正确的代码因为注释改动而变红，
+    /// 也会让"没有 catch"这条被一句提到它的注释满足。
+    /// 断言要问的是代码做了什么，不是注释说了什么。
+    /// </remarks>
+    private static string StripComments(string source)
+    {
+    var withoutBlock = System.Text.RegularExpressions.Regex.Replace(
+            source,
+     @"/\*.*?\*/",
+            " ",
+    System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        return string.Join(
+            '\n',
+     withoutBlock.Split('\n').Select(static line =>
+            {
+                var idx = line.IndexOf("//", StringComparison.Ordinal);
+    return idx >= 0 ? line[..idx] : line;
+          }));
+    }
+
+    /// <summary>定位某个来源类的源码文件。</summary>
+  /// <param name="sourceName">来源类名。</param>
+    /// <returns>完整路径。</returns>
+    /// <remarks>
+    /// 🔴 <b>从 <see cref="AppContext.BaseDirectory"/> 往上找，而不是数固定层数的 <c>..</c></b>。
+    /// 数层数的那种写法（原先是 <c>../../../../../src/...</c>）会在下面这些情况下
+    /// **因非结构性原因**失败，而每次失败都长得像"契约被破坏了"：
+    /// ① 输出目录多一层或少一层（<c>--artifacts-path</c>、换 TFM）；
+    /// ② 跑的是发布出来的测试二进制；
+    /// ③ 单仓库之外的打包方式。
+    /// <para>
+    /// 认的是 <c>src\DelayStart.Management\Sources\{name}.cs</c> 这个**实际存在的东西**，
+    /// 找到为止；找不到就明确报出来，而不是让后面那句读取抛一个含义不明的异常。
+    /// </para>
+    /// </remarks>
+    private static string LocateSource(string sourceName)
+    {
+      var relative = Path.Combine("src", "DelayStart.Management", "Sources", sourceName + ".cs");
+
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+    var candidate = Path.Combine(dir.FullName, relative);
+     if (File.Exists(candidate))
+  {
+       return candidate;
+       }
+   }
+
+        throw new FileNotFoundException(
+            $"从 {AppContext.BaseDirectory} 往上找不到 {relative}（本测试需要仓库源码）。");
     }
 }

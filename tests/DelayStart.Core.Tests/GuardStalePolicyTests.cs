@@ -89,15 +89,18 @@ public sealed class GuardStalePolicyTests
         // 🔴 判不出存在性时必须按"在"处理（D87/D90：兜底只能更宽松）。
         // UWP 存的是外壳解析名、计划任务 action 可能是裸命令名 ——
         // 对它们 File.Exists 必然为 false，判"目标没了"就是**静默停摆**。
-        foreach (var path in new[]
-                 {
-                     "shell:AppsFolder\\Package_abc!App",
-                     "chrome.exe",
-                     "relative\\tool.exe",
-                     string.Empty,
-                 })
+        foreach (var (path, index) in new[]
         {
-            var stale = GuardStalePolicy.SelectStaleItems([Item($"registry:hkcu:{path.GetHashCode()}", path: path)], [], []);
+            "shell:AppsFolder\\Package_abc!App",
+            "chrome.exe",
+            "relative\\tool.exe",
+            string.Empty,
+        }.Select(static (value, i) => (value, i)))
+        {
+            // 🔴 用序号而不是 `path.GetHashCode()`（审计 P3-8）：字符串哈希在 .NET 上
+            // 是**每次进程随机加盐**的，于是失败时打印出来的 id 复现不了 ——
+            // 一个不可复现的失败等于要靠猜。序号也顺带让断言消息能指出是哪一条输入。
+            var stale = GuardStalePolicy.SelectStaleItems([Item($"registry:hkcu:{index}", path: path)], [], []);
 
             var entry = Assert.Single(stale);
             Assert.Equal(StaleKind.SourceLost, entry.Kind);

@@ -49,8 +49,7 @@
 | 法定日历模型 | `Models/HolidayCalendar.cs`（`IsWorkday` 在未覆盖年份**抛异常**，调用方必须降级） |
 | 法定日历读写与校验 | `Services/HolidayCalendarStore.cs`（`MinimumEntryCount = 20`） |
 | 节假日归一化落盘格式 | `Serialization/HolidayCalendarDocument.cs` + `HolidayJsonContext` |
-| 收尾判据（弹不弹面板 / 退不退出） | `Services/CompletionPolicy.cs` |
-| 「跳过剩余」可跳判定 | `Services/SkipPolicy.cs` |
+| 「跳过剩余」可跳判定（v0.6.1 起不再按入口分流，只剩托盘菜单一个入口） | `Services/SkipPolicy.cs` |
 | 同一次运行内的重试判定 | `Services/RetryPolicy.cs` |
 | 延时计算（绝对时刻语义） | `Services/DelayCalculator.cs` |
 | 条目稳定主键 | `Services/ItemKeyBuilder.cs` |
@@ -104,9 +103,8 @@
 |---|---|
 | 调度循环 / 时序 / 收尾 / 落盘 | `SchedulerEngine.cs` |
 | 进行中状态（条目运行时状态） | `SchedulerRuntimeItem.cs` |
-| 托盘图标与右键菜单 | `TrayIconHost.cs` |
-| 面板绘制（GDI 自绘，「钉」+ 失焦关闭） | `PanelWindow.cs` |
-| 降权启动（外壳令牌 → CPWT；含 `LaunchAuxiliary` 通用降权拉起入口） | `DeElevatedProcessLauncher.cs` |
+| 托盘图标与右键菜单（左右键都弹同一个菜单，F8） | `TrayIconHost.cs` |
+| 🔴 **降权启动链**（外壳令牌 → CPWT）：`Launch`（按条目路由）/ `LaunchAuxiliary`（降权拉辅助进程）/ `LaunchElevatedAuxiliary`（继承提权） | **`Core/Launch/DeElevatedProcessLauncher.cs`** —— v0.6.1 从调度端下沉：调度端（每条计划）与管理端（F11 每行「启动」）共用同一条，两边都只能依赖 Core 才放得下（D128） |
 | Win32 声明（🔴 注意模块归属） | `NativeMethods.cs` |
 | 图标资源按尺寸取用 | `IconResources.cs` |
 
@@ -165,7 +163,7 @@
 - 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
 - 🔴 构建前先关掉正在运行的 `DelayStart.exe`，否则报 `MSB3021/3027`。
-- **验收口径**：Release 0 警告 0 错误 + 668 个用例全绿。
+- **验收口径**：Release 0 警告 0 错误 + **705** 个用例全绿。
 
 ---
 
@@ -260,9 +258,10 @@
 - ❌ 用 `DayOfWeek` 的数值直接做星期位运算 —— `WeekdaySet` 是**周一 = bit0**，而 .NET 的 `DayOfWeek.Sunday == 0`，两者**不一致**；"位错位一天"会在每个星期上都成立且**不会报错**，只能靠单测锁（`WeekdaySets` 是唯一换算处）。
 - ❌ 让**引用失效**的周期兜底成"不启动"，或让**该年无节假日数据**兜底成"不启动" —— 兜底方向**只能更宽松，绝不更严格**：静默停摆是最坏的一类失败（"为什么今天没启动"是所有 bug 里最难查的），宁可近似 + 把近似说破（D87 / D90）。
 - ❌ 拿 `WeekdayGrid` 的**只读形态**当"纯展示"控件 —— 它看起来能点、点下去什么都不变（假交互比没有交互更糟）；延时弹窗里"包含哪些天"必须是一行**纯文字**（FR-15.23 / `pitfalls.md` 十四）。
-- ❌ 在收尾判定（`CompletionPolicy`）里读 `NotifyMode`，或让收尾自动弹面板 —— D83 起"面板是面板，通知是通知"：通知归 `NotifyDecision`，面板只跟随用户的手（N4）。
+- ❌ 让收尾读 `NotifyMode` 或让收尾自动弹任何窗口 —— D83 起"通知是通知"（通知归 `NotifyDecision`），v0.6.1 起更没有面板可弹（D124），收尾只剩"什么时候退"一个决定。
 - ❌ 给 `NotifyBroker` 开 AOT / 让它引用 `Management` / 让它自行注册 AUMID —— 它是"读作业 JSON → 发通知 → 退出"的哑进程（N1/D83）。
 - ❌ 给状态文字加 `✓` `✗` `◌` `✅` 这类前缀去"凑等宽" —— 它们**不在同一套度量里**（`✓`/`✗` 约 1 em，`◌` 更窄，emoji 是彩色、更宽、还会被 fallback 到 Segoe UI Emoji），逐字符试探字宽是个填不满的坑。状态列一律**纯中文**、差别用**颜色**表达（D98 / `pitfalls.md` 十九）。
+- ❌ 让收尾读 `NotifyMode` 或让收尾自动弹任何窗口 —— D83 起「面板是面板，通知是通知」，v0.6.1 起更没有面板可弹（D124），收尾只剩"什么时候退"一个决定。
 - ❌ 靠"给字符塞空格 / 换个更宽的符号"去让两种形态看起来一样宽 —— 对齐靠**布局给位置**，不是靠字数。同一行里"按钮 ↔ 文字"会互换的那一格，用**固定列宽**先把位置占住（`设为默认` 按钮 / `当前默认` 文字共用中间一个 88px 列），最右那列才永远对得齐（2026-09-23 批复 24 / D102）。
 - ❌ 用 `ToggleButton` 去当展开/折叠的**装饰性三角** —— 它自带背景、边框和悬停态，看起来就是一颗按钮，用户点之前得先猜"这颗按钮干什么"，而它真正的作用只是指示符。装饰性图标用 `FontIcon`，把展开/收起交给包住**整行**的 `Button`（`SettingsPage` 的 `SectionHeaderButtonStyle`，卡面由按钮自己画，见下一条）：点哪儿都在同一件事上，也就不需要"回写按钮选中态"那层补丁（2026-09-23 批复 24 / D101）。
 - ❌ 给"整行可点"的元素**外面再套一层带 `Padding` 的容器**（`Border` 里塞 `Button`）—— 按钮的悬停高亮只会铺在容器的内边距以内（四周各让出 16 / 14、圆角还比卡片小一圈），用户看到的是"**文字那一小块变色了**"、整张卡片毫无反应，而他要的正相反：鼠标在哪、哪个面就亮。要整行可点就让**按钮自己画那个面** —— 卡面 / 描边 / 圆角 / 内边距全部写在按钮的 `Style` 上，`BasedOn="{StaticResource DefaultButtonStyle}"` 保住悬停 / 按下 / 禁用三态（2026-09-23 批复 25 / D104；`DelayPage.RowButtonStyle` 是同一手法）。

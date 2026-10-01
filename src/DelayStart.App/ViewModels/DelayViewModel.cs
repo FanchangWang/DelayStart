@@ -129,6 +129,13 @@ public sealed partial class DelayViewModel : ObservableObject
 
         DelayPresets = new Settings().DelayPresets;
         DefaultPreset = new Settings().DefaultPreset;
+
+        // 🔴 构造末尾探一次"调度端是不是已经在跑"，**并且必须走属性而不是直接写后备字段**：
+        // 走属性才会挂上 `WatchSchedulerExitAsync`。原先那个观察循环只在「点运行调度」
+        // 那条路上启动，于是"调度端在别处已经跑着、我们只是切进来看见它"这种情况
+        // 没有任何循环跟着 —— 调度端结束后按钮一直禁用，直到用户再切一次页
+        // （2026-10-02 用户实测）。放在构造末尾是因为 `_log` 必须先就位。
+        IsSchedulerRunning = SchedulerProbe.IsSchedulerRunning();
     }
 
     /// <summary>列表内容，按「延时 → 顺序」排序（与调度端的发起顺序一致）。</summary>
@@ -744,9 +751,45 @@ public sealed partial class DelayViewModel : ObservableObject
     [ObservableProperty]
     public partial bool IsSchedulerBusy { get; set; }
 
-    /// <summary>调度端当前是否已在运行（按钮的禁用依据，构造时探一次）。</summary>
-    [ObservableProperty]
-    public partial bool IsSchedulerRunning { get; set; } = SchedulerProbe.IsSchedulerRunning();
+    /// <summary>调度端当前是否已在运行（按钮的禁用依据）。</summary>
+    /// <remarks>
+    /// 🔴 <b>手工写属性而不是 <c>[ObservableProperty]</c></b>：这个属性的每一次变成
+    /// <see langword="true"/> 都必须**保证有一个观察循环跟着**，而源生成器给不了这个保证。
+    /// <para>
+    /// 起因（2026-10-02 用户实测）：<c>DelayViewModel</c> 是 <c>AddTransient</c>，
+    /// 每次进页都是**全新实例**。原先观察循环只在「点运行调度」那条路上启动，
+    /// 于是：进页时调度端正在跑 ⇒ 字段初始化把本属性置 <see langword="true"/>
+    /// ⇒ **没有任何循环在跑** ⇒ 调度端结束后按钮一直禁用，
+    /// 直到用户再切一次页（新实例重新探一次）才恢复。
+    /// </para>
+    /// <para>
+    /// 所以判定必须收在 setter 里：谁把它置 true，谁就负责挂上观察；
+    /// 字段初始化那条（构造时探到"正在跑"）与按钮那条共用同一个入口。
+    /// </para>
+    /// </remarks>
+    public bool IsSchedulerRunning
+    {
+        get => _isSchedulerRunning;
+        private set
+        {
+            if (_isSchedulerRunning == value)
+            {
+                return;
+            }
+
+            _isSchedulerRunning = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRunSchedulerAvailable));
+            OnPropertyChanged(nameof(RunSchedulerText));
+
+            if (value)
+            {
+                _ = WatchSchedulerExitAsync();
+            }
+        }
+    }
+
+    private bool _isSchedulerRunning;
 
     /// <summary>「运行调度」按钮此刻该不该可点（审计 P2-1）。</summary>
     /// <remarks>
@@ -767,14 +810,6 @@ public sealed partial class DelayViewModel : ObservableObject
     /// "不知道有没有生效"正是最容易让人重复点击的时刻。
     /// </remarks>
     public string RunSchedulerText => IsSchedulerBusy ? "启动中…" : "运行调度";
-
-    /// <summary><see cref="IsSchedulerRunning"/> 变化时连带刷新按钮可用态与文案。</summary>
-    /// <param name="value">新值。</param>
-    partial void OnIsSchedulerRunningChanged(bool value)
-    {
-        OnPropertyChanged(nameof(IsRunSchedulerAvailable));
-        OnPropertyChanged(nameof(RunSchedulerText));
-    }
 
     /// <summary><see cref="IsSchedulerBusy"/> 变化时连带刷新按钮可用态与文案。</summary>
     /// <param name="value">新值。</param>
@@ -909,6 +944,9 @@ public sealed partial class DelayViewModel : ObservableObject
         if (SchedulerProbe.IsSchedulerRunning())
         {
             _toast.ShowSuccess("调度已在运行中", "本轮已经在执行，无需重复启动。");
+
+            // 🔴 这一句会把观察循环挂上（setter 统一负责），于是"在别处已经跑着"这一种
+            // 状态也能跟着它退出而恢复 —— 不必等用户切走再切回来。
             IsSchedulerRunning = true;
             return;
         }
@@ -931,9 +969,10 @@ public sealed partial class DelayViewModel : ObservableObject
 
             if (await WaitForSchedulerAsync().ConfigureAwait(true))
             {
+                // 🔴 观察循环由 `IsSchedulerRunning` 的 setter 统一挂上（见该属性的说明），
+                // 这里**不要**再单独起一个 —— 两处各起一个就是两个循环各问一次系统。
                 IsSchedulerRunning = true;
                 _toast.ShowSuccess("调度已启动", "本次启动计划正在执行。");
-                _ = WatchSchedulerExitAsync();
             }
             else
             {
@@ -975,21 +1014,56 @@ public sealed partial class DelayViewModel : ObservableObject
     /// </remarks>
     private async Task WatchSchedulerExitAsync()
     {
-        while (IsSchedulerRunning)
+        // 🔴 **防重入**：setter 只在"从 false 变成 true"时启动循环，而
+        // `IsSchedulerRunning = false` 之后又变回 true（新点一次运行调度）就会再来一轮。
+        // 没有这道闸，两条循环会各自每 2 秒问一次系统，白问一倍。
+        if (_watchingSchedulerExit)
         {
-            await Task.Delay(SchedulerExitPollMilliseconds).ConfigureAwait(true);
+            return;
+        }
 
-            if (!SchedulerProbe.IsSchedulerRunning())
+        _watchingSchedulerExit = true;
+        var elapsed = Stopwatch.StartNew();
+
+        try
+        {
+            while (IsSchedulerRunning)
             {
-                IsSchedulerRunning = false;
-                _log.Info("调度端已退出，「运行调度」恢复可用。");
-                return;
+                await Task.Delay(SchedulerExitPollMilliseconds).ConfigureAwait(true);
+
+                if (!SchedulerProbe.IsSchedulerRunning())
+                {
+                    IsSchedulerRunning = false;
+                    _log.Info("调度端已退出，「运行调度」恢复可用。");
+                    return;
+                }
+
+                // 🔴 **兜底上限**。调度端正常会自己收尾退出，但万一它卡住不退出，
+                // 每进一次这一页就会多挂一个永不结束的循环 —— 而 `DelayViewModel` 是
+                // `AddTransient`，这些循环还会把各自的 ViewModel 一起钉在内存里。
+                // 1 小时远长于任何一次正常运行；触发时如实记日志，不静默。
+                if (elapsed.Elapsed > SchedulerWatchCeiling)
+                {
+                    _log.Warn(
+                        $"调度端已持续运行超过 {SchedulerWatchCeiling.TotalHours:F0} 小时仍未退出，"
+                        + "停止观察「运行调度」按钮状态。重新进入本页会重新判定。");
+                    return;
+                }
             }
+        }
+        finally
+        {
+            _watchingSchedulerExit = false;
         }
     }
 
+    private bool _watchingSchedulerExit;
+
     /// <summary>「调度端是否还在跑」的轮询间隔（D138）。</summary>
     private const int SchedulerExitPollMilliseconds = 2000;
+
+    /// <summary>观察循环的兜底上限：调度端卡死不退出时的止损（D138）。</summary>
+    private static readonly TimeSpan SchedulerWatchCeiling = TimeSpan.FromHours(1);
 
     /// <summary>轮询单实例互斥体，等调度端真正接管。</summary>
     /// <returns>在超时前接管为 <see langword="true"/>。</returns>

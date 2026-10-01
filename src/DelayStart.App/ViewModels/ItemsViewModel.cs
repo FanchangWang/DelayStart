@@ -731,67 +731,19 @@ if (RunGuardAlongsideLoad(snapshot))
     /// 发通知，位置相同且内容相同的行一个通知都不发。
     /// </summary>
     /// <remarks>
-    /// 逐位比较用引用相等而不是 <c>Equals</c>：行对象是不可变的（换状态就换新实例），
-    /// 同一个行对象在前后两次筛选里出现就代表它一个字节都没变。走 <c>Equals</c> 只会
-    /// 多算一遍却得到同样的结论。
+    /// 🔴 <b>实现已搬到 Core 的 <see cref="ListSync"/>（D141）</b>。
+    /// 搬走有两个理由，都不是"想复用"：
+    /// <list type="number">
+    /// <item><description>它是纯索引运算，却已经因为写错而在真机上出过两次可见故障。
+    /// 而它错起来**编译期毫无异状** —— 必须有测试工程才钉得住。</description></item>
+    /// <item><description>原先只按"元素该在哪个位置"思考，没按"会发几次通知"思考 ——
+    /// 于是删中间几项时删的是尾部同样多的行，分叉点之后每一格都 Replace，
+    /// 一屏容器全被重建。用户看到的就是「有新增时增量、有移除时全量」
+    /// （2026-10-02 用户实测）。</description></item>
+    /// </list>
     /// </remarks>
     private static void SyncInPlace(ObservableCollection<StartupEntryRow> current, List<StartupEntryRow> desired)
-    {
-        // ① 找到第一个不同的位置。之前的前缀原样不动 —— 这就是"差量"的含义。
-        var start = 0;
-        while (start < current.Count && start < desired.Count && ReferenceEquals(current[start], desired[start]))
-        {
-            start++;
-        }
-
-        // ② 尾部多余的从后往前删：往前删会让后面所有行的索引位移，白发一批通知。
-        while (current.Count > desired.Count)
-        {
-            current.RemoveAt(current.Count - 1);
-        }
-
-        for (var i = start; i < desired.Count; i++)
-        {
-            if (i < current.Count && ReferenceEquals(current[i], desired[i]))
-            {
-                continue;
-            }
-
-            if (i >= current.Count)
-            {
-                current.Add(desired[i]);
-                continue;
-            }
-
-            // ③ 这一行在后面别处已经出现过 ⇒ 它只是**位置变了**，不该重建容器。
-            //   排序一变就是这种情况，而"重建容器"正是行内操作闪烁的来源。
-            //   ObservableCollection<T>.Move（.NET 9+）发的是一条真正的 Move 通知；
-            //   自己用 RemoveAt + Insert 拼则会发两条 —— WinUI 对 Remove 是销毁容器、
-            //   对 Add 是新建容器，于是排一次序整屏行都没了。
-            var existingIndex = IndexOfFrom(current, desired[i], i + 1);
-            if (existingIndex >= 0)
-            {
-                current.Move(existingIndex, i);
-                continue;
-            }
-
-            // ④ 内容确实变了（状态翻转 / 换图标）—— 这一格只能 Replace。
-            current[i] = desired[i];
-        }
-    }
-
-    private static int IndexOfFrom(ObservableCollection<StartupEntryRow> rows, StartupEntryRow target, int startIndex)
-    {
-        for (var i = startIndex; i < rows.Count; i++)
-        {
-            if (ReferenceEquals(rows[i], target))
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
+        => ListSync.Apply(current, desired);
 
     private static int StatusRank(StartupEntryRow row) => row.StatusKind switch
     {

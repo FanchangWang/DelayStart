@@ -59,25 +59,34 @@ public sealed class DelayRow : ObservableObject
         {
             CycleText = string.Empty;
             CycleToolTip = string.Empty;
-            SkipToolTip = string.Empty;
+            NotRunTodayToolTip = string.Empty;
+            NotRunTomorrowToolTip = string.Empty;
             return;
         }
 
-        // 徽标：**所有**周期都显示，包括内置的「每天」（FR-15.21）——
-        // "这一列空缺"会被读成"没设周期"，而默认档恰恰是最常见的值，不能让它看起来像异常。
+        // 周期名：**所有**周期都显示，包括内置的「每天」（FR-15.21）——
+        // "这一格空缺"会被读成"没设周期"，而默认档恰恰是最常见的值，不能让它看起来像异常。
         var name = cycles.NameOf(item.ScheduleCycleId);
-        var skipped = cycles.IsSkipped(item.ScheduleCycleId, out var degraded, out var reason);
+        var skippedToday = cycles.IsSkippedOn(item.ScheduleCycleId, cycles.Today, out var degradedToday, out var reasonToday);
+        var skippedTomorrow = cycles.IsSkippedOn(item.ScheduleCycleId, cycles.Tomorrow, out var degradedTomorrow, out var reasonTomorrow);
 
-        CycleText = degraded ? $"{name} ≈" : name;
+        CycleText = degradedToday || degradedTomorrow ? $"{name} ≈" : name;
         CycleToolTip = CycleInfoProvider.IsDynamic(item.ScheduleCycleId)
             ? $"{name}：以 {cycles.Today.Year} 年国务院放假安排为准，不固定在某几个星期"
             : $"{name}：{cycles.DaysTextOf(item.ScheduleCycleId)}";
 
-        IsSkippedToday = skipped;
-        SkipToolTip = skipped
-            ? $"今天 {cycles.Today:yyyy-MM-dd}（{CycleInfoProvider.NameOfDay(cycles.Today.DayOfWeek)}）不启动"
-                + $"\n周期：{CycleText}\n原因：{reason}"
-                + (degraded ? "\n（该年法定数据不可用，当前按星期规律近似判定）" : string.Empty)
+        // 🔴 **只提示不启动的那天**（v0.6.1 用户决策）：周期列第二、三行分别是
+        // 「今天」「明天」，但"会启动"的那天**留空**。列的语义是"有什么需要注意的"，
+        // 不是"报告全部"—— 每天启动的条目第二三行恒空，「每天」档连第二行都没有，
+        // 所以行高自适应（1–3 行）而不是固定三行。
+        HasNotRunToday = skippedToday;
+        HasNotRunTomorrow = skippedTomorrow;
+
+        NotRunTodayToolTip = skippedToday
+            ? NotRunTip(cycles.Today, reasonToday, degradedToday)
+            : string.Empty;
+        NotRunTomorrowToolTip = skippedTomorrow
+            ? NotRunTip(cycles.Tomorrow, reasonTomorrow, degradedTomorrow)
             : string.Empty;
     }
 
@@ -89,18 +98,43 @@ public sealed class DelayRow : ObservableObject
     /// <summary>周期徽标的悬停说明（周期名 + 包含哪些天 / 随放假安排变动）。</summary>
     public string CycleToolTip { get; }
 
-    /// <summary>
-    /// 今天是否被周期跳过（FR-15.22）。
-    /// </summary>
+    /// <summary>今天不启动时，周期列第二行显示「今天 + 图标」。</summary>
     /// <remarks>
-    /// 🔴 这一行<b>不置灰</b>：整行变淡是「启用 = 关」的视觉语言，
-    /// 两者语义不同（一个是"今天不跑"，一个是"永久不跑"），复用同一个视觉表达
-    /// 只会让人分不清。替代做法是程序名后挂一个红圈斜杠标记，悬停给原因。
+    /// 🔴 **只有不启动才为真**。反向表达是刻意的：XAML 用它控制显隐，
+    /// 而「会启动」不是一个需要告知用户的状态 —— 一行 8 个条目如果每天都写「今天 ✅」，
+    /// 那一列就变成噪声，用户反而看不出哪几行值得注意。
     /// </remarks>
-    public bool IsSkippedToday { get; }
+    public bool HasNotRunToday { get; }
 
-    /// <summary>跳过标记的悬停说明；未跳过时为空串。</summary>
-    public string SkipToolTip { get; }
+    /// <summary>明天不启动时，周期列第三行显示「明天 + 图标」。</summary>
+    /// <remarks>
+    /// 🔴 明天判定因次年法定数据缺失而走「更宽松」（按会启动）时，这里为 <see langword="false"/>
+    /// —— 12-31 看 1-1 必须这样，不能因为缺数据就报「明天不启动」（D87/D90：
+    /// 兜底只能更宽松，静默停摆是最坏的一类失败）。
+    /// </remarks>
+    public bool HasNotRunTomorrow { get; }
+
+    /// <summary>「今天不启动」那一行的悬停说明（写明为什么）；会启动时为空串。</summary>
+    public string NotRunTodayToolTip { get; }
+
+    /// <summary>「明天不启动」那一行的悬停说明（写明为什么）；会启动时为空串。</summary>
+    public string NotRunTomorrowToolTip { get; }
+
+    /// <summary>组装「某天不启动」的悬停说明。</summary>
+    /// <param name="date">那一天。</param>
+    /// <param name="reason">Core 判定给出的中文原因。</param>
+    /// <param name="degraded">是否因缺该年法定数据而按星期近似。</param>
+    /// <returns>tooltip 正文。</returns>
+    /// <remarks>
+    /// 🔴 **实例方法而不是 static**：正文里要用 <see cref="CycleText"/>,
+    /// 而它带「≈」后缀（近似判定）—— 与列里显示的保持一致，
+    /// tooltip 里如果说一个名字、列里显示另一个，用户会以为是两回事。
+    /// </remarks>
+    private string NotRunTip(DateOnly date, string reason, bool degraded)
+        => $"{date:yyyy-MM-dd}（{CycleInfoProvider.NameOfDay(date.DayOfWeek)}）不启动"
+            + $"\n周期：{CycleText}"
+            + $"\n原因：{reason}"
+            + (degraded ? "\n（该年法定数据不可用，当前按星期规律近似判定）" : string.Empty);
 
     /// <summary>原始条目，供移除 / 编辑 / 删除 / 转手动取用。</summary>
     public DelayedItem Item { get; }
@@ -198,6 +232,27 @@ public sealed class DelayRow : ObservableObject
             $"目标程序已不存在，本次不再启动它：{Item.Path}。装回后会自动恢复；也可在此删除或转为手动。",
         _ => string.Empty,
     };
+
+    /// <summary>源丢失（注册表项 / 计划任务 / 启动文件夹里的那个对象不见了）。</summary>
+    public bool IsSourceLost => StaleKind is Core.Services.StaleKind.SourceLost;
+
+    /// <summary>目标丢失（被接管的程序本身不在了）。</summary>
+    public bool IsTargetLost => StaleKind is Core.Services.StaleKind.TargetLost;
+
+    /// <summary>失效徽标的文字（v0.6.1：徽标位置改到程序名之后）。</summary>
+    /// <remarks>
+    /// 🔴 两种失效要分开说，因为处置方向相反：源丢失 ⇒ 去自启动项页重新接管；
+    /// 目标丢失 ⇒ 去装回软件或把条目删掉。合成一句话会让两种场景都变得不知道该做什么。
+    /// </remarks>
+    public string StaleBadgeText => StaleKind switch
+    {
+        Core.Services.StaleKind.SourceLost => "源已丢失",
+        Core.Services.StaleKind.TargetLost => "目标已不存在",
+        _ => string.Empty,
+    };
+
+    /// <summary>失效徽标的悬停说明（复用 <see cref="StaleReason"/>，它已写清"还会不会启动"）。</summary>
+    public string StaleToolTip => StaleReason;
 
     /// <summary>
     /// 能否转成手动条目（D81）。

@@ -38,6 +38,16 @@ public sealed class CycleInfoProvider
     /// <summary>本次快照的日期（列表页顶部的「本次登录预览」用它）。</summary>
     public DateOnly Today => _today;
 
+    /// <summary>
+    /// 明天（周期列第三行用）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 跨年时它落在<b>次年</b>：<c>HolidayCalendar.IsWorkday</c> 对未覆盖年份抛异常，
+    /// 而 <c>ScheduleRulePolicy</c> 兜底为"会启动"。所以 12-31 看 1-1 时明天那一行
+    /// <b>不提示</b>（缺数据不等于不启动）—— 见 <see cref="IsSkippedOn"/> 的说明。
+    /// </remarks>
+    public DateOnly Tomorrow => _today.AddDays(1);
+
     /// <summary>法定日历是否覆盖今天（不覆盖 = 法定两档在用近似判定）。</summary>
     public bool HasCalendarForToday => _calendar is not null && _calendar.Covers(_today);
 
@@ -162,37 +172,53 @@ public sealed class CycleInfoProvider
     /// <param name="reason">中文原因，进 tooltip。</param>
     /// <returns>跳过为 <see langword="true"/>。</returns>
     public bool IsSkipped(string? cycleId, out bool degraded, out string reason)
+        => IsSkippedOn(cycleId, _today, out degraded, out reason);
+
+    /// <summary>
+    /// 判断某个**指定日期**是否不启动（v0.6.1：周期列要同时看今天与明天）。
+    /// </summary>
+    /// <param name="cycleId">周期 id。</param>
+    /// <param name="date">要判定的日期。</param>
+    /// <param name="degraded">法定两档是否因缺数据而用星期近似。</param>
+    /// <param name="reason">中文原因，进 tooltip。</param>
+    /// <returns>该日不启动为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 🔴 <b>兜底只能更宽松</b>：明天若因次年法定数据缺失而走近似，按"会启动"处理，
+    /// 于是周期列**不提示**（12-31 看 1-1 时必须这样）。方向与 D87/D90 一致：
+    /// 静默停摆是最坏的一类失败，宁可近似 + 把近似说破。
+    /// </remarks>
+    public bool IsSkippedOn(string? cycleId, DateOnly date, out bool degraded, out string reason)
     {
         var resolved = ScheduleCycleResolver.Resolve(cycleId, _cycles);
         var matched = ScheduleRulePolicy.Matches(
             resolved.Kind,
             resolved.Days,
-            _today,
+            date,
             _calendar,
             out degraded);
 
-        reason = ReasonOf(resolved.Kind, degraded);
+        reason = ReasonOf(resolved.Kind, date, degraded);
         return !matched;
     }
 
-    private string ReasonOf(ScheduleRuleKind kind, bool degraded)
+    private string ReasonOf(ScheduleRuleKind kind, DateOnly date, bool degraded)
     {
         if (degraded)
         {
             return kind == ScheduleRuleKind.LegalWorkday
-                ? $"缺 {_today.Year} 年法定数据，暂按周一至周五判定"
-                : $"缺 {_today.Year} 年法定数据，暂按周六日判定";
+                ? $"缺 {date.Year} 年法定数据，暂按周一至周五判定"
+                : $"缺 {date.Year} 年法定数据，暂按周六日判定";
         }
 
         return kind switch
         {
             ScheduleRuleKind.Weekdays or ScheduleRuleKind.Weekends
-                => IsWeekday(_today) ? "今天是工作日" : "今天是周末",
+                => IsWeekday(date) ? $"{date} 是工作日" : $"{date} 是周末",
             ScheduleRuleKind.LegalWorkday or ScheduleRuleKind.LegalHoliday
-                when _calendar is not null && _calendar.Covers(_today)
-                => _calendar.IsWorkday(_today) ? "今天是法定工作日（含调休补班）" : "今天是法定放假日",
-            ScheduleRuleKind.Custom => "今天不在周期内",
-            _ => "每天启动",
+                when _calendar is not null && _calendar.Covers(date)
+                => _calendar.IsWorkday(date) ? $"{date} 是法定工作日（含调休补班）" : $"{date} 是法定放假日",
+            ScheduleRuleKind.Custom => $"{date} 不在周期内",
+            _ => $"{date} 启动",
         };
     }
 

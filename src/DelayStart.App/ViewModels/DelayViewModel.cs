@@ -618,7 +618,7 @@ public sealed partial class DelayViewModel : ObservableObject
         }
 
         var today = _cycles.Today;
-        var skipped = Rows.Where(static row => row.IsSkippedToday).Select(static row => row.Name).ToArray();
+        var skipped = Rows.Where(static row => row.HasNotRunToday).Select(static row => row.Name).ToArray();
         var run = Rows.Count - skipped.Length;
 
         var text = $"本次登录预览 · {today:yyyy-MM-dd}（{CycleInfoProvider.NameOfDay(today.DayOfWeek)}）："

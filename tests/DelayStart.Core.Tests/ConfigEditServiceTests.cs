@@ -114,6 +114,26 @@ public sealed class ConfigEditServiceTests
         Assert.Equal(0, harness.Store.SaveCount);
     }
 
+    [Fact]
+    public void SetEnabled_ItemWithMissingTarget_StillTogglesBothWays()
+    {
+        // 🔴 2026-10-02 用户批复：失效行的「启用」开关**一律可点**，失效状态只由徽标表达。
+        // 这条用例钉住那个 UI 所依赖的前提 —— `SetEnabled` 对失效条目**不能有任何闸门**：
+        //   · 源丢失：程序还在、照样按设置启动，用户必须能把它**关掉**（原实现把开关藏了，
+        //     等于单方面收走控制权，而配置里 Enabled 还留着 true，用户无处可查）；
+        //   · 目标丢失：程序没了，但配置照样可改 —— 装回后按设置走，这正是徽标那句话的含义。
+        // 「可逆」一并钉住（AGENTS.md 硬约束 7）：关掉之后要能开回来。
+        var harness = new Harness();
+        harness.Seed(Managed(@"C:\这个路径一定不存在\gone.exe", "甲"));
+        Assert.True(Assert.Single(harness.Store.Snapshot().Items).Enabled);
+
+        Assert.True(harness.Service.SetEnabled("registry:hkcu:a", enabled: false));
+        Assert.False(Assert.Single(harness.Store.Snapshot().Items).Enabled);
+
+        Assert.True(harness.Service.SetEnabled("registry:hkcu:a", enabled: true));
+        Assert.True(Assert.Single(harness.Store.Snapshot().Items).Enabled);
+    }
+
     private static DelayedItem Managed(string path, string name) => new()
     {
         Id = "registry:hkcu:a",

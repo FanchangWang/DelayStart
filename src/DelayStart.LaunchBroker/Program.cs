@@ -75,11 +75,11 @@ internal static class Program
             return ExitBadJob;
         }
 
-        if (job is null
-            || string.IsNullOrWhiteSpace(job.ResultFile)
-            || string.IsNullOrWhiteSpace(job.Target))
+        // 判定搬到 Core 的 BrokerReceiptPolicy（见那里的说明）：本 exe 没有测试工程，
+        // 条件写在这里被顺手删掉不会有人发现 —— Token 一项尤其容易被当成多余字段砍掉。
+        if (!BrokerReceiptPolicy.IsWellFormedJob(job))
         {
-            log.Warn("作业内容无效（缺 Target / ResultFile）—— 退出码 " + ExitBadJob + "。");
+            log.Warn("作业内容无效（缺 Target / ResultFile / Token）—— 退出码 " + ExitBadJob + "。");
             return ExitBadJob;
         }
 

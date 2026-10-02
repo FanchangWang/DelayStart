@@ -21,8 +21,33 @@ namespace DelayStart.Core.Launch;
 /// ACL 挡不住同用户进程，令牌才能。
 /// </para>
 /// </remarks>
-internal static class BrokerReceiptPolicy
+public static class BrokerReceiptPolicy
 {
+    /// <summary>判定一份作业是否内容完整、可被中转器执行。</summary>
+    /// <param name="job">读到的作业（可为 <see langword="null"/>）。</param>
+    /// <returns>
+    /// <see cref="BrokerLaunchJob.Target"/>、<see cref="BrokerLaunchJob.ResultFile"/>、
+    /// <see cref="BrokerLaunchJob.Token"/> 三者**都非空**才为 <see langword="true"/>。
+    /// 返回 <see langword="true"/> 时保证 <paramref name="job"/> 非空，调用方不必再判一次。
+    /// </returns>
+    /// <remarks>
+    /// 🔴 <b><see cref="BrokerLaunchJob.Token"/> 必须参与校验</b>，它不是可有可无的元数据：
+    /// <see cref="IsAuthentic"/> 在期望令牌为空时恒判否，所以一份缺 Token 的作业会让
+    /// 中转器照常启动目标、回写一份空令牌、随后被调度端拒收 —— 白等满
+    /// <see cref="BrokerTimingPolicy.ResultPollTimeout"/> 才判失败，而日志指向的是
+    /// 「中转器超时未回写」：把「作业本来就无效」说成「中转器慢了」，排查方向直接跑偏。
+    /// 🔴 这条判定住在 Core 而不是中转器里，是为了**能被单测钉住** ——
+    /// <c>DelayStart.LaunchBroker</c> 没有测试工程，那里的 if 条件被顺手删掉不会有人发现。
+    /// 当前调度端必生成非空令牌，所以缺 Token 是死代码路径；这层校验是自保：
+    /// 一旦有人改成条件生成令牌，这里给出的是正确原因而不是一个误导性的超时。
+    /// </remarks>
+    public static bool IsWellFormedJob(
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] BrokerLaunchJob? job)
+        => job is not null
+           && !string.IsNullOrWhiteSpace(job.Target)
+           && !string.IsNullOrWhiteSpace(job.ResultFile)
+           && !string.IsNullOrWhiteSpace(job.Token);
+
     /// <summary>
     /// 生成一枚新的一次性回执令牌。
     /// </summary>

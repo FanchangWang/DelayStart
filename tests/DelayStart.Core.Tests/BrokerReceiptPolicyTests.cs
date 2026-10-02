@@ -186,4 +186,100 @@ public sealed class BrokerReceiptPolicyTests
         Assert.True(roundTripped.Ok);
         Assert.False(BrokerReceiptPolicy.IsAuthentic(roundTripped, ExpectedToken));
     }
+
+    // ---------------- 作业有效性（IsWellFormedJob）----------------
+    //
+    // 这组钉的是中转器的入口门禁。此前它写在 LaunchBroker/Program.cs 里，而那个 exe
+    // **没有测试工程** ⇒ 条件被顺手删掉不会有人发现。Token 一项尤其危险：删掉它不会
+    // 让任何东西立刻坏，而是让"缺 Token 的作业"变成一份误导性日志（说成"中转器超时"）
+    // 加一次 20 秒空等。所以判据下沉到 Core 并在此钉住。
+
+    /// <summary>造一份作业，三字段默认齐全；用例通过具名参数破坏其中一项。</summary>
+    private static BrokerLaunchJob Job(
+        string target = @"C:\Program Files\Quicker\Quicker.exe",
+        string resultFile = @"C:\Users\test\AppData\Local\Temp\DelayStart\broker\abc\result.json",
+        string token = ExpectedToken)
+        => new()
+        {
+            Target = target,
+            Arguments = string.Empty,
+            WorkingDirectory = string.Empty,
+            ResultFile = resultFile,
+            WaitTimeoutMs = 4000,
+            Token = token,
+        };
+
+    [Fact]
+    public void IsWellFormedJob_三字段齐全_判真()
+    {
+        Assert.True(BrokerReceiptPolicy.IsWellFormedJob(Job()));
+    }
+
+    [Fact]
+    public void IsWellFormedJob_作业为null_判否()
+    {
+        Assert.False(BrokerReceiptPolicy.IsWellFormedJob(null));
+    }
+
+    [Fact]
+    public void IsWellFormedJob_缺令牌_判否()
+    {
+        // 🔴 核心回归：这一项曾经不在校验里。后果不是崩，而是中转器照常启动目标、
+        // 回写空令牌、调度端一直拒收，白等 20 秒并把原因误报成「中转器超时」。
+        Assert.False(BrokerReceiptPolicy.IsWellFormedJob(Job(token: string.Empty)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    public void IsWellFormedJob_令牌为空白_判否(string token)
+    {
+        // 用 IsNullOrWhiteSpace 而非 IsNullOrEmpty：空白令牌同样走不通校验，
+        // 不该被当成"有令牌"放过去。
+        Assert.False(BrokerReceiptPolicy.IsWellFormedJob(Job(token: token)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsWellFormedJob_目标为空白_判否(string target)
+    {
+        Assert.False(BrokerReceiptPolicy.IsWellFormedJob(Job(target: target)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsWellFormedJob_结果文件为空白_判否(string resultFile)
+    {
+        // 没有 ResultFile 就无处回写，中转器只能用退出码报错（ExitBadJob / ExitResultWriteFailed）。
+        Assert.False(BrokerReceiptPolicy.IsWellFormedJob(Job(resultFile: resultFile)));
+    }
+
+    [Fact]
+    public void IsWellFormedJob_仅缺令牌而另两项齐全_仍判否()
+    {
+        // 单独钉住"Token 这一项本身"：上面几条各自破坏一个字段，这条确保
+        // 不是"反正别的字段也要查"顺带把它拦下的。
+        var job = Job(token: string.Empty);
+
+        Assert.False(string.IsNullOrWhiteSpace(job.Target));
+        Assert.False(string.IsNullOrWhiteSpace(job.ResultFile));
+        Assert.False(BrokerReceiptPolicy.IsWellFormedJob(job));
+    }
+
+    [Fact]
+    public void 缺令牌的作业若被放行_其回执必然被拒收()
+    {
+        // 端到端自证：把这条链的两半接起来看 —— 缺 Token 的作业一旦被执行，
+        // 它回写的结果在 IsAuthentic 面前必然不合格。这解释了为什么必须在入口拦，
+        // 而不是等调度端超时才发现。
+        var job = Job(token: string.Empty);
+        var echoed = new BrokerLaunchResult { Ok = true, ProcessId = 1, Token = job.Token };
+
+        // IsAuthentic 对空的**期望**令牌恒判否（防「双方都没带」的旧组合静默通过），
+        // 因此即使令牌回写得一模一样，缺令牌的作业注定收不到结果。
+        Assert.False(BrokerReceiptPolicy.IsAuthentic(echoed, job.Token));
+    }
 }

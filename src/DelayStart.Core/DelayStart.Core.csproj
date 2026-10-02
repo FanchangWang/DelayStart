@@ -19,4 +19,15 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!--
+    单元测试需要直接调用 Core 内部的**纯判定**（ElevationCheck.IsElevatedFromTokenInfo、
+    BrokerTimingPolicy、DeElevatedProcessLauncher 的 UWP / UIAccess 判据面）。
+    这些判定此前要么零覆盖，要么只能靠反射触达 —— 反射进私有方法的测试要等方法改名
+    才炸，且拿不到编译期类型检查。管理端项目已有同样的配置，两处保持一致。
+    ⚠️ 放宽的只是 internal 的**可见性**，不是行为：判定逻辑一字未改。
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DelayStart.Core.Tests" />
+  </ItemGroup>
+
 </Project>

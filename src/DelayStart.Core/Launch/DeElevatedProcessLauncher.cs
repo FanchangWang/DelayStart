@@ -92,19 +92,6 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// <summary>UIAccess 中转器可执行文件名（与调度端同目录部署，D70）。</summary>
     private const string BrokerExecutableName = "DelayStart.LaunchBroker.exe";
 
-    /// <summary>
-    /// 中转器为识别"目标秒退"而等待目标退出的时长；超时即认为目标在正常运行并回写结果。
-    /// </summary>
-    private static readonly TimeSpan BrokerExitWaitTimeout = TimeSpan.FromMilliseconds(4_000);
-
-    /// <summary>
-    /// 调度端轮询中转器结果文件的超时（须明显大于秒退等待窗口：覆盖中转器启动、
-    /// ShellExecute、等待与回写的全过程）。
-    /// </summary>
-    private static readonly TimeSpan BrokerResultPollTimeout = TimeSpan.FromSeconds(20);
-
-    private static readonly TimeSpan BrokerPollInterval = TimeSpan.FromMilliseconds(200);
-
     private readonly ILogSink _log;
 
     /// <summary>特权只需开一次，失败也不阻断后续尝试（记录告警即可）。</summary>
@@ -304,24 +291,50 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// 故以 <see cref="DelayedItem.Source"/> 为主判据，路径前缀仅作兼容兜底
     /// （手工条目可能直接填了完整解析名，那时 <c>Source</c> 是 <c>Manual</c>）。
     /// </summary>
-    private static bool IsUwpItem(DelayedItem item)
+    internal static bool IsUwpItem(DelayedItem item)
         => item.Source == StartupSource.Uwp || UwpParsingName.IsParsingName(item.Path);
 
     /// <summary>
     /// UIAccess 目标预检（D70）：读目标 exe 的嵌入清单（RT_MANIFEST），判
     /// <c>uiAccess="true"</c>。只读资源，不执行目标代码。
     /// </summary>
+    /// <remarks>
+    /// 两道判据（<see cref="IsUiAccessCandidatePath"/> 与
+    /// <see cref="IsUiAccessTargetFromManifest"/>）各自抽成可单测的方法，判定条件与
+    /// 抽取前逐字相同，只是为了绕开"必须真 exe 才能走完"的限制：
+    /// 前者是纯字符串判定，后者只喂已读到的清单文本。
+    /// <b>顺序不能调换</b> —— 非 <c>.exe</c> 必须先短路返回，绝不能去读资源。
+    /// </remarks>
     /// <returns>true = 是 UIAccess 目标；false = 不是（或清单读不到，回普通路径）。</returns>
     private static bool IsUiAccessTarget(string path)
     {
-        if (!path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        if (!IsUiAccessCandidatePath(path))
         {
             return false;
         }
 
-        var manifest = LaunchNative.TryReadEmbeddedManifest(path);
-        return manifest is not null && UiAccessManifest.HasUiAccessFlag(manifest);
+        return IsUiAccessTargetFromManifest(LaunchNative.TryReadEmbeddedManifest(path));
     }
+
+    /// <summary>路径是否值得去读嵌入清单（只看后缀，不碰文件系统）。</summary>
+    /// <param name="path">目标路径。</param>
+    /// <returns>以 <c>.exe</c> 结尾（忽略大小写）为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 🔴 短路判据放在最前：UWP 解析名、<c>.lnk</c>、<c>shell:AppsFolder\…</c> 等一律
+    /// 直接判否，绝不去 <c>LoadLibraryEx</c>。
+    /// </remarks>
+    internal static bool IsUiAccessCandidatePath(string path)
+        => path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>由已读到的清单文本判定是不是 UIAccess 目标。</summary>
+    /// <param name="manifest">RT_MANIFEST 文本；读不到（无清单 / 非 PE）时为 <see langword="null"/>。</param>
+    /// <returns>清单声明 <c>uiAccess="true"</c> 时为 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// 清单读不出来（<see langword="null"/>）时判否 —— 沿用普通降权路径
+    /// （真失败时 740 有提示文案），不猜。
+    /// </remarks>
+    internal static bool IsUiAccessTargetFromManifest(string? manifest)
+        => manifest is not null && UiAccessManifest.HasUiAccessFlag(manifest);
 
     /// <summary>
     /// UIAccess 目标的降权链（D70，2026-09-21 用户批复）：
@@ -375,7 +388,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
                 Arguments = item.Arguments ?? string.Empty,
                 WorkingDirectory = ResolveWorkingDirectory(item),
                 ResultFile = Path.Combine(brokerTempDir, "result.json"),
-                WaitTimeoutMs = (int)BrokerExitWaitTimeout.TotalMilliseconds,
+                WaitTimeoutMs = (int)BrokerTimingPolicy.ExitWaitTimeout.TotalMilliseconds,
             };
 
             File.WriteAllText(jobFile, JsonSerializer.Serialize(job, BrokerJsonContext.Default.BrokerLaunchJob));
@@ -414,7 +427,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
             var result = PollBrokerResult(job.ResultFile);
             if (result is null)
             {
-                var timeout = $"中转器超时未回写结果（超过 {(int)BrokerResultPollTimeout.TotalSeconds} 秒），"
+                var timeout = $"中转器超时未回写结果（超过 {(int)BrokerTimingPolicy.ResultPollTimeout.TotalSeconds} 秒），"
                     + "目标启动状态未知 —— 判失败，不提权回退。";
                 _log.Warn($"『{item.Name}』{timeout}");
                 return LaunchOutcome.Failure(timeout);
@@ -459,11 +472,11 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// </summary>
     private static BrokerLaunchResult? PollBrokerResult(string resultFile)
     {
-        var deadline = DateTime.UtcNow + BrokerResultPollTimeout;
+        var deadline = BrokerTimingPolicy.GetResultPollDeadline(DateTime.UtcNow);
 
-        while (DateTime.UtcNow < deadline)
+        while (BrokerTimingPolicy.ShouldKeepPolling(DateTime.UtcNow, deadline))
         {
-            Thread.Sleep(BrokerPollInterval);
+            Thread.Sleep(BrokerTimingPolicy.PollInterval);
 
             try
             {

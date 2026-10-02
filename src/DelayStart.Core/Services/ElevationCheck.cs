@@ -46,13 +46,42 @@ public static partial class ElevationCheck
                 (uint)sizeof(TokenElevationValue),
                 out _);
 
-            return ok && value.IsElevated != 0;
+            return IsElevatedFromTokenInfo(ok, value.IsElevated);
         }
         finally
         {
             _ = CloseHandle(token);
         }
     }
+
+    /// <summary>
+    /// 由"查令牌的结果"判定当前令牌是否已提升 —— <see cref="IsElevated"/> 的纯判定面，
+    /// **不碰任何系统调用**。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 把"查 <c>TokenElevation</c>"与"按查到的值判定"拆成两步，**纯粹为了可测**：
+    /// <see cref="IsElevated"/> 必须真令牌，单元测试禁止触碰进程，于是这条守着 D20
+    /// （图形界面与 CLI 业务绝不以非提权身份运行）的判据此前零覆盖。
+    /// 判定本身与原表达式逐字相同，<see cref="IsElevated"/> 的行为未变。
+    /// </para>
+    /// <para>
+    /// 🔴 保守方向：<paramref name="querySucceeded"/> 为 <see langword="false"/> 一律判未提权。
+    /// 查不到就不算已提升，宁可拒绝运行 —— 与 <see cref="IsElevated"/> 里"连自己的令牌都
+    /// 打不开就按未提权处理"同一取向。判据是 D20 门禁，方向反了就是漏门。
+    /// </para>
+    /// <para>
+    /// 🔴 比较用 <c>!= 0</c> 而非 <c>== 1</c>：Win32 只保证"非零即提升"，
+    /// 将来若出现别的取值，不该被误判成未提权。
+    /// </para>
+    /// </remarks>
+    /// <param name="querySucceeded">
+    /// <c>GetTokenInformation(TokenElevation)</c> 是否成功（<c>ok</c>）。
+    /// </param>
+    /// <param name="elevationValue">读回的 <c>TokenElevation.IsElevated</c> 原始值。</param>
+    /// <returns>查询成功且令牌确实处于提升状态时为 <see langword="true"/>。</returns>
+    internal static bool IsElevatedFromTokenInfo(bool querySucceeded, uint elevationValue)
+        => querySucceeded && elevationValue != 0;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct TokenElevationValue

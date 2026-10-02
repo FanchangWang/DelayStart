@@ -7,11 +7,42 @@ using DelayStart.Core.Serialization;
 namespace DelayStart.Core.Services;
 
 /// <summary>
-/// 读取法定日历时发现的坏文件。
+/// 法定日历文件的问题（读取或删除失败）：文件完整路径 + 中文原因，直接进日志。
 /// </summary>
-/// <param name="FilePath">坏文件完整路径。</param>
+/// <param name="FilePath">问题文件的完整路径。</param>
 /// <param name="Reason">中文原因，直接进日志。</param>
 public sealed record HolidayFileIssue(string FilePath, string Reason);
+
+/// <summary>
+/// 删除某一年份数据文件的结局。
+/// </summary>
+/// <remarks>
+/// 🔴 "本来就没有"与"删不掉"必须分开：前者是幂等调用的正常结果，后者是需要人看一眼的故障。
+/// 合成一个 <see cref="bool"/> 等于把"文件被占用 / 权限不足"报成"没有数据"
+/// （硬约束 7：失败必须可见）。
+/// </remarks>
+public enum HolidayDeleteOutcome
+{
+    /// <summary>文件存在且已删除。</summary>
+    Deleted,
+
+    /// <summary>文件本来就不存在（重复删除、删从未下载过的年份）。</summary>
+    NotFound,
+
+    /// <summary>文件在，但删除失败（被占用 / 权限不足等）。</summary>
+    Failed,
+}
+
+/// <summary>
+/// 一次删除的结果：结局 + 失败详情。
+/// </summary>
+/// <param name="Outcome">三态结局。</param>
+/// <param name="Issue">
+/// 失败详情（<see cref="HolidayFileIssue"/>）；<see cref="HolidayDeleteOutcome.Failed"/> 时非空，
+/// 🔴 调用方必须让它进入日志 —— 本类是 static 工具类、没有 <c>ILogSink</c>，
+/// 沿用与 <see cref="HolidayCalendarStore.Load"/> 相同的"转成 issue 交上层记"的做法。
+/// </param>
+public sealed record HolidayDeleteResult(HolidayDeleteOutcome Outcome, HolidayFileIssue? Issue);
 
 /// <summary>
 /// 一次读取的结果：日历本体 + 坏文件清单。
@@ -166,25 +197,32 @@ public static class HolidayCalendarStore
     /// </summary>
     /// <param name="paths">路径服务。</param>
     /// <param name="year">年份。</param>
-    /// <returns>删除成功为 <see langword="true"/>；文件不存在或删除失败为 <see langword="false"/>。</returns>
-    public static bool Delete(PathService paths, int year)
+    /// <returns>
+    /// 三态结果：已删除 / 本来就不存在 / 删除失败（失败时 <see cref="HolidayDeleteResult.Issue"/> 带原因）。
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="paths"/> 为 <see langword="null"/>。</exception>
+    public static HolidayDeleteResult Delete(PathService paths, int year)
     {
         ArgumentNullException.ThrowIfNull(paths);
 
+        var path = paths.GetHolidayFilePath(year);
         try
         {
-            var path = paths.GetHolidayFilePath(year);
+            // File.Exists 对"目录能进、文件被独占锁住"仍返回 true，所以这里不会
+            // 把"删不掉"误判成"不存在"；真正删不掉的是下一行的 File.Delete。
             if (!File.Exists(path))
             {
-                return false;
+                return new HolidayDeleteResult(HolidayDeleteOutcome.NotFound, null);
             }
 
             File.Delete(path);
-            return true;
+            return new HolidayDeleteResult(HolidayDeleteOutcome.Deleted, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return new HolidayDeleteResult(
+                HolidayDeleteOutcome.Failed,
+                new HolidayFileIssue(path, $"删除失败：{ex.Message}"));
         }
     }
 

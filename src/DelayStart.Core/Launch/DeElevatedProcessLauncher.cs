@@ -382,7 +382,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
         }
         catch (Exception ex)
         {
-            TryDeleteDirectory(brokerTempDir);
+            TryDeleteDirectory(item.Name, brokerTempDir);
             return LaunchOutcome.Failure($"准备 UIAccess 中转作业失败：{ex.Message}");
         }
 
@@ -393,7 +393,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
         var primaryToken = AcquireShellPrimaryToken(item.Name);
         if (primaryToken == 0)
         {
-            TryDeleteDirectory(brokerTempDir);
+            TryDeleteDirectory(item.Name, brokerTempDir);
             return LaunchOutcome.Failure("取不到外壳主令牌，无法降权启动（原因见上方日志）。");
         }
 
@@ -449,7 +449,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
         finally
         {
             LaunchNative.CloseHandle(primaryToken);
-            TryDeleteDirectory(brokerTempDir);
+            TryDeleteDirectory(item.Name, brokerTempDir);
         }
     }
 
@@ -489,7 +489,19 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
         return null;
     }
 
-    private static void TryDeleteDirectory(string path)
+    /// <summary>
+    /// 清理中转作业的一次性临时目录（尽力而为，**不抛**）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 清理失败不影响启动结果，但**必须记日志**：作业目录每次启动都用
+    /// <c>Guid.NewGuid()</c> 新建（见本类的 broker 目录构造），所以删不掉的目录
+    /// **每次启动都会再留下一个、逐次累积**，不是"下次会清掉"。日志文案因此必须说破这一点 ——
+    /// 否则操作者读到 "scheduler.log" 里的告警会得出"残留不用管"的结论，那等于这次修复白做。
+    /// 🔴 catch 刻意保持 <see cref="Exception"/> 而**不**收窄到
+    /// <c>IOException or UnauthorizedAccessException</c>：收窄等于把原先"兜住"的情形
+    /// 改成抛给调用方，那会沿着降权启动链炸出去 —— 属于行为变更，不在"加一条日志"的范围内。
+    /// </remarks>
+    private void TryDeleteDirectory(string itemName, string path)
     {
         try
         {
@@ -498,9 +510,11 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
                 Directory.Delete(path, recursive: true);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 临时目录清理失败不影响启动结果（下次调度用新 GUID 目录，不积累）。
+            _log.Warn(ex, $"『{itemName}』清理 UIAccess 中转作业临时目录失败：{path}"
+                + "（不影响本次启动结果；该目录会残留，每次启动再留一个，"
+                + "需要人工清理 %TEMP%\\DelayStart\\broker）。");
         }
     }
 

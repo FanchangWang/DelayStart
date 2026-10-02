@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D123）
+# DelayStart — 决策记录（D1–D143）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -1575,3 +1575,23 @@ lambda 参数 `applied` 还遮蔽了外层的 `int applied`。结果是 `done` �
 2. **有一个测试的名字承诺了那个场景，函数体却没做** —— `RunOnce_TargetPathDrifted_ButItemGoneFromConfig_DoesNotThrowAndDoesNotClaimSuccess` 的注释写着「随后把它从配置里删掉」，代码却从头到尾没删过任何东西，实际重复了上一个用例。**测试名承诺 ≠ 测试覆盖**，这类假绿比没有测试更危险。
 
 **连带**：`HashSet.Add` 天然去重，顺带解决「配置出现重复主键时 `applied` 计数与日志偏大」。
+
+## D143 `HolidayCalendarStore.Delete` 返回三态结果而不是 `bool`（延续 D142 的同一条原则）
+
+**结论**：`Delete` 的返回类型由 `bool` 改为 `HolidayDeleteResult(HolidayDeleteOutcome, HolidayFileIssue?)`，新增 `enum HolidayDeleteOutcome { Deleted, NotFound, Failed }`。删除失败时 `Issue` 带文件路径与底层原因。
+
+**背景**：原实现把「文件本来就不存在」与「删除失败（被占用 / 无权限）」**都映射成 `false`**，调用方无从区分。三条既有测试断言还把这种合并固化了下来（`Assert.False(Delete(...)) // 幂等` 与 `Assert.False(Delete(1999))` 走的是同一个分支）。
+
+**为什么改签名而不是在调用方打补丁**：与 D142 完全同源 —— 接口的表达力不足会被调用方用「猜」来补，而「猜」不会报错。在调用方压制症状，只会让下一个调用方重蹈覆辙。
+
+**这一条为什么当时没被察觉**（与 D142 记的两条同一形状）：
+1. **两个极端恰好都对** —— 「删掉了」与「本来就没有」都给出"预期结果"，**只有真被锁住的那次才暴露**。而"删年份数据"是一个低频手动操作，测试不主动造锁就永远走不到那条分支。
+2. **三条既有断言里没有一条区分两者** —— `Assert.False` 同时覆盖"幂等"与"故障"，测试全绿。**测试名承诺 ≠ 测试覆盖**，这类假绿比没有测试更危险（D142 已为同类现象留档）。
+
+**连带**：`HolidayFileIssue` 的 XML 摘要从「读取法定日历时发现的坏文件」放宽为「法定日历文件的问题（读取或删除失败）」。类型形状（完整路径 + 中文原因）本就通用，只是措辞只说了读；这里跟着放宽是为了不留下「类型名字面意思是读、实际被用来装删除失败」的裂缝。
+
+**没有引入 DI 是刻意的**：`HolidayCalendarStore` 是纯 static 工具类、无 `ILogSink`。失败信息按同文件 `Read` / `Load` 既有做法（`:75` / `:207`）转成 `HolidayFileIssue` **交上层记日志**，而不是为了记日志给 static 工具类硬塞容器。
+
+**保留的既有行为**（改签名不改变语义）：`File.Exists` 前置判定保留 —— `File.Delete` 对不存在的文件静默返回、不抛异常，无法靠异常区分「不存在」；而 `File.Exists` 对「目录可进、文件被独占锁住」仍返回 `true`，所以不会把真失败误判成 `NotFound`。
+
+**影响面**（经全仓库核查，见验收记录）：`Delete` 在 `src/` 下**零生产调用点**，唯一调用方是 `tests/DelayStart.Core.Tests/HolidayCalendarStoreTests.cs` 的三条断言（已同步更新为 `Deleted` / `NotFound` / `NotFound`，语义与改前逐一对应）。`installer/`、`scripts/`、`.github/`、本文档均未描述该 API 或其返回语义，**无漏掉的调用点**。签名变更未造成影响面扩散 —— 但这依赖"当前只有测试在调"这一事实，不是设计保证，故在此留档以备将来新增调用方时知道三态的含义。

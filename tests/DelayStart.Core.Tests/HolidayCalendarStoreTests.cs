@@ -138,14 +138,62 @@ public sealed class HolidayCalendarStoreTests : IDisposable
     }
 
     [Fact]
-    public void Delete_RemovesYearData()
+    public void Delete_ExistingYearData_ReportsDeleted()
     {
         var paths = Paths;
         HolidayCalendarStore.Write(paths, Document(2026));
 
-        Assert.True(HolidayCalendarStore.Delete(paths, 2026));
-        Assert.False(HolidayCalendarStore.Delete(paths, 2026));   // 幂等
-        Assert.False(HolidayCalendarStore.Delete(paths, 1999));
+        var result = HolidayCalendarStore.Delete(paths, 2026);
+
+        Assert.Equal(HolidayDeleteOutcome.Deleted, result.Outcome);
+        Assert.Null(result.Issue);
+        Assert.False(File.Exists(paths.GetHolidayFilePath(2026)));
+    }
+
+    [Fact]
+    public void Delete_AlreadyDeletedYear_ReportsNotFoundRatherThanFailure()
+    {
+        // 幂等：重复删除是正常结果，绝不能被报成"故障"（否则日志里全是假告警）。
+        var paths = Paths;
+        HolidayCalendarStore.Write(paths, Document(2026));
+        HolidayCalendarStore.Delete(paths, 2026);
+
+        var result = HolidayCalendarStore.Delete(paths, 2026);
+
+        Assert.Equal(HolidayDeleteOutcome.NotFound, result.Outcome);
+        Assert.Null(result.Issue);
+    }
+
+    [Fact]
+    public void Delete_YearNeverDownloaded_ReportsNotFoundWithNoReason()
+    {
+        var paths = Paths;
+        Directory.CreateDirectory(paths.HolidaysRoot);
+
+        var result = HolidayCalendarStore.Delete(paths, 1999);
+
+        Assert.Equal(HolidayDeleteOutcome.NotFound, result.Outcome);
+        Assert.Null(result.Issue);
+    }
+
+    [Fact]
+    public void Delete_LockedYearData_ReportsFailedWithReadableReason()
+    {
+        // 真失败：文件独占打开（FileShare.None）时 File.Delete 必抛 IOException。
+        // 断言文件仍在，确保这不是一个恒真的假绿用例。
+        var paths = Paths;
+        HolidayCalendarStore.Write(paths, Document(2026));
+        var path = paths.GetHolidayFilePath(2026);
+        using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var result = HolidayCalendarStore.Delete(paths, 2026);
+
+        Assert.Equal(HolidayDeleteOutcome.Failed, result.Outcome);
+        Assert.True(File.Exists(path));
+        var issue = Assert.IsType<HolidayFileIssue>(result.Issue);
+        Assert.Equal(path, issue.FilePath);
+        Assert.Contains("删除失败", issue.Reason, StringComparison.Ordinal);
+        Assert.True(issue.Reason.Length > "删除失败：".Length);   // 带了底层原因，不是一句空话
     }
 
     [Fact]

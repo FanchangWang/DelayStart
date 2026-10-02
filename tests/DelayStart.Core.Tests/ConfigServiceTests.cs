@@ -427,7 +427,9 @@ public sealed class ConfigServiceTests : IDisposable
     [Fact]
     public void Save_LeavesNoTemporaryFileBehind()
     {
-        // 机制 8：写 .tmp → File.Replace，正常路径下不该留下临时文件
+        // 机制 8：写 .tmp → 目标 app.json 尚不存在，走 AtomicFileWriter 的首次写分支
+        //（File.Move，overwrite: true；File.Replace 只在覆盖已存在文件时才走，见 Save_IsIdempotent），
+        // 正常路径下不该留下临时文件
         _service.Save(new AppConfig());
 
         Assert.Empty(Directory.GetFiles(_paths.ConfigRoot, "*.tmp"));

@@ -26,6 +26,28 @@ public sealed class BrokerLaunchJob
     public string ResultFile { get; init; } = string.Empty;
 
     /// <summary>
+    /// 本次作业的一次性回执令牌（调度端随机生成，见 <see cref="BrokerReceiptPolicy.NewToken"/>）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>这个字段的全部意义是防伪造，不是业务数据。</b>
+    /// 作业与结果目录在 <c>%TEMP%\DelayStart\broker\&lt;Guid&gt;</c> 下，同用户的任何 Medium
+    /// 进程（含本调度端自己拉起的其他降权程序）都能抢先落一份
+    /// <c>result.json</c>（<c>Ok=true</c>）。而调度端此前只判 <c>File.Exists</c> + 反序列化，
+    /// <b>完全不校验写入者</b> —— 于是一个从没跑过的 uiAccess 条目会被永久标记成"已启动"，
+    /// 且因 D20「不提权回退」不再重试，用户界面上一切正常。
+    /// <para>
+    /// 令牌把"这份回执确实是本次作业的中转器写的"变成可校验的事实：只有读到作业的
+    /// 中转器才能原样回写它。🔴 刻意<b>不用 ACL 收紧目录</b> —— 同项目已定的教训是
+    /// ACL 挡不住同用户进程（同用户的令牌拥有同一份 DACL 能做的事），令牌才能。
+    /// </para>
+    /// <para>
+    /// 全程不做跨版本兼容（D121）：调度端与中转器同目录部署、同时替换，旧中转器回写不出
+    /// 这个字段的作业一律按"回执无效"处理（继续轮询至超时 ⇒ 判失败），不会静默放行。
+    /// </para>
+    /// </remarks>
+    public string Token { get; init; } = string.Empty;
+
+    /// <summary>
     /// 中转器为识别"目标秒退"而等待目标退出的时长（毫秒）。
     /// 超时即认为目标在正常运行（GUI 程序不会退出），立即回写结果。
     /// </summary>
@@ -60,4 +82,16 @@ public sealed class BrokerLaunchResult
 
     /// <summary>附加说明（中文，失败原因 / 外壳激活提示），成功且句柄可用时为 <see langword="null"/>。</summary>
     public string? Message { get; init; }
+
+    /// <summary>
+    /// 原样回写的作业令牌（<see cref="BrokerLaunchJob.Token"/>）；中转器**不得**自行生成。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 调度端只在令牌与本次期望值<b>逐字节相同</b>时才采信这份回执（见
+    /// <see cref="BrokerReceiptPolicy.IsAuthentic"/>）；令牌缺失或不符一律当作
+    /// "这不是我的中转器写的"，继续轮询直到超时 ⇒ 该条目判失败。
+    /// 这就是防同用户 Medium 进程伪造 <c>Ok=true</c> 回执的唯一凭据，
+    /// <b>删掉本字段等于删掉整个防伪造能力</b>。
+    /// </remarks>
+    public string Token { get; init; } = string.Empty;
 }

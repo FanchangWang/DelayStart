@@ -376,6 +376,10 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
             "broker",
             Guid.NewGuid().ToString("N"));
 
+        // 🔴 一次性回执令牌：只有拿到这份作业的中转器才能原样回写它。同用户的 Medium
+        // 进程可以抢先伪造 result.json（Ok=true），但猜不到这枚令牌 —— 校验在 PollBrokerResult。
+        var receiptToken = BrokerReceiptPolicy.NewToken();
+
         BrokerLaunchJob job;
         var jobFile = Path.Combine(brokerTempDir, "job.json");
         try
@@ -389,6 +393,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
                 WorkingDirectory = ResolveWorkingDirectory(item),
                 ResultFile = Path.Combine(brokerTempDir, "result.json"),
                 WaitTimeoutMs = (int)BrokerTimingPolicy.ExitWaitTimeout.TotalMilliseconds,
+                Token = receiptToken,
             };
 
             File.WriteAllText(jobFile, JsonSerializer.Serialize(job, BrokerJsonContext.Default.BrokerLaunchJob));
@@ -424,7 +429,7 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
                 return brokerOutcome;
             }
 
-            var result = PollBrokerResult(job.ResultFile);
+            var result = PollBrokerResult(job.ResultFile, receiptToken);
             if (result is null)
             {
                 var timeout = $"中转器超时未回写结果（超过 {(int)BrokerTimingPolicy.ResultPollTimeout.TotalSeconds} 秒），"
@@ -470,7 +475,15 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// 轮询中转器回写的结果文件：文件被中转器以「写临时名 + 原子改名」产出，
     /// 出现即可安全读取。超时返回 <see langword="null"/>。
     /// </summary>
-    private static BrokerLaunchResult? PollBrokerResult(string resultFile)
+    /// <param name="resultFile">结果文件路径（作业里的 <c>ResultFile</c>）。</param>
+    /// <param name="expectedToken">本次作业的令牌；回执不带它或不带对令牌一律不采信。</param>
+    /// <remarks>
+    /// 🔴 <b>令牌不符 ≠ 立即失败，而是继续轮询直到超时</b>：伪造者只能让"文件存在且
+    /// 内容像样"，但挡不住真正的中转器随后用原子改名覆盖它、写出带正确令牌的真回执。
+    /// 提前返回失败会把一条其实启动成功的条目判成失败 —— 那与原 bug 一样是误判方向。
+    /// 超时后调用方按现状判"超时未回写结果 ⇒ 本条目失败，不提权回退"（D20）。
+    /// </remarks>
+    private static BrokerLaunchResult? PollBrokerResult(string resultFile, string expectedToken)
     {
         var deadline = BrokerTimingPolicy.GetResultPollDeadline(DateTime.UtcNow);
 
@@ -486,7 +499,16 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
                 }
 
                 var json = File.ReadAllText(resultFile);
-                return JsonSerializer.Deserialize(json, BrokerJsonContext.Default.BrokerLaunchResult);
+                var result = JsonSerializer.Deserialize(json, BrokerJsonContext.Default.BrokerLaunchResult);
+
+                // 🔴 不校验写入者就会把伪造的 Ok=true 当成"已启动"：同用户的 Medium 进程
+                // 能抢先落一份 result.json，条目从此被永久标记为已启动而实际从未运行。
+                if (result is null || !BrokerReceiptPolicy.IsAuthentic(result, expectedToken))
+                {
+                    continue;
+                }
+
+                return result;
             }
             catch (IOException)
             {

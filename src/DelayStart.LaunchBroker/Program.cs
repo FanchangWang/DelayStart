@@ -32,6 +32,12 @@ namespace DelayStart.LaunchBroker;
 /// 日志：<c>%LOCALAPPDATA%\DelayStart\logs\launchbroker.log</c>（滚动策略与调度端一致），
 /// 记录作业接收、目标启动、结果回写全过程；日志失败绝不影响启动主流程。
 /// </para>
+/// <para>
+/// 🔴 <b>每一处 <c>new BrokerLaunchResult</c> 都必须带上 <c>Token = job.Token</c></b> ——
+/// 调度端只采信令牌逐字节等于本次作业令牌的回执（防同用户 Medium 进程伪造 <c>Ok=true</c>）。
+/// 漏带不会造成假成功，只会让该回执被判为无效并最终把条目判成"超时未回写 ⇒ 失败"，
+/// 即<b>失败方向</b>；但那仍然是一条假失败，所以每一处都要写。
+/// </para>
 /// </remarks>
 internal static class Program
 {
@@ -139,6 +145,7 @@ internal static class Program
                     {
                         Ok = false,
                         Win32Error = 87, // ERROR_INVALID_PARAMETER —— 语义上就是"参数块不合法"
+                        Token = job.Token,
                         Message = $"SHELLEXECUTEINFOW 布局自检失败（sizeof={structSize}，期望 112），拒绝调用。",
                     };
                 }
@@ -176,6 +183,7 @@ internal static class Program
                     {
                         Ok = false,
                         Win32Error = error,
+                        Token = job.Token,
                         Message = message,
                     };
                 }
@@ -214,6 +222,7 @@ internal static class Program
             {
                 Ok = true,
                 Message = "目标经外壳/DDE 激活，进程句柄不可用（PID 未知）。",
+                Token = job.Token,
             };
         }
 
@@ -251,6 +260,7 @@ internal static class Program
                     ExitedImmediately = true,
                     ExitCode = exitCode,
                     Message = $"目标在 {job.WaitTimeoutMs} ms 等待窗口内自行退出（exitCode={exitCodeText}）。",
+                    Token = job.Token,
                 };
             }
 
@@ -263,6 +273,7 @@ internal static class Program
                     Ok = true,
                     ProcessId = (int)pid,
                     Message = "目标运行中（秒退检测等待失败，未确认是否仍在运行）。",
+                    Token = job.Token,
                 };
             }
 
@@ -271,6 +282,7 @@ internal static class Program
             {
                 Ok = true,
                 ProcessId = (int)pid,
+                Token = job.Token,
             };
         }
         finally

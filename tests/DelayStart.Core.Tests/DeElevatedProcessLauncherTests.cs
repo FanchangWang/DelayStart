@@ -1,5 +1,3 @@
-using System.Reflection;
-
 using DelayStart.Core.Abstractions;
 using DelayStart.Core.Launch;
 using DelayStart.Core.Tests.Fakes;
@@ -11,9 +9,12 @@ namespace DelayStart.Core.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 该方法没有公开入口：它只在 UIAccess 降权启动链内部被调用，而那条链要真令牌、
+/// 该方法只在 UIAccess 降权启动链内部被调用，而那条链要真令牌、
 /// 真中转器 exe 与真进程 —— 单元测试禁止触碰进程（<c>Agents.md</c> 硬约束），
-/// 因此这里用反射直接调那一个私有方法，只锁"清理失败可见、且不影响启动结果"这一条。
+/// 因此这里直接调那个 internal 方法（Core 已配
+/// <c>InternalsVisibleTo=DelayStart.Core.Tests</c>），只锁"清理失败可见、且不影响启动结果"这一条。
+/// 🔴 早前这里是 <c>BindingFlags.NonPublic</c> 反射直调私有方法：方法改名/改签名要等运行时才炸，
+/// 而且拿不到编译期类型检查。
 /// </para>
 /// <para>
 /// "删不掉"靠**独占打开**（<see cref="FileShare.None"/>）制造：Windows 上
@@ -28,15 +29,9 @@ public sealed class DeElevatedProcessLauncherTests : IDisposable
     /// <inheritdoc />
     public void Dispose() => _temp.Dispose();
 
-    /// <summary>反射调用私有的 <c>TryDeleteDirectory</c>（返回即"没有抛出"）。</summary>
+    /// <summary>直调 internal 的 <c>TryDeleteDirectory</c>（返回即"没有抛出"）。</summary>
     private static void TryDeleteDirectory(ILogSink log, string itemName, string path)
-    {
-        var method = typeof(DeElevatedProcessLauncher)
-            .GetMethod("TryDeleteDirectory", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(typeof(DeElevatedProcessLauncher).FullName, "TryDeleteDirectory");
-
-        method.Invoke(new DeElevatedProcessLauncher(log), [itemName, path]);
-    }
+        => new DeElevatedProcessLauncher(log).TryDeleteDirectory(itemName, path);
 
     /// <summary>建一个含 job.json 的中转作业临时目录。</summary>
     private string CreateBrokerTempDir()

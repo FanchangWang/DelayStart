@@ -535,8 +535,15 @@ public sealed class DeElevatedProcessLauncher : IProcessLauncher
     /// 🔴 catch 刻意保持 <see cref="Exception"/> 而**不**收窄到
     /// <c>IOException or UnauthorizedAccessException</c>：收窄等于把原先"兜住"的情形
     /// 改成抛给调用方，那会沿着降权启动链炸出去 —— 属于行为变更，不在"加一条日志"的范围内。
+    /// <para>
+    /// 可见性是 <see langword="internal"/> 而非 <see langword="private"/>：调用它的降权启动链
+    /// 要真令牌、真中转器 exe 与真进程，单测禁止触碰进程，因此清理分支只能由测试直调
+    /// （<c>DeElevatedProcessLauncherTests</c>）。本项目已在 Core 上配
+    /// <c>InternalsVisibleTo=DelayStart.Core.Tests</c>，只在测试程序集里开口子，
+    /// 公共 API 面不变，也不用再靠反射直调私有方法（改个名要等运行时才炸）。
+    /// </para>
     /// </remarks>
-    private void TryDeleteDirectory(string itemName, string path)
+    internal void TryDeleteDirectory(string itemName, string path)
     {
         try
         {

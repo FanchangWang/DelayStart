@@ -134,6 +134,10 @@ public sealed class ConfigService : IAppConfigStore
             or System.Security.SecurityException
             or NotSupportedException)
         {
+            // 与上面两条读路径的失败分支同口径：写失败是**不可逆风险最高**的一类
+            // （改过配置却没落盘，下次启动读回旧值，用户以为改了其实没改），
+            // 抛异常之外必须留痕，且日志里要带具体路径。
+            _log.Error(ex, $"保存配置文件失败：{ConfigFilePath}");
             throw new StartupOperationException(
                 StartupFailureReason.Unknown,
                 entryId: string.Empty,

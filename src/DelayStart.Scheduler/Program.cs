@@ -20,7 +20,7 @@ namespace DelayStart.Scheduler;
 /// </remarks>
 internal static class Program
 {
-    /// <summary>单实例互斥名。重复启动（用户手动双击 + 计划任务并发）时后者静默退出。</summary>
+    /// <summary>单实例互斥名。重复启动（用户手动双击 + 计划任务并发）时后者退出，并在 <c>scheduler.log</c> 留一行 Info。</summary>
     private const string SingleInstanceMutexName = @"Local\DelayStart.Scheduler";
 
     /// <summary>
@@ -30,12 +30,10 @@ internal static class Program
     [STAThread]
     private static int Main()
     {
-        using var mutex = new System.Threading.Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
-        if (!isNew)
-        {
-            return 0; // 已有调度在跑：直接退出，不弹任何东西
-        }
-
+        // 日志必须先于互斥体建好：单实例互斥命中的那一支也要留痕。
+        // 原来这一支 return 0 前一句话都不写，于是"计划任务重复拉起 / 用户双击"
+        // 这类现象在 scheduler.log 里彻底无痕 —— 静默退出让人无法区分
+        // "本进程正常跑完" 与 "根本没跑起来"。
         var paths = new PathService();
         paths.EnsureCreated();
 
@@ -43,6 +41,16 @@ internal static class Program
             paths.SchedulerLogPath,
             "Scheduler",
             SystemClock.Instance);
+
+        using var mutex = new System.Threading.Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
+        if (!isNew)
+        {
+            // Info 与 App（LogGotoLog）、Guard（ILogSink.Info）保持同一口径：
+            // 重复启动是**预期内**的正常情况（计划任务 + 手动双击并发），不是故障，
+            // 不该升级成 Warn 去污染告警视图；但绝不沉默。
+            log.Info("已有调度端实例在运行（单实例互斥命中），本次启动退出。");
+            return 0; // 已有调度在跑：直接退出，不弹任何东西
+        }
 
         // 提权门槛（2026-09-21 批复）：正常入口是计划任务（RunLevel=Highest）；
         // 手动双击 exe 会以未提权令牌运行 —— 静默退出，防止产生第二条调度路径。

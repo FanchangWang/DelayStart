@@ -8,7 +8,7 @@
 
     <!--
       ★ OutputType 必须是 WinExe（不是 Exe）——用 Exe 会在登录瞬间闪一个控制台黑框。
-      AOT 与体积约束见 docs/docs/design.md 7.6/7.7；发布配置见 docs/design.md 十。
+      AOT 与体积约束见 docs/design.md 7.6/7.7；发布配置见 docs/design.md 十。
     -->
     <!--
       ★ 目标架构（D60-2）：可由命令行覆盖 —— dotnet publish -r win-arm64。

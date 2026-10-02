@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D144）
+# DelayStart — 决策记录（D1–D146）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -1611,3 +1611,43 @@ lambda 参数 `applied` 还遮蔽了外层的 `int applied`。结果是 `done` �
 **残留风险（如实记录）**：同用户的文件通道在原理上无法自证真伪 —— 抢写者与卸载器同权限，任何内容它都能伪造。真正把窗口关掉的是随机名 + 写不进就报错；白名单与独占创建是纵深防御与可见性的保证。要再进一步只能换通道，而那正是 D61 划走的路。
 
 **踩到的两个坑**：`Random` 在 Inno `[Code]` 里可用且**每次进程启动重新播种**（连跑三次取值全不同，实测确认）；而 `GetTempFileName` / `GetTickCount` / `FormatDateTime` 在 `[Code]` 里**全部不存在**（`Unknown identifier`）——想当然按文档名写会直接编译失败。
+
+## D145 broker 作业回执加一次性令牌校验
+
+**结论**：调度端每次写作业时生成一枚一次性令牌写进 `BrokerLaunchJob.Token`，中转器**原样回写**到 `BrokerLaunchResult.Token`（不得自行生成），读取回执时逐字节比对，不符即不采信。判定逻辑收进 `Core/Launch/BrokerReceiptPolicy`（`NewToken` / `IsAuthentic`），与 D144 的 `RestoreResultFilePolicy` 同一形状 —— **纯逻辑住 Core，App 层那侧就等于零单测**（`DeElevatedProcessLauncher` 在 Core、`LaunchBroker` 也只引 Core，两端都够得到）。
+
+**背景**：`%TEMP%\DelayStart\broker\<Guid>` 下的 `result.json` 此前只判 `File.Exists` + 反序列化，**不校验写入者**。同用户的 Medium 进程抢先落一份 `Ok=true`，该条目就被**永久标记为已启动而实际从未运行**，又因 D20「不提权回退」不再重试 —— 用户界面上一切正常。这是功能性静默失败。
+
+**为什么是令牌而不是收紧 ACL**：同用户的 Medium 进程**本来就是那个作业目录的属主**，`ACL` 对唯一实际对手做的限制它自己就能绕过（同用户进程能做的事，DACL 能做的事一样多）。令牌不同 —— 只有真正拿到这份**作业**的中转器才可能读到它。这与 D144 里「同用户的文件通道在原理上无法自证真伪」是同一条，但那条的窗口靠随机名关，这条靠内容关。
+
+**为什么改跨进程契约没有迁移负担**：项目全程不做跨版本兼容（D121），不存在"新旧调度端与新旧中转器混跑"的场景需要处理。
+
+**后果的变化（如实记录，这是这条的收益所在）**：伪造回执**只能把条目推向失败，不再谎报成功**；最坏是 DoS 这一条。
+
+**🔴 两个方向性选择**：
+1. **令牌不符 ≠ 立即失败，而是继续轮询直到超时**（与既有的 `JsonException` 分支同一处理）。伪造者只能让"文件存在且内容像样"，挡不住真正的中转器随后用原子改名覆盖它、写出带正确令牌的真回执。
+2. **空令牌永不通过** —— 即使期望值为空串也判否。否则一个"双方都没带令牌"的旧版本组合会静默通过校验，防伪造能力形同虚设。
+
+**代价与约束**：`LaunchBroker` 里**每一处 `new BrokerLaunchResult` 都必须带 `Token = job.Token`**（本轮 6 处已全覆盖，并在 XML 备注里写死这条约束）。漏带不会造成假成功，只会让该回执被判无效并最终把条目判成"超时未回写 ⇒ 失败" —— 即**失败方向**；但那仍然是一条假失败，所以每一处都要写，不能靠"漏了也没事"。
+
+## D146 把纯判定从「调 Win32 的函数」里搬进可测的纯函数
+
+**结论**：三处纯判定各搬一处，**逻辑逐字等价、行为不变**：
+- `ElevationCheck.IsElevatedFromTokenInfo(bool querySucceeded, uint elevationValue)` —— 承接 `ok && value.IsElevated != 0`；
+- `IsUiAccessTarget` 拆成 `IsUiAccessCandidatePath`（`.exe` 后缀）+ `IsUiAccessTargetFromManifest`（清单解析结果），`IsUwpItem` 由 `private` 改 `internal`；
+- 新增 `BrokerTimingPolicy`（4 秒秒退窗口 / 20 秒轮询超时 / 200ms 间隔 + `GetResultPollDeadline` / `ShouldKeepPolling`）。
+
+**核心论点**：**判定逻辑住在读系统资源的函数里 ＝ 判错时不报错、构建照样绿、单测也照不到。** `ElevationCheck.IsElevated()` 是 `App/Program.cs:127` 与 `Guard/Program.cs:45` 的**提权门**，守着 D20 的整个不变量（业务绝不以非提权身份运行），但它必须真令牌 —— 单元测试禁止碰进程 ⇒ 一直零测试，改坏它构建与测试都绿。broker 那三段时间常量同理：漂移了没有任何编译期信号，而它们直接决定"目标秒退多久算秒退"（E4）与"轮询多久判超时"。
+
+**与 D128 同源**：D128 定的判据是"两边都要用、谁都不能引用谁的东西只能住 Core"。本条是它的**延伸**：住 Core 还不够 —— **住在 Core 的东西就该有测试**，而"有测试"的前提往往是"判定面能从系统调用里剥出来"。所以本条的落点不是"搬家"，是"搬到一个可被穷举断言的形状"。
+
+**🔴 红线（逐条核对过，全部零改动）**：
+- **令牌复制与进程创建分支零改动** —— `AcquireShellPrimaryToken` / `DuplicateTokenEx` / `CreateProcessWithTokenW` / `LaunchDirect` / `LaunchDeElevated` / `LaunchViaShellDelegate` 的进程创建部分一字未动；
+- **未引入任何测试钩子**（不改签名塞回调、不加条件编译分支）；
+- **D20 判据原样保留** —— 查 `TokenElevation` 而非 `IsInRole`；并加了一条守卫用例把 `TokenElevation` / `TokenQuery` 两个常量钉死，因为"有人改成 `IsInRole`"的表现正是**删掉这两个常量**；
+- **判定条件逐字等价**，短路位置与求值次数不变（uiAccess 链）；`DateTime.UtcNow` 的求值时机仍在循环条件处，未提前（broker 时序）；
+- **方向仍然保守**：`querySucceeded == false` 一律判未提权 —— 查不到就不算已提升，与 `IsElevated` 里"连自己的令牌都打不开就按未提权处理"同取向；比较用 `!= 0` 而非 `== 1`（Win32 只保证"非零即提升"）。
+
+**为什么 catch 不收窄这类同族约束要写进 XML 备注**：这类"看起来多余的写法"（不收窄的 `catch (Exception)`、`!= 0`、`ShouldKeepPolling` 的 `<` 而非 `<=`）在**下一轮重构里最容易被当成冗余清理掉**，而它们每一条都编码了一个方向性选择。方向反了不会报错、只会静默 —— 那正是本条要解决的问题。所以这类约束不写在提交信息里（会随时间失忆），**写进它所在方法的 XML 备注**，让下一个改它的人当场读到。
+
+**代价**：Core 多了三个 `internal` 面（靠 `InternalsVisibleTo=DelayStart.Core.Tests` 暴露给测试，与 Management 侧一致）。放宽的只是**可见性**，不是行为。

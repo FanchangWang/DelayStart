@@ -508,6 +508,57 @@ var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId
 
 ---
 
+## 三十二、把「用户可写位置」当成可信来源（本项目的配置与安装目录都在其中）
+
+**症状**：安全审计把「配置位于用户可写目录 `%LOCALAPPDATA%\DelayStart\config\app.json`，
+其中的 `Path` / `Arguments` / `RunAsAdmin` 由文件内容决定，而 High 调度端照着启动」标成
+**high**；同族的还有「`.ps1` 的 PowerShell 宿主探测把 `PATH` 与
+`%LOCALAPPDATA%\Microsoft\WindowsApps` 排在前两位」（`Core/Services/PowerShellHost.cs`）。
+看起来是一条完整的无 UAC 本地提权链。
+
+**结论**：**不修，也不试图加防护。** 本项目的**配置目录与安装目录都是当前用户可写的**，
+`config\app.json` 里的 `Path` / `Arguments` / `RunAsAdmin` 由文件内容决定，
+所以它**不是信任边界**。而且**给它加防护也没有意义**：
+- **ACL 挡不住同用户进程** —— 能改这个文件的进程本来就是那个用户，给它加「仅当前用户 + SYSTEM」
+  等于没加；
+- **加密挡不住有权改该用户文件的人** —— 密钥要么在同一个用户上下文里（连同密文一起可取），
+  要么得靠 DPAPI 绑用户（同样同用户可解）。
+
+**取证（2026-10-03 实测）**：
+
+```
+> icacls C:\Users\<用户>\AppData\Local\Programs\DelayStart
+  NT AUTHORITY\SYSTEM:(I)(OI)(CI)(F)
+  BUILTIN\Administrators:(I)(OI)(CI)(F)
+  <当前用户>:(I)(OI)(CI)(F)
+```
+
+当前用户对**安装目录**是 `(F)` 完全控制 ⇒ 同用户的 Medium 进程**可以直接覆写
+`DelayStart.Scheduler.exe`**。这条路（换掉整个 High 进程的代码）**严格强于**改 JSON
+里的启动目标 —— 所以「篡改配置」这个动作**没有引入任何新的攻击面**：
+能改配置的攻击者本来就已经能做更坏的事。反过来给配置加 ACL 也不会让安装目录变得不可写，
+只是把同一个洞从一处挪到另一处。
+
+**同族**：PowerShell 宿主探测顺序（①`%ProgramFiles%\PowerShell\7` → ②`…7-preview`
+→ ③`PATH` → ④`%LOCALAPPDATA%\Microsoft\WindowsApps` → ⑤`%SystemRoot%\…\powershell.exe`），
+③④ 确为用户可写位置，与上面同一条。真正收紧要限定 `%ProgramFiles%` / `%SystemRoot%`，
+那会碰 D128 的启动链，**须单独立项**，不在「顺手修一下」的范围内。
+
+**与 D110 的关系**：D110 自己写了「掌握 HKLM 写入 + 计划任务注册 + 常驻托盘 +
+注册协议处理器 ⇒ 已越过 PUA 判定的高风险特征线」。本条是那条判断的**延续** ——
+按这个产品形态（per-user 安装、无常驻服务、靠计划任务以 `Highest` 跑起来），
+配置放在用户目录是必然的，不是疏漏。相应地，`design.md` 的 **NFR-6.7 与路径布局表
+把「安装目录只读」改成了「程序运行时不向安装目录写任何东西」** ———
+原措辞容易被误读成 ACL 只读，而实际上那个目录继承 `%LOCALAPPDATA%` 的用户可写 ACL。
+
+**反面教训（这条本身就是教训）**：security-reviewer 标 high 用的是「配置文件应当防篡改」
+的通用模型，**没有结合本项目的 per-user 安装形态**。审计时**必须先查清安装目录的 ACL
+再定级**：本机一条 `icacls` 就能定性，而它把结论从「高危漏洞」翻成了
+「产品形态的固有暴露面」。定级前少跑一条命令，报告就会指向一个不存在的修复。
+这也正是 `pitfalls.md` 二十九「引用而不验证」的另一个面：连**通用安全模型**也要拿本机事实校一遍。
+
+---
+
 ## 教训方法论
 
 1. **先取证再改**：报错框是证据不是结论——"读到 A 要求 B、本机只有 C"要直接调一次探针验证（D64 的 DDLM 假铁证）。
@@ -516,3 +567,6 @@ var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId
 4. **能直接调一次 API 就别推理**；红/绿对照证明用例真的钉住了缺陷。
 5. **用户报告的现象先 1:1 复现再修**；修完用"反向放回病根文件"验证因果。
 6. **"顺序对" ≠ "布局对"**：与 Win32 结构体打交道时，先核对 SDK 头文件的 packing（`pshpack1.h` / `poppack.h`）与本机实测 `sizeof`，再谈字段取值。顺序、偏移、大小是三件独立的事；用同一 HRESULT 复现所有字段取值组合，就是布局错的信号。
+7. **安全定级前先量安装目录的 ACL**：`icacls %LOCALAPPDATA%\Programs\<本程序>` 一条命令就能判定
+   "用户可写的配置"到底是不是一条新攻击面 —— 若当前用户对**程序目录**也有 `(F)`，
+   那么它严格强于改配置，加固等于把同一个洞挪位置（本节三十二）。

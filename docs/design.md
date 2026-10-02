@@ -258,7 +258,7 @@
 |---|---|
 | NFR-4 | 可维护性：Core 无 UI 依赖；系统操作走接口抽象；纯逻辑有单测；公开 API 中文 XML 注释 |
 | NFR-5 | 兼容性：Win10 21H2+；100–200% DPI；多显示器面板落主屏右下；明暗主题；仅简体中文 |
-| NFR-6 | 分发：管理端 WinUI 3 unpackaged 自包含（R9 已实测提权生效）；调度端纯 Win32 + NativeAOT（D24）；**Inno Setup 安装器**，固定 `%LOCALAPPDATA%\Programs\DelayStart`，`PrivilegesRequired=lowest`（安装零 UAC、卸载弹一次）；**NFR-6.4 卸载必须可逆**：先还原全部接管项再删文件，还原失败中止卸载；安装目录只读（NFR-6.7）；计划任务身份 = 交互用户 + `RunLevel=Highest`，**禁止 SYSTEM**（NFR-6.8） |
+| NFR-6 | 分发：管理端 WinUI 3 unpackaged 自包含（R9 已实测提权生效）；调度端纯 Win32 + NativeAOT（D24）；**Inno Setup 安装器**，固定 `%LOCALAPPDATA%\Programs\DelayStart`，`PrivilegesRequired=lowest`（安装零 UAC、卸载弹一次）；**NFR-6.4 卸载必须可逆**：先还原全部接管项再删文件，还原失败中止卸载；**NFR-6.7 程序运行时不向安装目录写任何东西**（日志 / 配置 / 归档一律落 `%LOCALAPPDATA%\DelayStart\`，见路径布局表）—— 🔴 这是**行为约定，不是 ACL 约定**：该目录继承 `%LOCALAPPDATA%` 的 ACL，**当前用户可写**（`pitfalls.md` 三十二），"只读"指的是"没人往里写"，不是"谁都写不进去"；计划任务身份 = 交互用户 + `RunLevel=Highest`，**禁止 SYSTEM**（NFR-6.8） |
 | **NFR-x** | **离线可判定**（硬约束，FR-15 引入）：`Scheduler` / `Guard` / `LaunchBroker` / `NotifyBroker` **零网络代码** —— 它们是登录即跑的进程，判定输入只能来自本地磁盘。下载只允许出现在 `DelayStart.Management`（`HolidayCalendarUpdateService`），且必须由用户动作或设置页开关触发；失败不影响判定（降级而非报错） |
 | **NFR-y** | **数据三层容错**（FR-15）：节假日数据"命中 → 按数据 / 该年有数据但当天未列 → 按星期规律 / 该年无数据或文件坏 → 按星期规律且界面可见（`≈`）"；写盘前必过校验，**旧的好数据绝不被坏的新数据覆盖**；周期引用失效回落「每天」。**兜底方向一律更宽松，绝不更严格** |
 
@@ -325,7 +325,7 @@ Tests ──> Core (+ Management)
 
 | 类别 | 路径 | 说明 |
 |---|---|---|
-| 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**只读**；四类 exe 同目录（D75） |
+| 程序 | `%LOCALAPPDATA%\Programs\DelayStart\` | per-user 安装、**程序运行时不写入**（🔴 该目录继承 `%LOCALAPPDATA%` 的用户可写 ACL，此处"只读"是行为约定而非 ACL 约定，见 `pitfalls.md` 三十二）；四类 exe 同目录（D75） |
 | 配置 | `%LOCALAPPDATA%\DelayStart\config\app.json` | Local（**不**漫游），原子写；v0.6.1 起放进 `config\` 子目录，与可随时删的运行数据分开（P1-3） |
 | 日志 | `%LOCALAPPDATA%\DelayStart\logs\{scheduler,manager,launchbroker,guard}.log` | 2MB 轮转 |
 | 调度运行归档 | `%LOCALAPPDATA%\DelayStart\scheduler\archive\<runId>.json` | 保留 30 次（D116 起从 `runs\` 迁入） |

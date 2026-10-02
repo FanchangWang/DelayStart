@@ -1,4 +1,4 @@
-# DelayStart — 决策记录（D1–D143）
+# DelayStart — 决策记录（D1–D144）
 
 > 这份文档只回答一个问题：**当前方案为什么长这样**。
 >
@@ -1595,3 +1595,19 @@ lambda 参数 `applied` 还遮蔽了外层的 `int applied`。结果是 `done` �
 **保留的既有行为**（改签名不改变语义）：`File.Exists` 前置判定保留 —— `File.Delete` 对不存在的文件静默返回、不抛异常，无法靠异常区分「不存在」；而 `File.Exists` 对「目录可进、文件被独占锁住」仍返回 `true`，所以不会把真失败误判成 `NotFound`。
 
 **影响面**（经全仓库核查，见验收记录）：`Delete` 在 `src/` 下**零生产调用点**，唯一调用方是 `tests/DelayStart.Core.Tests/HolidayCalendarStoreTests.cs` 的三条断言（已同步更新为 `Deleted` / `NotFound` / `NotFound`，语义与改前逐一对应）。`installer/`、`scripts/`、`.github/`、本文档均未描述该 API 或其返回语义，**无漏掉的调用点**。签名变更未造成影响面扩散 —— 但这依赖"当前只有测试在调"这一事实，不是设计保证，故在此留档以备将来新增调用方时知道三态的含义。
+
+## D144 卸载还原结果文件改为「随机名 + 交换目录白名单 + 独占创建」
+
+**结论**：`--result-file` 的落盘规则收进新增的 `Core/Services/RestoreResultFilePolicy`（`IsAllowedPath` / `WriteExclusive`），交换目录取新增的 `PathService.TempExchangeRoot`（`%TEMP%\DelayStart\`）；`installer/DelayStart.iss` 的 `InitializeUninstall` 改为每次卸载用 `Random` 拼一个随机文件名，并把预删 `DeleteFile` 去掉。写盘失败一律改写退出码并**在 stderr 与 `manager.log` 各留一条**，不再静默。
+
+**背景**：原实现的结果文件是**固定名** `{tmp}\DelayStart-restore-result.txt`，卸载器先 `DeleteFile` 再拉起 `ShellExec('runas')`，而提权进程用 `File.WriteAllText` **按命令行给的路径直接写、零校验**。同用户的中完整性进程只要在两步之间抢先创建同名文件并填一个 `0`，卸载器读出 `ResultCode=0` 就会把一次没做完的还原当成成功而放行 —— 用户永久失去被接管自启动项的还原入口（D22 明令禁止的后果），且失败现场没有任何痕迹。这是**功能性静默失败**，违反硬约束 7。
+
+**为什么是三件事而不是一件**：单做白名单，`..\` 一次穿越就能绕过；单做白名单 + 随机名，`WriteAllText` 的隐式覆盖会把"路径受控"架空；单做独占创建，固定名在两次卸载之间仍可被复用。所以随机名（不可预测）、白名单（可去穿越）、独占创建（文件此前必须不存在）三道闸各挡一路。
+
+**🔴 没有动的**：提权方式与 CLI 契约一律不动 —— `ShellExec('runas')` + `--result-file` 是 D61 真机验证过的路径（UAC 被拒、父子退出码转发两条分支都没在真机上跑过）。本条只收紧**写入校验与文件名**。`--result-file` 这个参数名保持原样。
+
+**为什么判定放 Core**：`CliHost` 在 App 层，而 Tests **绝不引用 App**（design.md §7.1）——留在 App 里就等于零单测。与 `BrokerResultPolicy` 同一形状：纯逻辑住有测试工程的那一层。
+
+**残留风险（如实记录）**：同用户的文件通道在原理上无法自证真伪 —— 抢写者与卸载器同权限，任何内容它都能伪造。真正把窗口关掉的是随机名 + 写不进就报错；白名单与独占创建是纵深防御与可见性的保证。要再进一步只能换通道，而那正是 D61 划走的路。
+
+**踩到的两个坑**：`Random` 在 Inno `[Code]` 里可用且**每次进程启动重新播种**（连跑三次取值全不同，实测确认）；而 `GetTempFileName` / `GetTickCount` / `FormatDateTime` 在 `[Code]` 里**全部不存在**（`Unknown identifier`）——想当然按文档名写会直接编译失败。

@@ -486,6 +486,26 @@ var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId
 - **按固定行数批量删代码是这轮的实际肇因**。第三行的内容当时检查过（断言是 `end;`）却仍在删除范围内 —— 检查的是"这三行是什么"，不是"我该不该删这三行"。删多行前先想清楚**最后一行是不是别人的收尾**。
 - ISCC 可以在几秒内给出真结论，本机就有（`%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`）。**手上没有 ISCC 时应当明说"环境不具备验证条件"**，而不是照样提交 —— 差别只在于一句话，但代价是让用户替你跑一遍。
 
+## 三十一、Inno `[Code]` 里的"看着像标准库"的名字，一半不存在
+
+**症状**：给卸载结果文件改名，想用"临时文件"API 拼一个随机名，凭印象写了三个函数名。ISCC 立刻报 `Unknown identifier 'GetTempFileName'`。
+
+**取证**（2026-10-03，用一个十几行的探针 `.iss` 逐个试，ISCC 6.7.3）：
+
+| 名字 | `[Code]` 里 | 备注 |
+|---|---|---|
+| `Random(Int64)` | ✅ 可用 | **每次进程启动重新播种** —— 连跑三次输出三组完全不同的数，所以它做得出不可预测的文件名 |
+| `CreateDir` | ✅ 可用 | |
+| `GetTempFileName('.txt')` | ❌ `Unknown identifier` | 只有编译期（ISPP）侧有 |
+| `GetTickCount` | ❌ `Unknown identifier` | 想给随机名再加一份熵，用不了 |
+| `FormatDateTime(...)` | ❌ `Unknown identifier` | 同上，时间戳拼不进去 |
+
+另外一条：**`procedure InitializeSetup();` 会报 `Invalid prototype`** —— 因为该事件点的原型是 `function InitializeSetup(): Boolean`，声明成 procedure 就算原型不符（声明成 `procedure InitializeUninstall();` 反而是对的）。
+
+- 🔴 **别按"文档里好像有"的名字写**。ISHelp 的 chm 讲的是整个 Inno 语言（含预处理期），**`[Code]` 的 Pascal Script 只是它的子集**；名字在文档里出现过 ≠ 在 `[Code]` 里能编过。
+- 🔴 **探针 `.iss` 是这里最便宜的手段**：写一个只有 `[Setup]` + 一个空 `[Code]` 的十几行脚本，`ISCC.exe /O<临时目录> <探针.iss>`，几秒给出真结论。切勿改真的 `.iss` 去"试试看能不能编过"。
+- **要验证的从来不只是"能不能编过"**：本机有 ISCC 时，跑 `installer/build-installer.ps1` 走一次真编译（注意它要 **pwsh**，Windows PowerShell 5.1 会被 `#requires -Version 7` 挡下），比任何静态检查都强 —— 上一条"静态检查约等于没有"说的正是这件事的另一半。
+
 ---
 
 ## 教训方法论

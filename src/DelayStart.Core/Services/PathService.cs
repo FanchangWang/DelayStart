@@ -199,8 +199,28 @@ public sealed class PathService
     /// </summary>
     public string NotifyBrokerExecutablePath => Path.Combine(InstalledRoot, NotifyBrokerExecutableName);
 
+    /// <summary>
+    /// 临时交换目录（D144）：<c>%TEMP%\DelayStart\</c>，放卸载器与提权进程之间的结果文件。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 它是卸载还原链路的**唯一**落点，必须与 Inno 卸载器的
+    /// <c>ExpandConstant('{tmp}\DelayStart')</c> 逐字一致 —— 两边不一致的表现是
+    /// 提权进程判"路径不在白名单内"而拒绝写，卸载器则等满 60 秒再问用户
+    /// "恢复程序没有返回结果"，一次卸载白等一分钟。
+    /// <para>
+    /// 为什么落在 TEMP 而不是 <see cref="LocalRoot"/>：它只在卸载期间存在、卸载结束即删，
+    /// 是一次性交付物而不是运行时数据；而 <c>{tmp}</c> 是卸载器与被拉起的提权进程
+    /// **双方都必然可写**的唯一目录（提权后环境变量不变）。
+    /// </para>
+    /// <para>
+    /// 🔴 **刻意是静态**：它不依赖任何根目录覆盖变量（<c>DELAYSTART_LOCAL_DIR</c> 等），
+    /// 挂成实例成员只会被 CA1822 判为"没有访问实例数据"——那说明它本来就不该挂在实例上。
+    /// </para>
+    /// </remarks>
+    public static string TempExchangeRoot => Path.Combine(Path.GetTempPath(), FolderName);
+
     /// <summary>全部**允许写入**的根目录。安装目录不在此列，这是 NFR-6.7 的可执行表述。</summary>
-    public IReadOnlyList<string> WritableRoots => [LocalRoot, ConfigRoot];
+    public IReadOnlyList<string> WritableRoots => [LocalRoot, ConfigRoot, TempExchangeRoot];
 
     /// <summary>取某次运行的归档文件路径（<c>scheduler\archive\{runId}.json</c>，D116）。</summary>
     /// <param name="runId">运行标识，格式 <c>yyyyMMdd-HHmmss</c>。</param>

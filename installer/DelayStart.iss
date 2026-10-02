@@ -885,6 +885,7 @@ function InitializeUninstall(): Boolean;
 var
   AppExe: String;
   ResultFile: String;
+  ResultDir: String;
   ResultCode: Integer;
   ShellError: Integer;
   Waited: Integer;
@@ -910,9 +911,22 @@ begin
   if not FileExists(AppExe) then
     Exit; // 文件都不在了（手工删除过），无从恢复，照常卸载
 
-  // 结果文件放 {tmp}（当前用户的临时目录）：提权后的进程还是同一个用户，写得进去。
-  ResultFile := ExpandConstant('{tmp}\DelayStart-restore-result.txt');
-  DeleteFile(ResultFile);
+  // 结果文件放 {tmp}\DelayStart\（当前用户的临时目录）：提权后的进程还是同一个用户，
+  // 写得进去；程序侧的白名单（PathService.TempExchangeRoot）也正是这个目录。
+  //
+  // 🔴 文件名**每次卸载随机**（D144）：原先是固定名 DelayStart-restore-result.txt，
+  //    同用户的中完整性进程可以**预测**它 —— 在卸载器拉起提权进程之前抢先创建同名文件
+  //    并填一个 "0"，卸载器就会把它读成"还原成功"而放行，用户从此永久失去被接管项的
+  //    还原入口，且失败现场没有任何痕迹。随机名把这条抢先路径压成一场盲猜。
+  //    随机源用 Pascal Script 的 Random：已实测每次进程启动重新播种（连跑三次取值全不同），
+  //    连抽两次拼进文件名 ≈ 60 bit 熵，足够。
+  ResultDir := ExpandConstant('{tmp}\DelayStart');
+  CreateDir(ResultDir);
+  ResultFile := ResultDir + '\restore-' + IntToStr(Random(999999999)) +
+    '-' + IntToStr(Random(999999999)) + '.txt';
+  Log('卸载还原结果文件：' + ResultFile);
+  // ⚠️ 不再预删：名字是随机的，不存在"上一轮残留"要清，而 DeleteFile 只会给抢写者
+  //    腾出一个确定的空窗。
 
   if not ShellExec(
       'runas',
@@ -950,7 +964,9 @@ begin
   if not FileExists(ResultFile) then
   begin
     // 没有结果文件 = 用户取消了 UAC，或程序没跑到写文件那一步。
-    // 两者都意味着"还原没完成"，按失败处理（给用户知情权，默认放行；D84 静默默认也放行）。
+    // D144 起多一种：程序判这条路径不在白名单内（两侧对交换目录的理解不一致）而**拒绝写** ——
+    // 它会把原因写进 stderr 与 manager.log，但这里拿不到退出码，只能落到同一个分支。
+    // 三者都意味着"还原没完成"，按失败处理（给用户知情权，默认放行；D84 静默默认也放行）。
     if SuppressibleMsgBox(
         '恢复程序没有返回结果（可能取消了 UAC 提权，或程序已损坏）。' #13#10 +
         '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。' #13#10 #13#10 +

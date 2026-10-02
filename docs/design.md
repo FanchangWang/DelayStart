@@ -332,6 +332,7 @@ Tests ──> Core (+ Management)
 | 守卫基线 | `%LOCALAPPDATA%\DelayStart\guard\baseline.json` | 上一轮扫描快照，原子写（D74） |
 | 守卫巡检归档 | `%LOCALAPPDATA%\DelayStart\guard\inspections\<yyyyMMdd-HHmmss>.json` | 每次巡检一份（D1=A 批复，D116），保留 30 次 |
 | UI 定位请求 | `%LOCALAPPDATA%\DelayStart\ui-request.json` | 守卫 → 管理端的跨进程载荷（读后即删，D74） |
+| 卸载还原结果 | `%TEMP%\DelayStart\restore-<随机>.txt` | 卸载器 → 提权进程的唯一通道（D61）；🔴 随机名 + 白名单 + 独占创建（D144），不可写成固定名 |
 
 🔴 **运行时数据按进程归堆（D116）**：调度端的实时状态与归档收在 `scheduler\`、守卫的数据收在 `guard\`，目录名即进程名。本项目不做旧布局迁移（D121）：`state\` 与 `runs\` 是 v0.4.0 及以前的路径，跨此版本需先卸载旧版（D122），旧目录不再被读取，残留目录可手工删除。
 

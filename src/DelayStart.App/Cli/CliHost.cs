@@ -1,5 +1,7 @@
 using System.Globalization;
 
+using DelayStart.Core.Abstractions;
+
 using DelayStart.Core.Logging;
 using DelayStart.Core.Models;
 using DelayStart.Core.Services;
@@ -264,24 +266,39 @@ internal static class CliHost
         {
             // 🔴 放 finally 而不是"正常路径的最后一行的尾巴"：结果文件的写入是这条
             // 卸载保证的**唯一交付物**，它的存在性不能依赖任何一条代码路径走到最后。
-            WriteResultFile(args, exitCode);
+            //
+            // 🔴 而"写不出去"必须**改写退出码**：交付失败就是失败。原来写盘失败被静默吞掉，
+            // 表现是退出码 0 却没有任何结果文件 —— 卸载器等满 60 秒后问用户
+            // "恢复程序没有返回结果"，而日志与控制台一个字都没有（本批次要修的那类静默失败）。
+            exitCode = WriteResultFile(services, args, exitCode);
         }
 
         return exitCode;
     }
 
     /// <summary>
-    /// 把退出码写进 <c>--result-file &lt;路径&gt;</c> 指定的文件（D61）。
+    /// 把退出码写进 <c>--result-file &lt;路径&gt;</c> 指定的文件（D61 / D144）。
     /// </summary>
+    /// <param name="services">共享容器，用于取交换目录与日志接收端。</param>
     /// <param name="args">原始命令行。</param>
     /// <param name="exitCode">本次执行的退出码。</param>
+    /// <returns>结果文件**成功交付**时的退出码，否则失败码。</returns>
     /// <remarks>
     /// 供"以提升权限拉起、拿不到退出码"的调用方（Inno 卸载器）回读。
-    /// 没传参数、或写盘失败都**静默忽略** —— 本命令的主职责是还原系统启动项，
-    /// 结果文件只是给卸载器的旁路通道，绝不能因为它挡掉退出码。
     /// 文件内容就是十进制整数（无换行），卸载器按 <c>StrToIntDef</c> 解析。
+    /// <para>
+    /// 🔴 没传 <c>--result-file</c> 时原样返回退出码（手工跑 <c>--restore-all</c> 的正常情形）；
+    /// 传了却写不成，**一律判失败并留下痕迹**（stderr + 日志），绝不静默吞掉：
+    /// 这个文件是卸载保证的唯一交付物，"没交出去"与"还原成功"对卸载器是同一种输入 ——
+    /// 都会让它把一次没做完的还原当成成功，而用户将永久失去被接管自启动项的还原入口（D22）。
+    /// </para>
+    /// <para>
+    /// 写盘本身的两道闸（白名单 + 独占创建）在
+    /// <see cref="RestoreResultFilePolicy"/> 里 —— 放在 Core 是因为 App 层没有测试工程，
+    /// 判定逻辑必须落在能单测的那一层（design.md §7.1）。
+    /// </para>
     /// </remarks>
-    private static void WriteResultFile(string[] args, int exitCode)
+    private static int WriteResultFile(CliServices services, string[] args, int exitCode)
     {
         // 只在本方法用到，就近声明（选项名与 iss 的 InitializeUninstall 必须同步）。
         const string ResultFileOption = "--result-file";
@@ -293,20 +310,59 @@ internal static class CliHost
         // 约定：选项后面紧跟路径；缺路径就当没传过。
         if (index < 0 || index + 1 >= args.Length)
         {
-            return;
+            return exitCode;
+        }
+
+        var path = args[index + 1];
+        var exchangeRoot = PathService.TempExchangeRoot;
+
+        if (!RestoreResultFilePolicy.IsAllowedPath(path, exchangeRoot))
+        {
+            // 🔴 拒绝时**绝不**改写到"安全位置"：悄悄换个地方写，卸载器就永远等不到这个文件，
+            //    而现场看不出任何异样 —— 那正是本批次要消灭的静默失败。
+            ReportResultFileFailure(
+                services,
+                $"⚠ 结果文件路径不在允许的交换目录内，拒绝写入：{path}" +
+                $"（允许范围：{exchangeRoot}\\）。卸载流程拿不到结果将中止卸载。");
+            return ExitFailure;
         }
 
         try
         {
-            File.WriteAllText(args[index + 1], exitCode.ToString(CultureInfo.InvariantCulture));
+            // 🔴 独占创建（FileMode.CreateNew）：文件已存在即失败，不覆盖。
+            //    隐式覆盖会把"路径受控"这一层保障架空 —— 同用户的中完整性进程抢先放好一个
+            //    填着 0 的同名文件，就能让卸载器读到"还原成功"而放行。
+            RestoreResultFilePolicy.WriteExclusive(path, exitCode.ToString(CultureInfo.InvariantCulture));
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // 结果文件写不了不影响退出码。
+            ReportResultFileFailure(services, $"⚠ 结果文件写入失败：{path} —— {ex.Message}");
+            return ExitFailure;
         }
-        catch (UnauthorizedAccessException)
+
+        return exitCode;
+    }
+
+    /// <summary>
+    /// 报告结果文件交付失败：控制台与日志**各留一条**（硬约束 7：失败必须可见）。
+    /// </summary>
+    /// <param name="services">共享容器。</param>
+    /// <param name="message">失败原因，中文。</param>
+    /// <remarks>
+    /// 写日志自己也不能抛：日志落盘失败若在这里冒出去，会盖掉 <c>finally</c> 里真正的退出码，
+    /// 把一条"结果文件没写成"变成一条来路不明的崩溃。
+    /// </remarks>
+    private static void ReportResultFileFailure(CliServices services, string message)
+    {
+        Console.Error.WriteLine(message);
+
+        try
         {
-            // 同上。
+            services.Log.Error(message);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"⚠ 日志写入也失败了（{ex.Message}）—— 原因以本条控制台输出为准。");
         }
     }
 
@@ -328,7 +384,8 @@ internal static class CliHost
         Console.WriteLine("  --takeover <主键> [秒数]     接管指定条目，默认 30 秒");
         Console.WriteLine("  --release <主键>             移出延时启动，恢复系统原状");
         Console.WriteLine("  --restore-all               还原全部接管项并删除调度 / 守卫计划任务（卸载时调用）");
-        Console.WriteLine("  --result-file <路径>         把退出码写到该文件（供提权拉起方回读，见 D61）");
+        Console.WriteLine("  --result-file <路径>         把退出码写到该文件（供提权拉起方回读，见 D61）；");
+        Console.WriteLine("                              路径必须位于 %TEMP%\\DelayStart\\ 之下且文件不得预先存在");
         Console.WriteLine("  --reinstall-task            幂等注册 / 更新调度计划任务");
         Console.WriteLine("  --help                      显示本帮助");
         Console.WriteLine();

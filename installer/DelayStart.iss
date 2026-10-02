@@ -608,6 +608,84 @@ begin
     end;
   end;
 end;
+// 结束正在运行的 DelayStart 进程，然后才谈删文件。
+//
+// 🔴 **为什么必须提权**：管理端恒以提权身份运行（app.manifest D20 不变量），
+//    而安装器是 `PrivilegesRequired=lowest`（D22）。低完整性进程结束不了高完整性进程
+//    —— 这是 Windows 完整性模型的硬限制，不是可以绕开的东西。
+//    同理，Restart Manager 在这里也不可靠：实测 `CloseApplications=yes` 下
+//    FilesInUse 页**根本没出现**，说明 RM 什么都没检测到 —— 提权进程对 lowest
+//    的安装器是隐形的。所以"把关闭进程寄托给 RM"这个前提对本产品不成立。
+//
+// 🔴 **为什么 /F（强杀）可接受**：我一度把"写到一半被杀"列为反对理由，那是**夸大了**。
+//    配置走 `AtomicFileWriter`（同目录落 .tmp 再 replace），中途被杀只留一个 .tmp，
+//    **旧配置完好**；日志是 `File.AppendAllText` 逐行写，最坏是最后一行截断。
+//    对比之下"不杀 ⇒ 文件替换失败 ⇒ 安装根本完不成"，强杀是明确的 lesser evil。
+//
+// 🔴 **退出码一律不看**（实测）：`taskkill /F /T /IM a.exe /IM b.exe` 只要有任一
+//    映像名对不上就返回 **128**，哪怕其余进程已被成功终止。而 Guard / NotifyBroker
+//    / LaunchBroker 都是跑完即退的瞬时进程，"有名字对不上"是**常态**。
+//    拿退出码判成败必然误判 —— 真正的判据是下面那个：文件到底删不删得掉。
+//
+// 🔴 **不用 ewWaitUntilTerminated**：`runas` 经 AppInfo 拉起的是**另一个父进程**，
+//    等不到它。等候交给 `PurgeDirWithRetry` 的重试循环 —— 那个循环顺带把
+//    **用户点 UAC 的那几秒**也覆盖掉了，不需要额外的等待逻辑。
+//
+// 🔴 **绝不杀非本产品进程**：映像名全部硬编码在本函数里，不接受任何外部输入。
+procedure KillDelayStartProcesses;
+var
+  Params: String;
+  ErrCode: Integer;
+begin
+  // 🔴 五个都是硬编码的。四个 AOT 单文件 + 一个非 AOT 的管理端；
+  //    少杀一个就是一次装不成的升级（用户 2026-10-02 实测：管理端开着就装不上）。
+  Params :=
+    '/F /T' +
+    ' /IM DelayStart.exe' +
+    ' /IM DelayStart.Scheduler.exe' +
+    ' /IM DelayStart.Guard.exe' +
+    ' /IM DelayStart.NotifyBroker.exe' +
+    ' /IM DelayStart.LaunchBroker.exe';
+
+  // 🔴 ShellExec 末参是 `var ErrorCode: Integer` —— 声明成 String 会编译不过，
+  //    拼进日志字符串时也必须过 IntToStr。
+  ErrCode := 0;
+  if ShellExec('runas', ExpandConstant('{sys}\taskkill.exe'), Params, '', SW_HIDE, ewNoWait, ErrCode) then
+    Log('已请求提权结束 DelayStart 相关进程（taskkill ' + Params + '）。')
+  else
+    Log('拉起提权 taskkill 失败（ShellExec 错误码 ' + IntToStr(ErrCode) + '）。'
+        + '若随后仍弹出「拒绝访问」，多半是用户取消了 UAC —— 请先完全退出 DelayStart 再重跑安装程序。');
+end;
+
+// 清目录并带重试。返回**仍然删不掉的文件数**（0 = 清干净了）。
+//
+// 🔴 这个返回值是本次改动的**唯一判据**。不查"进程还在不在"、不查 taskkill 退出码，
+//    只看"文件删掉了没有" —— 它与目标同源，不需要代理指标，也就没有推断就没有误判。
+// 🔴 为什么要有重试：提权 taskkill 从 UAC 同意到进程真的结束不是瞬时的，
+//    而 UAC 弹窗那几秒更是完全不可控（用户可能正在犹豫要不要点）。
+//    20 轮 × 500ms ≈ 10 秒，覆盖得下；超了就走下面的日志，由 Restart Manager 兜底。
+// 🔴 为什么**不因"删不掉"就中止**：提权 taskkill 已经清掉了本产品的进程，
+//    此时还占着文件的只可能是杀毒扫描 / 索引服务 / 缩略图 —— 那些情况今天由
+//    Restart Manager 处理并弹 FilesInUse 页征得同意。在这里一律中止会把一条
+//    "能继续的安装"变成"必须手动重试"，那是倒退。
+function PurgeDirWithRetry(const Dir: String; Attempts: Integer; WaitMs: Integer): Integer;
+var
+  I, Left: Integer;
+begin
+  Result := PurgeDirBestEffort(Dir);
+
+  for I := 2 to Attempts do
+  begin
+    if Result = 0 then
+      Break;
+
+    Sleep(WaitMs);
+    Left := PurgeDirBestEffort(Dir);
+    Log('清目录第 ' + IntToStr(I) + ' 轮：仍被占用 ' + IntToStr(Left) + ' 个文件。');
+    Result := Left;
+  end;
+end;
+
 
 // 安装前清理。返回非空字符串 = 中止安装，并把它作为错误信息显示在"准备安装"页上。
 //
@@ -642,6 +720,26 @@ begin
   if not DirExists(AppDir) then
     Exit; // 全新安装，没有可清理的东西
 
+  // ── 先结束在跑的 DelayStart 进程，再谈删文件 ────────────────────────────────
+  //
+  // 🔴 挂点为什么在三道闸门之后、hostfxr 探测之前：
+  //   · 排在三道闸门**之前**会在"用户 /DIR= 指错目录""设了 DELAYSTART_SKIP_PURGE
+  //     诊断开关""根本没有旧安装"三种情况下仍然去杀进程 —— 诊断开关会因此失效，
+  //     而"全新安装时把用户正在用的旧实例杀掉"是纯粹的有害副作用。
+  //   · 排在 hostfxr 探测**之前**，好让精简版那条中止分支也能受益：管理端退出后
+  //     hostfxr.dll 才真的删得掉，否则它会先于本段生效。
+  KillDelayStartProcesses;
+
+  // 🔴 判据是"文件删掉了没有"，不是 taskkill 的退出码、也不是"进程还在不在"。
+  Count := PurgeDirWithRetry(AppDir, 20, 500);
+  Log('安装目录清理完成，残留 ' + IntToStr(Count) + ' 个文件在 ' + AppDir + '。');
+
+  if Count > 0 then
+    Log('仍有 ' + IntToStr(Count) + ' 个文件删不掉。DelayStart 进程已被提权结束，' +
+        '因此占用者只可能是杀毒扫描 / 索引服务 / 资源管理器缩略图 —— ' +
+        '那些情况由 Restart Manager 处理。若此时仍弹出「拒绝访问」，' +
+        '多半是提权 taskkill 那一步的 UAC 被取消了：请重跑安装程序并同意 UAC。');
+
   // ── 精简版：先确认 hostfxr.dll 删得掉，删不掉就中止 ──────────────────────
   // 它是"上一次装的是自包含形态"的指纹，也是唯一会让精简版**起不来**的残留。
   // 它被占用 = 自包含形态的管理端还在运行（调度端不加载它）。
@@ -666,10 +764,8 @@ begin
       end;
     end;
   end;
-
-  Count := PurgeDirBestEffort(AppDir);
-  Log('安装目录已清理：删除 ' + IntToStr(Count) + ' 个文件（' + AppDir + '）');
 end;
+
 
 // 安装结束后（仍是安装进程内，[Run] 的 postinstall 项尚未执行）：
 // 精简版若仍缺运行时，给一次可读的说明 + 下载入口，并说明**为什么**没有自动启动。

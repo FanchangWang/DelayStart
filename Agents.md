@@ -184,7 +184,7 @@
 | 动扫描 / 接管 / 计划任务 | `design.md` 二、七.3–7.4 · `pitfalls.md` 一、二（键名回退 / 禁用粒度 / 身份） |
 | 写 P/Invoke | `design.md` 9.4 · `pitfalls.md` 五（模块归属 / bool 封送） |
 | 改 XAML 或 ViewModel | `design.md` 9.5 · `pitfalls.md` 六（WMC1506 / pass-1 崩溃） |
-| 改安装器或 iss | `pitfalls.md` 九 · `installer/README.md` |
+| 改安装器或 iss | `pitfalls.md` 九 · **三十**（Pascal Script 的编译期错误，静态检查照不出来）· `installer/README.md` |
 | 新增 NuGet 包 | 硬约束 2 · `pitfalls.md` 五（先发一次 AOT 看 IL2026/IL3050） |
 | 动启动链路 / 降权 / 唤起 | `design.md` 7.3 机制 6 / 6a · 六（权限模型）· `decisions.md` D40、D70、**D82** · `pitfalls.md` 十二（跨完整性级别：文件当信号 / 只读探测） |
 | 动守卫（Guard） | `design.md` 十一 · `decisions.md` D74–D82 · `pitfalls.md` 十一（写回行为模式 / **AUMID 与系统通知** / bin 四件套同步 / `--goto-*` 必须排除在 CLI 分流之外） |

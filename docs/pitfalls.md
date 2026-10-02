@@ -468,6 +468,26 @@ var done = applied > 0 && resyncs.Any(applied => applied.ItemId == resync.ItemId
 
 ---
 
+## 三十、Inno Pascal Script 的三处编译期错误，静态检查一个都照不出来
+
+**症状**：给 `.iss` 加了一段 `[Code]`（提权 `taskkill` + 带重试的清目录），**静态检查全绿就提交了**，并如实写了"未经编译验证"。用户跑 `installer\build-installer.ps1` 直接炸，三个错误全在我自己身上。
+
+**取证**（`build-installer.ps1:270` 抛的那句 `ISCC 编译失败（exit 2）` 里只有第一行有信息量）：
+
+| 报错 | 真实成因 |
+|---|---|
+| `Error on line 635 ... Column 33: colon (':') expected` | 写了 `function KillDelayStartProcesses;`。**Inno 的 Pascal Script 里 `function` 必须带返回类型**（函数名之后的 `:`），不返回值的该写 `procedure`。报错的列号正是那个分号所在位置 —— 也就是它在等 `:` 的地方。 |
+| 随后在调用处报类型不匹配 | `ShellExec` 末参是 `var ErrorCode: Integer`，我声明成了 `String`，`ErrCode := '0'` 也随之错。签名以官方为准：`ShellExec(const Verb, Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ErrorCode: Integer): Boolean`。 |
+| `Error on line 772 ... Column 1: Identifier expected` | **772 行是既有的 `procedure CurStepChanged`，不是我新写的代码。** 真实原因在上游：删旧代码时用 `RemoveRange($hit, 3)` 按固定行数删三行，第三行是 `PrepareToInstall` 的收尾 `end;`，被一起吃掉了。后续解析器在下一个声明处才炸。 |
+
+**做（通用）**：
+- 🔴 **`.iss` 的静态检查几乎等于没有**：括号配平、单引号配平、"没有未使用变量"这些我都过了，三个错误一个都不影响它们 —— 被删掉的 `end;` 恰恰让 `begin`/`end` 依然配平，所以配平检查给的是**假绿**。`.iss` 只能靠 ISCC 真编译，**别把"静态过了"写成"验证过了"**。
+- **报错行号会落在受害者身上，不在肇事者身上**。看到 `Identifier expected` 指向一段你没碰过的既有代码，第一反应应该是"我上面少了闭合"，而不是"这行有问题"。本轮那三个错误里有两个是这种形态。
+- **按固定行数批量删代码是这轮的实际肇因**。第三行的内容当时检查过（断言是 `end;`）却仍在删除范围内 —— 检查的是"这三行是什么"，不是"我该不该删这三行"。删多行前先想清楚**最后一行是不是别人的收尾**。
+- ISCC 可以在几秒内给出真结论，本机就有（`%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`）。**手上没有 ISCC 时应当明说"环境不具备验证条件"**，而不是照样提交 —— 差别只在于一句话，但代价是让用户替你跑一遍。
+
+---
+
 ## 教训方法论
 
 1. **先取证再改**：报错框是证据不是结论——"读到 A 要求 B、本机只有 C"要直接调一次探针验证（D64 的 DDLM 假铁证）。

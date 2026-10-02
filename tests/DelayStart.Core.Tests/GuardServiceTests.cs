@@ -282,27 +282,25 @@ public sealed class GuardServiceTests
         Assert.Equal(1, report.ScannedCount);
     }
 
-    // ── helpers ─────────────────────────────────────────────────────────────
+    // ── D137：配置里的目标路径已过期 → 同步为系统现值 ───────────────────────────
 
-  // ── D137：配置里的目标路径已过期 → 同步为系统现值 ───────────────────────────
-
-  [Fact]
-  public void RunOnce_TargetPathDrifted_SyncsConfigToTheLivePath()
+    [Fact]
+    public void RunOnce_TargetPathDrifted_SyncsConfigToTheLivePath()
     {
-    // 用户机器上的真实形态（2026-10-02）：FluxDown 自更新换了可执行文件名，
+        // 用户机器上的真实形态（2026-10-02）：FluxDown 自更新换了可执行文件名，
         // 注册表项指向新 exe，配置里还指着旧 exe。
         //
         // 不修的后果：页面显示一切正常（守卫按注册表现值判定），而调度端按配置的
         // 过期路径判定 —— 那个程序从此再也没被启动过，日志每天记一条
         // 「目标程序已不存在」，用户没有任何线索去查。
-  const string oldExe = @"C:\Users\guyue\AppData\Local\Programs\FluxDown\flux_down.exe";
+        const string oldExe = @"C:\Users\guyue\AppData\Local\Programs\FluxDown\flux_down.exe";
 
-     var source = new FakeStartupSource
+        var source = new FakeStartupSource
         {
-   Entries = [Entry("registry:hkcu:fluxdown", "FluxDown", isEnabled: false)],
+            Entries = [Entry("registry:hkcu:fluxdown", "FluxDown", isEnabled: false)],
         };
         using var harness = new Harness(GuardMode.Periodic, source);
-  harness.SeedManagedItem("registry:hkcu:fluxdown", "FluxDown", oldExe);
+        harness.SeedManagedItem("registry:hkcu:fluxdown", "FluxDown", oldExe);
 
         var report = harness.Service.RunOnce();
 
@@ -313,8 +311,8 @@ public sealed class GuardServiceTests
 
         // 同步结果要出现在报告里，否则用户只有翻日志才知道发生过这件事。
         var outcome = Assert.Single(
-     report.Corrections,
-    static candidate => candidate.ItemId == "registry:hkcu:fluxdown");
+            report.Corrections,
+            static candidate => candidate.ItemId == "registry:hkcu:fluxdown");
         Assert.True(outcome.Succeeded);
         Assert.Contains("路径已同步", outcome.Detail, StringComparison.Ordinal);
     }
@@ -325,21 +323,21 @@ public sealed class GuardServiceTests
         // 🔴 反向：不许**每次巡检都白写一次配置**。写盘不是免费的，
         // 而"没有漂移"是绝大多数条目的常态。
         var source = new FakeStartupSource
-    {
+        {
             Entries = [Entry("registry:hkcu:a", "甲")],
         };
         using var harness = new Harness(GuardMode.Periodic, source);
         harness.SeedManagedItem("registry:hkcu:a", "甲");
 
-  // 基线：SeedManagedItem 自己就写过一次，比增量而不是绝对值。
+        // 基线：SeedManagedItem 自己就写过一次，比增量而不是绝对值。
         var savesBefore = harness.Store.SaveCount;
 
         harness.Service.RunOnce();
 
-     Assert.Equal(savesBefore, harness.Store.SaveCount);
+        Assert.Equal(savesBefore, harness.Store.SaveCount);
     }
 
-[Fact]
+    [Fact]
     public void RunOnce_TargetPathDrifted_ButItemGoneFromConfig_DoesNotThrowAndDoesNotClaimSuccess()
     {
         // ⚠️ 这个用例名与它的函数体**曾经不符**（S1 能长期潜伏的原因之一）：
@@ -418,6 +416,8 @@ public sealed class GuardServiceTests
         Assert.Equal(DemoExePath, saved.Single(item => item.Id == "registry:hkcu:a").Path);
         Assert.Equal(JustTypedPath, saved.Single(item => item.Id == "registry:hkcu:b").Path);
     }
+
+    // ── helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>夹具里"来源报的目标路径"。接管时配置抄的就是它。</summary>
     private const string DemoExePath = @"C:\Program Files\Demo\demo.exe";

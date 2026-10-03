@@ -65,9 +65,12 @@ DelayStart.slnx
 .\scripts\build.ps1        # 编译全解决方案（Release，0 警告验收）
 .\scripts\test.ps1         # 单元测试
 .\scripts\publish.ps1      # 发布四个 exe（调度端 / 中转器 AOT publish，守卫 / 管理端 build）+ 同步调度端产物进管理端 bin
-.\scripts\all.ps1          # 一条龙：build → test → publish
+.\scripts\lint-installer.ps1 # 安装脚本语法体检：ISCC /O- 真编译 DelayStart.iss（full + slim），只解析不打包、不碰 dotnet、约 0.4 秒
+.\scripts\all.ps1          # 一条龙：build → 安装脚本体检 → test → publish
 .\installer\build-all.ps1  # 安装包矩阵（自包含 / 精简 × x64 / arm64）
 ```
+
+> **`scripts\lint-installer.ps1`** —— `installer\DelayStart.iss` 的秒级体检。ISCC **没有** "只 parse 不打包" 的开关，但有 `/O-`（`Enable or disable output`）：关掉输出后仍完整跑预处理 + 逐段解析 + `[Code]` 的 Pascal 编译，只跳过最后的产物生成。v0.6.1 之前连踩三个编译器坑（`Exit` 不接受参数、没有 `FileCreate`/`FileWrite`、`SaveStringToFile` 是三参）都是靠事后真机打包才发现的，现在 `all.ps1` 每轮都会拦。跑 **full 与 slim 两轮**（`#ifdef Slim` 那一整块 `[Code]` 不传 `/DSlim` 编译不到），`[Files]` 的 Source 由脚本自建的**临时沙箱**顶替，因此不依赖「先跑过 publish」，也不覆盖 `dist\` / `artifacts\`。🔴 **不要把它换成 `installer\build-installer.ps1`** —— 那个每次要跑 5 次 `dotnet publish`（含 AOT）。
 
 手动等价：
 

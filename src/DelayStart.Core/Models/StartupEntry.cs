@@ -63,6 +63,41 @@ public sealed class StartupEntry
     /// <summary>已被本软件接管。按稳定主键匹配，**禁止**用 (Name, Source) 二元组（坑 6 / FR-1.6）。</summary>
     public bool IsTakenOver { get; init; }
 
+    /// <summary>
+    /// 这一项<b>按它在系统里的原有定义，运行时就需要管理员权限</b>（计划任务 <c>RunLevel=Highest</c>）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 🔴 <b>与 <c>IStartupSource.RequiresElevation</c> 是两件完全不同的事，不要混用</b>：
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>IStartupSource.RequiresElevation</c> 问的是
+    /// 「<b>读写这一类来源</b>要不要提权」—— 是本程序**管理端自己的**权限问题，
+    /// 而 D20 已让管理端全程提权，正常路径下它恒为真也不触发任何提示。
+    /// 它与被管理的那一项本身无关。</description></item>
+    /// <item><description>本字段问的是「<b>这一项被启动时</b>要不要提权」——
+    /// 是被管理项的<b>属性</b>，逐项不同：同一个计划任务来源下，
+    /// <c>\A</c> 要管理员而 <c>\B</c> 不要，是常态。</description></item>
+    /// </list>
+    /// <para>
+    /// 🔴 <b>查不到就填 <see langword="false"/>（fail-open）。</b>判错方向是「按普通身份启动」——
+    /// 那个失败模式是"程序起来了但少了点权限"，用户看得见、
+    /// 且可以自己改身份重试；反过来默认管理员而这一项并不需要，
+    /// 就是凭空给用户弹 UAC / 多要一份权限。方向与 D87 / D90 一致：宁可少提权。
+    /// </para>
+    /// <para>
+    /// <b>目前只有计划任务来源会把它填成真</b>（读 <c>Definition.Principal.RunLevel</c>）。
+    /// 注册表与启动文件夹一律为 <see langword="false"/>：HKLM Run 或系统启动文件夹里的 exe
+    /// 是否需要管理员<b>没有可靠判据</b> —— 路径位置不构成证据（<c>C:\Program Files</c> 下
+    /// 大把程序不需要提权），去读清单又要碰文件系统且对脚本 / 打包器无效。宁可查不到，
+    /// 也不要猜。
+    /// </para>
+    /// <para>
+    /// 消费方是 <c>Core/Services/LaunchIdentityPolicy</c>（编辑器里默认选什么启动身份）。
+    /// </para>
+    /// </remarks>
+    public bool RequiresAdminRun { get; init; }
+
     /// <summary>该项当前是否可被接管。受保护或已失效时不可操作。</summary>
     public bool CanTakeOver => !IsProtected && !IsMissing && !IsTakenOver;
 }

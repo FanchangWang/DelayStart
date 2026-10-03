@@ -67,6 +67,14 @@
 
 预设快选（默认 `0/5/10/15/20/30/60` 秒，D50）+ 自定义秒数；上限仅输入校验（默认 24h，FR-4.3）；身份可选普通/管理员（UWP 锁普通，D45）；条目级启用开关；同延时内可上下移调序（FR-4.7）；配置原子写（FR-4.8）。
 
+🔴 **来源项默认身份按"它系统里的原定义"给（D147）**。计划任务读 `Definition.Principal.RunLevel`，
+`Highest` 即默认选中管理员（此前恒为普通）。**用户仍可改回普通**，这是一次预选而不是一条约束。
+判据本体在 `Core/Services/LaunchIdentityPolicy`（GUI 与 `--takeover` 共用同一条），
+🔴 **UWP 恒为普通**（D45）这条不变量也收在这里，不再只活在弹窗的表达式里。
+🔴 **查不到就按普通身份**（fail-open）：只有计划任务填得出真值，注册表 / 启动文件夹一律 `false`
+—— HKLM Run 或系统启动文件夹里的 exe 是否需要管理员没有可靠判据（路径位置不算证据），判错方向是
+"用户看到程序少了点权限、可以自己改回来"，反过来则是凭空弹 UAC。
+
 ### FR-5 调度执行
 
 登录后 3s 由计划任务拉起（`onlogon` + `delay 0000:03` + `RunLevel=Highest`）；单实例 Mutex（FR-5.2）；时序 = 绝对时间点（FR-5.3，机制 5）；按 `DelaySeconds,SortOrder` 排序（FR-5.4）；逐条 try/catch（FR-5.5）；普通条目降权启动（机制 6，D40 调度端亲自降权）；管理员条目继承令牌不弹 UAC（FR-5.8）；成功判定 = 创建成功 + 1.5s 后复查 `HasExited`（机制 7）；无启用条目静默退出（FR-5.10；若"有启用条目、但今天全被周期跳过"，先写一份只含跳过项的运行记录再退出，FR-15.26）；跑完即退（FR-5.11）；实时状态写 `scheduler\current-run.json`（FR-5.12）+ 归档 `scheduler\archive\<runId>.json` 保留 30 次（FR-5.13，D116 起新路径）；源生成 JSON（FR-5.14）。
@@ -361,6 +369,12 @@ Tests ──> Core (+ Management)
 4. **软禁用矩阵**：Registry→`StartupApproved\Run`（WOW64→`Run32`）；Folder→`StartupFolder`；ScheduledTask→任务级/触发器级细分（D67：单触发器切任务级；多触发器只切登录/启动触发器且**全部**切、任务级已关时禁用动作一个字节都不动、启用先开任务级）；UWP→`State=0/2`；Manual→无动作。
 5. **调度时序**：`remaining = DelaySeconds - elapsed`（绝对时间点）；`Stopwatch` 单调计时；只保证发起顺序（坑 7：同延时值不保证前者完成初始化）。
 6. **启动身份**：管理员条目继承令牌直启；普通条目 `GetShellWindow` 外壳令牌 → `DuplicateTokenEx` → `CreateProcessWithTokenW`（D40 方案 7）；**降权链任何一步失败 = 本条目失败并继续，绝不提权回退**；`.lnk`/UWP 经 explorer 外壳委托（UWP 恒降权委托，D45）；`.ps1` 走宿主（pwsh 优先，`-NoProfile -ExecutionPolicy Bypass -File`）。
+   - 🔴 **默认身份（D147）**：编辑器与 `--takeover` 的默认启动身份由 `Core/Services/LaunchIdentityPolicy` 给：
+     来源项 `RequiresAdminRun` 为真（目前只有计划任务 `Principal.RunLevel = Highest`）⇒ 默认管理员，
+     **用户仍可改回普通**；🔴 UWP 恒普通（D45，判据里显式排除，不靠"该字段恰好为假"）；
+     🔴 查不到 ⇒ 普通（fail-open）。手动添加无来源项、恒为普通；编辑既有条目读 `item.RunAsAdmin`。
+     🔴 `IStartupSource.RequiresElevation`（读写该来源要不要提权）与 `StartupEntry.RequiresAdminRun`
+     （**这一项**启动要不要提权）是两件事，禁止混用。
 6a. **uiAccess 目标（D70）**：预检目标 RT_MANIFEST（`LoadLibraryEx` AS_DATAFILE 只读资源）判 `uiAccess="true"`（Quicker 类）——这类目标 CPWT 直启必 740（`TokenUIAccess` 需 SeTcbPrivilege，仅 SYSTEM 有）。改走**降权中转器链**：调度端 A（High）写作业 JSON → CPWT 降权拉起 `DelayStart.LaunchBroker.exe` B（Medium，AOT 单文件，与调度端同目录部署）→ B 对目标 C `ShellExecuteEx`（AppInfo 校验签名+安全位置+清单声明后赋 UIAccess、按调用方身份抬 IL：受限管理员 → High，与手动双击一致）→ B 把 **C 的**启动状态（PID/秒退/Win32 错误）经结果 JSON 回写（写 `.tmp` + 原子改名），调度端轮询读取；B 自身退出码只表达回写是否成功。作业/结果契约 = `BrokerLaunchJob`/`BrokerLaunchResult`（Core，`BrokerJsonContext` 源生成）。
 7. **成功判定**：创建成功 + 1500ms 后复查 `HasExited`；退出码 0 = 成功（拉起已有实例的必要宽容）；UWP 无 PID 收到 `null` 快照直接判成功（D28）。
 8. **原子写**：`<name>.tmp` → `File.Replace`（目标不存在则 `File.Move(overwrite:true)`）。

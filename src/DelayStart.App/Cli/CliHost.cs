@@ -149,7 +149,14 @@ internal static class CliHost
             return ExitFailure;
         }
 
-        var outcome = services.Takeover.Takeover(entry, new TakeoverOptions { DelaySeconds = delay });
+        // D147：启动身份取同一条 Core 判定，与图形界面的接管对话框口径一致 ——
+        // 此前这里恒为默认 false（TakeoverOptions.RunAsAdmin 的默认值），
+        // 于是同一项在命令行接管时被降成普通身份、在界面上却是管理员。
+        var outcome = services.Takeover.Takeover(entry, new TakeoverOptions
+        {
+            DelaySeconds = delay,
+            RunAsAdmin = LaunchIdentityPolicy.DefaultRunAsAdmin(entry),
+        });
 
         if (outcome.Succeeded)
         {

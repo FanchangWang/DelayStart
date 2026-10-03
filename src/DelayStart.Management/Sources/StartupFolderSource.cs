@@ -197,6 +197,10 @@ public sealed class StartupFolderSource : IStartupSource
             // 判据本体在 TargetFileProbe（2026-09-22 集中，此前三处各写一遍）。
             IsMissing = TargetFileProbe.IsMissing(targetPath),
             IsProtected = Scope == StartupScope.SystemFolder,
+            // D147：与注册表来源同一条理由——**查不到 ⇒ 按普通身份**。
+            // 系统启动文件夹（All Users）里的 exe 并不因此就需要管理员，
+            // 拿"放在系统目录"当判据会把一大片正常程序误标成要提权。
+            RequiresAdminRun = false,
             IsTakenOver = takenOverKeys.Contains(id),
         };
     }

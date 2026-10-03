@@ -184,6 +184,10 @@ public sealed class UwpStartupSource : IStartupSource
                 // UWP 应用没有可检查的独立文件路径（目标在 WindowsApps 下且受保护），不判失效。
                 IsMissing = false,
                 IsProtected = false,
+                // D147：恒为 false，且**不是**因为查不到，而是 D45 真机实测的事实 ——
+                // UWP 进程恒为普通用户身份，中转外壳用谁的令牌都不改结果。
+                // 这一层即便判错来源也兜得住：LaunchIdentityPolicy 里还有一条独立的 UWP 排除分支。
+                RequiresAdminRun = false,
                 IsTakenOver = takenOverKeys.Contains(id),
             });
         }

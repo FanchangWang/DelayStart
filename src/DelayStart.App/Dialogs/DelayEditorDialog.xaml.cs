@@ -103,6 +103,18 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// </summary>
     private bool _wantAdmin;
 
+    /// <summary>
+    /// 「管理员」是**程序自动选中的**（而不是用户点的）—— D147：来源项按系统里的原有定义
+    /// 就需要管理员时，默认胶囊就落在管理员上。
+    /// </summary>
+    /// <remarks>
+    /// 单独记一份是为了能对身份卡说清"为什么默认是管理员"。没有它，用户看到默认高亮的
+    /// 管理员胶囊只会困惑（我明明没点过）；有它就能补一句来源，同时提示"不需要可以改回普通"。
+    /// 手动添加 / 编辑既有条目两种形态恒为 <see langword="false"/>（前者没有来源项可依据，
+    /// 后者读的是 <c>item.RunAsAdmin</c>，那是用户自己的选择、没有"自动"可言）。
+    /// </remarks>
+    private readonly bool _adminAutoSelected;
+
     /// <summary>只读形态的目标路径（系统项自带，不可改）。</summary>
     private string _readOnlyPath = string.Empty;
 
@@ -162,6 +174,11 @@ public sealed partial class DelayEditorDialog : ContentDialog
         _manualForm = false;
         _systemIsUwp = IsUwpSource(entry.Source, entry.Path);
 
+        // 形态与默认身份判定必须在 InitializeCommon 之前定好：BuildIdentityPills / PaintIdentity 会读它们。
+        // 🔴 判定本体在 Core/Services/LaunchIdentityPolicy（D147），这里只取结论；
+        // App 层不得再写一遍 `RequiresAdminRun && !Uwp`（那正是刚搬走的那份实现）。
+        _adminAutoSelected = LaunchIdentityPolicy.DefaultRunAsAdmin(entry);
+
         InitializeComponent();
         InitializeCommon(presets, defaultPreset);
 
@@ -174,7 +191,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         UseReadOnlyTarget();
         SetDelay(defaultPreset);
-        SetIdentity(false);
+        // D147：默认身份取自 Core 判定（此前写死 false）——来源项按系统里的原有定义就要管理员时
+        // （计划任务 RunLevel=Highest），默认就落在管理员上，否则用户会无意中用普通身份启动它。
+        SetIdentity(_adminAutoSelected);
     }
 
     /// <summary>构造「编辑已有条目」形态：系统项的目标程序只读，手动项可在 tab 里更换。</summary>
@@ -283,6 +302,9 @@ public sealed partial class DelayEditorDialog : ContentDialog
 
         UsePickTarget();
         SetDelay(defaultPreset);
+        // 手动添加恒为普通身份：这里**没有来源项**，也就没有"按系统里的原有定义需要管理员"可言
+        // （D147 的判据只对系统自启动项成立）。用户自己挑的程序要不要提权，由用户点胶囊决定。
+        // 同时 _adminAutoSelected 保持 false ⇒ 身份卡不出现"已默认选中"那句提示（D147）。
         SetIdentity(false);
     }
 
@@ -1171,13 +1193,35 @@ public sealed partial class DelayEditorDialog : ContentDialog
     /// 身份卡的一句话说明（2026-09-21 批复：只定义功能，不再按选择摆操作指导）。
     /// </summary>
     /// <remarks>
+    /// <para>
     /// UWP 目标下说明**为什么只有一颗胶囊**；其余情况一句话定义"这是干什么的"。
     /// 原先按普通 / 管理员 / UWP 三态各写一段的文案已删 —— 胶囊选中态本身已在表达选择。
+    /// </para>
+    /// <para>
+    /// 🔴 唯一的例外是 <b>D147 的「默认管理员」提示</b>：只在来源项确实需要管理员、
+    /// 且那颗胶囊还是选中态时，把这一行换成"为什么默认是管理员 + 可以改回普通"。
+    /// </para>
+    /// <para>
+    /// <b>为什么复用这一行而不是加一个新的控件</b>：身份卡里已经有一句"这是干什么的"说明，
+    /// 而胶囊正压在它下面。新增一条独立提示会变成两句解释同一块区域的话，
+    /// 还要多撑一行高度（弹窗内容已经要滚动）。复用这一行 = 零新增控件、零布局变化，
+    /// 而提示与它解释的胶囊在同一个视觉块里、视线不用来回跳。
+    /// </para>
+    /// <para>
+    /// <b>为什么不每次都显示</b>：那会让绝大多数本来就不需要提权的条目也读一遍解释，
+    /// 而且"需要管理员"这条对它们是假信息。此处只在自动选中管理员时出现。
+    /// </para>
     /// </remarks>
     private void UpdateIdentityHint()
     {
-        IdentityHintText.Text = UwpMode
-            ? "UWP 应用由系统外壳激活，仅支持以普通用户身份启动。"
+        if (UwpMode)
+        {
+            IdentityHintText.Text = "UWP 应用由系统外壳激活，仅支持以普通用户身份启动。";
+            return;
+        }
+
+        IdentityHintText.Text = _adminAutoSelected && _wantAdmin
+            ? "这一项在系统里原本就要以管理员身份运行，已按此默认选中；不需要可以改回普通用户。"
             : "本条目启动时使用的 Windows 账户身份。";
     }
 

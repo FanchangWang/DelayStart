@@ -67,6 +67,14 @@ public sealed class ScheduledTaskSource : IStartupSource
     public string DisplayName => "计划任务";
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 🔴 <b>本属性与 <see cref="StartupEntry.RequiresAdminRun"/> 是两件事，不要混用</b>：
+    /// 本属性问的是「读写<b>这一类来源</b>要不要提权」—— 是本程序**管理端自己的**权限问题，
+    /// 而 D20 已让管理端全程提权，所以它一刀切为 <see langword="true"/> 也不会触发任何提示。
+    /// <see cref="StartupEntry.RequiresAdminRun"/> 问的是「<b>这一项被启动时</b>要不要提权」，
+    /// 逐项不同（同一个来源下 <c>\A</c> 要、<c>\B</c> 不要是常态），由
+    /// <c>TryBuildEntry</c> 逐项读 <c>Definition.Principal.RunLevel</c> 得出。
+    /// </remarks>
     public bool RequiresElevation => true;
 
     /// <inheritdoc />
@@ -345,6 +353,12 @@ public sealed class ScheduledTaskSource : IStartupSource
             // \Microsoft\ 文件夹下的任务已在上面整体过滤（IsProtectedFolderPath），
             // 能走到这里的都是第三方任务 —— 包括根级名叫 \MicrosoftEdgeUpdateXxx 的那些。
             IsProtected = false,
+            // D147：唯一填得出真值的来源。任务定义里 Principal.RunLevel = Highest 就是
+            // "系统本来就要以管理员身份跑它"，据此给编辑器一个管理员默认身份。
+            // 🔴 读不到就填 false（fail-open）：Principal 可能整个为 null（第三方任务定义不完整），
+            // RunLevel 也可能读不出来 —— 判错方向是「按普通身份启动」，用户看得见且能自己改回来；
+            // 反过来凭空默认管理员就是白给一次 UAC。与 D87 / D90 同源。
+            RequiresAdminRun = IsHighestRunLevel(definition),
             IsTakenOver = takenOverKeys.Contains(id),
         };
     }
@@ -373,6 +387,29 @@ public sealed class ScheduledTaskSource : IStartupSource
     {
         return path.StartsWith(OwnedTaskFolder.Prefix, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// 这一项按系统里的原有定义是否就要以管理员身份运行（任务 <c>Principal.RunLevel = Highest</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>三层容错，逐层都往「否」的方向走</b>（fail-open）：
+    /// 定义整个为 <see langword="null"/> → 否；<c>Principal</c> 缺失（第三方任务定义不完整，
+    /// 见过只填 <c>Actions</c> + <c>Triggers</c> 的）→ 否；<c>RunLevel</c> 读不出来 → 否。
+    /// 判错的代价是"用户看到程序少了点权限、自己能改回管理员"，
+    /// 反过来凭空默认管理员是白给一次 UAC。与 D87 / D90 的取向一致。
+    /// </remarks>
+    internal static bool IsHighestRunLevel(TaskDefinition? definition)
+        => IsHighestRunLevelValue(definition?.Principal?.RunLevel);
+
+    /// <summary>
+    /// <see cref="IsHighestRunLevel(TaskDefinition?)"/> 的纯判定面：只吃 <c>RunLevel</c> 的取值。
+    /// </summary>
+    /// <remarks>
+    /// 单独拆出来是为了让单测<b>不新建 <c>TaskService</c>、不读真任务</b>（硬约束 10）——
+    /// TaskDefinition 是 COM 对象，构造一个假的比构造真的还贵，而这层判据本身只有两个分支。
+    /// </remarks>
+    internal static bool IsHighestRunLevelValue(TaskRunLevel? runLevel)
+        => runLevel == TaskRunLevel.Highest;
 
     /// <summary>
     /// 判断某计划任务是否落在受保护的 <c>\Microsoft</c> 文件夹下（FR-1.9）。

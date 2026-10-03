@@ -197,6 +197,11 @@ public sealed class RegistryStartupSource : IStartupSource
             IsMissing = TargetFileProbe.IsMissing(parsed.Path),
             // 注册表 Run 项本身没有"受保护"概念（组策略下发的是 Policy 键，不在这条路径上）。
             IsProtected = false,
+            // D147：本来源**查不到**"这一项启动要不要管理员"，一律按普通身份。
+            // HKLM Run 里的 exe 是否需要提权没有可靠判据：路径位置不算证据
+            //（Program Files 下大把程序不需要提权），去读 RT_MANIFEST 又对脚本 / 打包器无效。
+            // 判错方向是「按普通身份启动」——用户看得见、能自己改；不猜。
+            RequiresAdminRun = false,
             // FR-1.6 / 机制 1：用稳定主键匹配，不用 (Name, Source) 二元组。
             IsTakenOver = takenOverKeys.Contains(id),
         };

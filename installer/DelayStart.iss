@@ -632,11 +632,129 @@ end;
 //    **用户点 UAC 的那几秒**也覆盖掉了，不需要额外的等待逻辑。
 //
 // 🔴 **绝不杀非本产品进程**：映像名全部硬编码在本函数里，不接受任何外部输入。
-procedure KillDelayStartProcesses;
+// 判断当前是否有本产品进程在跑。**非提权即可判定**，因此它可以当"要不要申请提权"的闸。
+//
+// 🔴 为什么值得多这一段（2026-10-03 用户提出）：提权关闭进程必然弹一次 UAC，而绝大多数
+//    安装/卸载场景下**根本没有进程在跑**（Guard / NotifyBroker / LaunchBroker 都是
+//    跑完即退的瞬时进程）。无条件弹 UAC 是在为一个大概率不存在的占用打扰用户。
+//
+// 🔴 为什么用 tasklist 而不是别的：需要一个**非提权就能看见提权进程**的判据。
+//    tasklist 只做只读枚举，完整性模型对它不设限；OpenProcess 之类的 API 在
+//    lowest 安装器上对 High 目标会直接失败，反而查不到东西。
+//
+// 🔴 退出码一律不看（与 taskkill 同理）：tasklist 在任何情况下都返回 0，
+//    "有没有进程"只能从输出文本里找。探测失败时一律按"没有进程"处理 ——
+//    判错方向是"少杀一次"，而那正是后面 PurgeDirWithRetry 会暴露出来的情形
+//    （文件删不掉 ⇒ 日志与提示），不会变成静默失败。
+function DelayStartProcessesRunning: Boolean;
+var
+  ListFile, Tasklist: String;
+  Text: AnsiString;
+  ErrCode: Integer;
+begin
+  Result := False;
+  ErrCode := 0;
+
+  Tasklist := ExpandConstant('{sys}\tasklist.exe');
+  if not FileExists(Tasklist) then
+  begin
+    Log('探测进程失败：找不到 tasklist，按「没有进程在跑」处理。');
+    Exit;
+  end;
+
+  ListFile := ExpandConstant('{tmp}\DelayStart-probe-list.csv');
+  // 🔴 {sys} = C:\Windows\System32，不含空格，所以重定向目标需要加引号而 tasklist 本身不用。
+  if not Exec(
+      ExpandConstant('{cmd}'),
+      '/C ' + Tasklist + ' /NH /FO CSV > "' + ListFile + '"',
+      '', SW_HIDE, ewWaitUntilTerminated, ErrCode) then
+  begin
+    Log('执行 tasklist 失败（退出码 ' + IntToStr(ErrCode) + '），按「没有进程在跑」处理。');
+    Exit;
+  end;
+
+  if not FileExists(ListFile) then
+  begin
+    Log('tasklist 没有产出输出文件，按「没有进程在跑」处理。');
+    Exit;
+  end;
+
+  // ⚠️ 照抄下方 InitializeUninstall 里那处既有用法的签名（(文件, var 文本) -> Boolean）：
+  //    本机 Inno 的单参版本报 "Invalid number of parameters"、两参 Integer 版本报
+  //    "Type mismatch"，只有这一种写法能编过（两种错法各实测一次）。
+  if not LoadStringFromFile(ListFile, Text) then
+    Log('读取 tasklist 输出失败，按「没有进程在跑」处理。');
+  DeleteFile(ListFile);
+
+  // CSV 里每个映像名都带引号，比对时连引号一起找 —— 否则
+  // "DelayStart.exe" 会被 "DelayStart.Scheduler.exe" 之外的东西误命中不了，
+  // 而 "DelayStart" 这样的裸词又会命中所有五个。
+  Result :=
+    (Pos('"DelayStart.exe"', Text) > 0) or
+    (Pos('"DelayStart.Scheduler.exe"', Text) > 0) or
+    (Pos('"DelayStart.Guard.exe"', Text) > 0) or
+    (Pos('"DelayStart.NotifyBroker.exe"', Text) > 0) or
+    (Pos('"DelayStart.LaunchBroker.exe"', Text) > 0);
+
+  if Result then
+    Log('探测到 DelayStart 相关进程在运行，需要提权结束。')
+  else
+    Log('未探测到 DelayStart 相关进程在运行，跳过提权结束。');
+end;
+
+// 等待本产品进程**真正退出**。返回 True = 已全部退出。
+//
+// 🔴 为什么单独要一个"等"（2026-10-03 用户指出）：上面的 ShellExec 用的是 ewNoWait，
+//    它只保证"提权请求递出去了"，**不保证进程真的死了**。两种情况下调用方都必须知道：
+//    ① 用户拒绝了 UAC —— taskkill 压根没跑，进程一个没少；
+//    ② 用户同意了，但 taskkill 自身还要几百毫秒到几秒（AppInfo 拉起 + 遍历五个映像名）。
+//    不等就往下走，等于把"可能还有进程在跑"当成"已经清干净"。
+function WaitDelayStartProcessesExit(TimeoutMs: Integer): Boolean;
+var
+  Waited: Integer;
+begin
+  // ⚠️ Inno Script 的 Exit **不接受参数**（写 Exit(True) 报 "Semicolon expected"），
+  //    所以走"设 Result 再 Exit"而不是常见的"Exit(值)"写法。
+  Result := False;
+  Waited := 0;
+  while Waited < (TimeoutMs div 250) do
+  begin
+    if not DelayStartProcessesRunning then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Sleep(250);
+    Waited := Waited + 1;
+  end;
+  Result := not DelayStartProcessesRunning;
+end;
+
+// 结束正在运行的 DelayStart 进程，然后才谈删文件。
+//
+// 🔴 返回值语义（2026-10-03 用户指出后才有的）：**True = 现在没有本产品进程在跑**。
+//    原来是无返回值的 procedure，只在失败时记一行日志就往下走，于是"用户拒绝了 UAC"
+//    与"已经清干净了"在调用方眼里完全一样 —— 后续步骤照样往下走，最后以
+//    「有部分内容未能被删除」或「恢复程序没有返回结果」的形式失败，
+//    而真正的原因（UAC 被拒）在界面上一个字都看不到。
+//    现在把"到底清没清掉"变成一个可判定的事实，交给调用方决定中止还是继续。
+function KillDelayStartProcesses: Boolean;
 var
   Params: String;
   ErrCode: Integer;
 begin
+  Result := True;
+
+  // 🔴 先问"有没有进程在跑"，再决定要不要申请提权。
+  //    提权必然弹一次 UAC，而绝大多数场景根本没有进程在跑（Guard / NotifyBroker /
+  //    LaunchBroker 都是跑完即退的瞬时进程）—— 无条件弹窗是在为一个大概率不存在的
+  //    占用打扰用户。探测不花权限。
+  if not DelayStartProcessesRunning then
+  begin
+    Log('没有 DelayStart 进程在运行，不申请提权关闭。');
+    Exit; // Result 初始就是 True（上面刚赋过）
+  end;
+
   // 🔴 五个都是硬编码的。四个 AOT 单文件 + 一个非 AOT 的管理端；
   //    少杀一个就是一次装不成的升级（用户 2026-10-02 实测：管理端开着就装不上）。
   Params :=
@@ -653,8 +771,20 @@ begin
   if ShellExec('runas', ExpandConstant('{sys}\taskkill.exe'), Params, '', SW_HIDE, ewNoWait, ErrCode) then
     Log('已请求提权结束 DelayStart 相关进程（taskkill ' + Params + '）。')
   else
-    Log('拉起提权 taskkill 失败（ShellExec 错误码 ' + IntToStr(ErrCode) + '）。'
-        + '若随后仍弹出「拒绝访问」，多半是用户取消了 UAC —— 请先完全退出 DelayStart 再重跑安装程序。');
+  begin
+    // ShellExec 返回 false = 提权根本没拿到（用户点了"否"）。此时一个进程都没杀。
+    Log('拉起提权 taskkill 失败（ShellExec 错误码 ' + IntToStr(ErrCode) + '）—— '
+        + '用户很可能取消了 UAC 提权，本次没有结束任何进程。');
+    Result := WaitDelayStartProcessesExit(0); // 立刻复核，不等
+    Exit; // Result 已由上一行赋值
+  end;
+
+  // 提权拿到了，但进程真正退出还需要时间。等它，超时就是没清掉。
+  Result := WaitDelayStartProcessesExit(10000);
+  if Result then
+    Log('DelayStart 相关进程已全部退出。')
+  else
+    Log('等待 10 秒后 DelayStart 相关进程仍在运行（多半是用户拒绝了 UAC 提权）。');
 end;
 
 // 清目录并带重试。返回**仍然删不掉的文件数**（0 = 清干净了）。
@@ -699,6 +829,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   AppDir, ExpectedDir, StaleHost: String;
   Count: Integer;
+  ProcessesCleared: Boolean;
 begin
   Result := '';
 
@@ -728,17 +859,32 @@ begin
   //     而"全新安装时把用户正在用的旧实例杀掉"是纯粹的有害副作用。
   //   · 排在 hostfxr 探测**之前**，好让精简版那条中止分支也能受益：管理端退出后
   //     hostfxr.dll 才真的删得掉，否则它会先于本段生效。
-  KillDelayStartProcesses;
+  // 🔴 返回值决定后面怎么说话：是"杀干净了但有别的占用者"，还是"根本没杀掉"。
+  //    这两种都会留下删不掉的文件，但**处置完全不同** —— 见下。
+  ProcessesCleared := KillDelayStartProcesses;
 
-  // 🔴 判据是"文件删掉了没有"，不是 taskkill 的退出码、也不是"进程还在不在"。
   Count := PurgeDirWithRetry(AppDir, 20, 500);
   Log('安装目录清理完成，残留 ' + IntToStr(Count) + ' 个文件在 ' + AppDir + '。');
+
+  if not ProcessesCleared then
+  begin
+    // 🔴 2026-10-03 用户指出：进程没被杀掉却继续往下走，最后只表现为
+    //    「有部分内容未能被删除」，用户完全看不出是因为自己拒绝了 UAC。
+    //    这里**直接中止**并把原因说清楚 —— 此时尚未写入任何新文件，旧安装保持完整可用。
+    Result :=
+      '无法结束正在运行的 DelayStart 进程，本次安装已中止。' #13#10 + #13#10 +
+      '结束这些进程需要管理员权限，刚才的提权申请没有通过（你可能点了"否"）。' #13#10 +
+      '在继续之前，请先完全退出 DelayStart：' #13#10 +
+      '  · 关闭管理端窗口' #13#10 +
+      '  · 若托盘里还有图标，右键选择「退出」' #13#10 #13#10 +
+      '然后重新运行安装程序，并在弹出的 UAC 窗口中选择"是"。';
+    Exit;
+  end;
 
   if Count > 0 then
     Log('仍有 ' + IntToStr(Count) + ' 个文件删不掉。DelayStart 进程已被提权结束，' +
         '因此占用者只可能是杀毒扫描 / 索引服务 / 资源管理器缩略图 —— ' +
-        '那些情况由 Restart Manager 处理。若此时仍弹出「拒绝访问」，' +
-        '多半是提权 taskkill 那一步的 UAC 被取消了：请重跑安装程序并同意 UAC。');
+        '那些情况由 Restart Manager 处理。');
 
   // ── 精简版：先确认 hostfxr.dll 删得掉，删不掉就中止 ──────────────────────
   // 它是"上一次装的是自包含形态"的指纹，也是唯一会让精简版**起不来**的残留。
@@ -849,10 +995,13 @@ begin
   //    2026-09-23 官方文档源 isxfunc.xml 实证），默认焦点恒在**第一个按钮**（IDYES）。
   //    所以「保留配置并卸载」必须排第一 —— 破坏性的「删除」绝不能是默认焦点
   //    （D85 补丁：首版把「删除」排第一，用户实测发现默认焦点落错了）。
+  // 🔴 2026-10-03 用户指出：原先列了两行路径（配置目录 / 数据目录），但配置目录是
+  //    数据目录的子目录、两者又都在同一个地方，列两行只是让人以为要分别处理两处。
+  //    现在只列**一个**真实会被删的根目录。
   Answer := TaskDialogMsgBox(
       '卸载 {#AppName}',
-      '配置目录：' + ExpandConstant('{localappdata}\DelayStart\config') + #13#10 +
-      '数据目录：' + ExpandConstant('{localappdata}\DelayStart'),
+      '配置与日志都在下面这一个目录里（配置是其中的 config 子目录）：' + #13#10 +
+      ExpandConstant('{localappdata}\DelayStart'),
       mbInformation,
       MB_YESNOCANCEL, ['保留配置并卸载', '删除配置并卸载'],
       IDNO);
@@ -881,11 +1030,55 @@ end;
 //    **但不改**：这段是 D61 真机验证过的路径，改了等于把风险塞进卸载流程
 //    （UAC 被拒、父子进程退出码转发两条分支都没在真机上跑过），而收益只是少一次
 //    文件往返。卸载路径的正确性远比它的优雅重要。
+//
+// ---------------------------------------------------------------------------
+// 写出卸载用的提权批处理：先杀本产品进程，再执行 --restore-all。
+//
+// 🔴 为什么要落成文件而不是把两段拼进 cmd 命令行：cmd 的引号与 `&` 元字符转义极易出错，
+//    而结果文件路径是随机生成的（名字里就有数字拼接），一旦路径里出现 `&` 就会截断命令。
+//    落成文件后路径只出现一次、不需要转义，也不必担心 Inno 参数串的引号嵌套。
+// 🔴 两条命令用 `&` 连而不是 `&&`：taskkill 在「没有匹配进程」时返回 128
+//    （映像名对不上是常态，Guard / NotifyBroker / LaunchBroker 都跑完即退），
+//    用 && 会导致 --restore-all 被整个跳过 —— 那是最坏的组合（还原没做却看不出来）。
+procedure WriteRestoreBatch(const BatchFile, AppExe, ResultFile: String);
+var
+  KillArgs: String;
+  Content: String;
+begin
+  KillArgs :=
+    '/F /T' +
+    ' /IM DelayStart.exe' +
+    ' /IM DelayStart.Scheduler.exe' +
+    ' /IM DelayStart.Guard.exe' +
+    ' /IM DelayStart.NotifyBroker.exe' +
+    ' /IM DelayStart.LaunchBroker.exe';
+
+  // ⚠️ 内容**全是 ASCII**（命令与路径），ANSI 写入即可 —— .cmd 由 cmd.exe 读，
+  //    带 UTF-8 BOM 会被当成命令的一部分而报"不是内部或外部命令"。
+  // 🔴 本机 Inno 的 SaveStringToFile 是**三参**签名 (文件名, 内容, 是否追加) ——
+  //    两参形式报 "Invalid number of parameters"（已实测）。也**没有** FileCreate/FileWrite。
+  //    LoadStringFromFile 在本文件下方用的是 (文件名, var 文本) 两参写法，两个函数签名不一致，
+  //    所以这里必须照各自的实际签名写，不能凭印象对称。
+  Content :=
+    '@echo off' + #13#10 +
+    'taskkill ' + KillArgs + ' >nul 2>&1' + #13#10 +
+    'timeout /t 2 /nobreak >nul' + #13#10 +
+    'start "" /wait "' + AppExe + '" --restore-all --result-file "' + ResultFile + '"' + #13#10;
+
+  if not SaveStringToFile(BatchFile, Content, False) then
+  begin
+    Log('无法写入提权批处理：' + BatchFile);
+    Exit;
+  end;
+  Log('提权批处理已写出：' + BatchFile);
+end;
+
 function InitializeUninstall(): Boolean;
 var
   AppExe: String;
   ResultFile: String;
   ResultDir: String;
+  BatchFile: String;
   ResultCode: Integer;
   ShellError: Integer;
   Waited: Integer;
@@ -907,12 +1100,25 @@ begin
     end;
   end;
 
-  AppExe := ExpandConstant('{app}\{#AppExe}');
-  if not FileExists(AppExe) then
-    Exit; // 文件都不在了（手工删除过），无从恢复，照常卸载
-
-  // 结果文件放 %TEMP%\DelayStart\：提权后的进程还是同一个用户，写得进去；
-  // 程序侧的白名单（PathService.TempRoot = Path.GetTempPath()）正是这个目录的根。
+  // ── 一次性提权：杀进程 + 还原，合并成**一次** UAC ─────────────────────────
+  //
+  // 🔴 2026-10-03 用户提出「卸载时连续弹了好几次 UAC」。原来是两次：
+  //    ShellExec('runas', taskkill) 一次 + ShellExec('runas', DelayStart.exe --restore-all) 一次。
+  //    现在把两件事写进一个提权的 cmd，只弹一次。
+  //
+  // 🔴 为什么"先杀后还原"这个顺序仍然要保留（虽然 `--restore-all` 其实不依赖它）：
+  //    Program.Main 里 CliHost.TryExecute **排在单实例互斥之前**（见 D82 定的顺序），
+  //    所以就算管理端开着，还原也能正常跑完。真正需要进程先死的是**后面的删文件**。
+  //    但先杀仍有价值：还原过程会读配置、写日志，早点收干净少一份并发写入的干扰。
+  //
+  // 🔴 为什么写成 .cmd 文件而不是把两段塞进 cmd 的命令行：
+  //    cmd 的引号与 & 元字符转义极易出错（路径里一旦有 & 就会截断命令），
+  //    而结果文件路径又是随机生成的。落成文件再让 cmd 执行，路径只出现一次、不用转义。
+  //
+  // 🔴 批处理里用 `&` 而不是 `&&` 连两条命令：taskkill 在「没有匹配进程」时返回
+  //    128（见上方注释），用 && 会导致还原被整个跳过 —— 那是最坏的组合。
+  //
+  // 结果文件放 %TEMP%\DelayStart\，程序侧白名单的根是 PathService.TempRoot。
   //
   // 🔴🔴 **必须用 GetEnv('TEMP')，不能用 {tmp}**（2026-10-03 真机实测踩中）：
   //    Inno 的 {tmp} 是**安装器自己的**临时目录，展开成
@@ -922,42 +1128,37 @@ begin
   //    「恢复程序没有返回结果」。首次症状是"没有任何进程在跑，卸载器却在等"。
   //    ⚠️ 也**不能用 {env:TEMP}**：本机 Inno Setup 6 报
   //    「内部错误：Unknown constant "env:TEMP"」—— 那不是可用的常量语法。
-  //    正确写法是 Pascal Script 的 GetEnv('TEMP')，读的就是进程环境变量，
-  //    与 .NET 的 GetTempPath() 同源，两侧能对上。
-  //    （还原本身是成功的，只有"回报通道"断掉 —— 这也说明"写不进就报错"那道闸
-  //    起了作用：它没让卸载器误判成"还原失败"，而是给出了可诊断的原文。）
-  //
-  // 🔴 文件名**每次卸载随机**（D144）：原先是固定名 DelayStart-restore-result.txt，
-  //    同用户的中完整性进程可以**预测**它 —— 在卸载器拉起提权进程之前抢先创建同名文件
-  //    并填一个 "0"，卸载器就会把它读成"还原成功"而放行，用户从此永久失去被接管项的
-  //    还原入口，且失败现场没有任何痕迹。随机名把这条抢先路径压成一场盲猜。
-  //    随机源用 Pascal Script 的 Random：已实测每次进程启动重新播种（连跑三次取值全不同），
-  //    连抽两次拼进文件名 ≈ 60 bit 熵，足够。
+  //    正确写法是 Pascal Script 的 GetEnv('TEMP')，与 .NET 的 GetTempPath() 同源。
+  AppExe := ExpandConstant('{app}\{#AppExe}');
+
   ResultDir := GetEnv('TEMP') + '\DelayStart';
   CreateDir(ResultDir);
   ResultFile := ResultDir + '\restore-' + IntToStr(Random(999999999)) +
     '-' + IntToStr(Random(999999999)) + '.txt';
   Log('卸载还原结果文件：' + ResultFile);
-  // ⚠️ 不再预删：名字是随机的，不存在"上一轮残留"要清，而 DeleteFile 只会给抢写者
-  //    腾出一个确定的空窗。
+
+  BatchFile := ResultDir + '\restore-' + IntToStr(Random(999999999)) + '.cmd';
+  WriteRestoreBatch(BatchFile, AppExe, ResultFile);
 
   if not ShellExec(
       'runas',
-      AppExe,
-      '--restore-all --result-file "' + ResultFile + '"',
+      ExpandConstant('{cmd}'),
+      '/C ""' + BatchFile + '""',
       ExpandConstant('{app}'),
-      SW_SHOWNORMAL,
+      SW_HIDE,
       ewNoWait,
       ShellError) then
   begin
-    // UAC 被拒（用户点了"否"）/ 起不来。还原没发生，但默认放行卸载 ——
-    // 程序已损坏时强行中止只会把用户锁死。
-    // 🔴 D84：必须用 SuppressibleMsgBox —— 普通 MsgBox 在静默卸载时**不会被自动跳过**，
-    //    自动化卸载（CI / 脚本清理）会卡死在这个无人值守的弹窗上。Default=IDYES：
-    //    静默时按"继续卸载"走（与上面"不锁死用户"原则一致）。
+    // UAC 被拒（用户点了"否"）。这一下就把"杀进程"和"还原"一起拒掉了，
+    // 所以消息必须同时说清两件事，而不是像原来那样先说杀、再在 60 秒后说还原。
+    Log('提权批处理未启动（ShellExecute 错误 ' + IntToStr(ShellError) + '）。');
     if SuppressibleMsgBox(
-        '无法以管理员身份启动恢复程序（ShellExecute 错误 ' + IntToStr(ShellError) + '）。' #13#10 +
-        '⚠ 已接管的条目不会被还原，如需还原请先修复程序再卸载。' #13#10 #13#10 +
+        '需要一次管理员权限才能完成卸载的准备工作：' + #13#10 +
+        '  · 结束正在运行的 DelayStart 进程（否则文件删不掉）' + #13#10 +
+        '  · 还原已接管的自启动项' + #13#10 + #13#10 +
+        '刚才的提权申请没有通过（你可能点了"否"）。' + #13#10 +
+        '继续卸载的话：程序文件会因被占用而删不掉，' + #13#10 +
+        '已接管的条目也不会被还原。' #13#10 #13#10 +
         '继续卸载吗？',
         mbConfirmation, MB_YESNO, IDYES) = IDNO then
       Result := False;
@@ -1035,6 +1236,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   LocalDir: String;
+  AppDir, ExpectedDir: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -1066,12 +1268,35 @@ begin
   end
   else if CurUninstallStep = usPostUninstall then
   begin
+    // ── 收尾：把安装目录本身也清掉 ──────────────────────────────────────────
+    //
+    // 🔴 2026-10-03 用户实测补上：卸载后 %LOCALAPPDATA%\Programs\DelayStart
+    //    **空目录残留**。Inno 会删掉 [Files] 里登记的文件，也会删它自己建的目录，
+    //    但只要有任何一步删不掉（占用 / 前一次卸载留下的残留 / 目录被手工改过），
+    //    目录就会留个空壳，而空壳本身毫无用处、却会被用户当成"没卸干净"。
+    //
+    // 🔴 **必须校验路径与 PrepareToInstall 同款**：`{app}` 虽然 DisableDirPage=yes，
+    //    仍挡不住命令行 /DIR= 覆盖（那正是 D64-1 踩过的坑）。不一致就一个字节都不碰。
+    //    这里只用 DelTree 删 {app} 之下，且只在它**确实等于固定目录**时才动手。
+    AppDir := ExpandConstant('{app}');
+    ExpectedDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
+    if CompareText(AppDir, ExpectedDir) = 0 then
+    begin
+      DelTree(AppDir, True, True, True);
+      if DirExists(AppDir) then
+        Log('安装目录未能完全删除（文件可能仍被占用）：' + AppDir)
+      else
+        Log('安装目录已删除：' + AppDir);
+    end
+    else
+      Log('跳过安装目录清理：{app} 指向 ' + AppDir + '，不是固定目录 ' + ExpectedDir);
+
     if UserDataNote = '' then
       SuppressibleMsgBox(
-        '配置与日志已保留：' #13#10 +
-        '  %LOCALAPPDATA%\DelayStart\config（延时列表与设置）' #13#10 +
-        '  %LOCALAPPDATA%\DelayStart\logs（日志）' #13#10 +
-        '  %LOCALAPPDATA%\DelayStart\scheduler（运行归档）' #13#10 #13#10 +
+        '配置与日志已保留：' + #13#10 +
+        '  %LOCALAPPDATA%\DelayStart\config（延时列表与设置）' + #13#10 +
+        '  %LOCALAPPDATA%\DelayStart\logs（日志）' + #13#10 +
+        '  %LOCALAPPDATA%\DelayStart\scheduler（运行归档）' + #13#10 #13#10 +
         '如需彻底清除，请手动删除上述目录。',
         mbInformation, MB_OK, IDOK)
     else

@@ -85,7 +85,7 @@
                             VerticalAlignment="Top"
                             Click="OnCopyDiagnostics"
                             Content="复制诊断信息"
-                            ToolTipService.ToolTip="把版本、系统与四项路径复制成一段纯文本，提交问题时可直接附上" />
+                            ToolTipService.ToolTip="把版本、系统与各项路径复制成一段纯文本，提交问题时可直接附上" />
                     </Grid>
                 </Border>
 
@@ -121,31 +121,24 @@
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Style="{StaticResource CaptionTextBlockStyle}"
                     TextWrapping="Wrap"
-                    Text="安装目录只读，所有运行数据都在用户目录下；卸载时会先还原全部接管的自启动项，再删程序文件。" />
+                    Text="安装目录只读，所有运行数据都在用户目录下（app.json 位于其 config 子目录）；卸载时会先还原全部接管的自启动项，再删程序文件。" />
 
                 <StackPanel Margin="0,10,0,0" Spacing="2">
-                    <stc:SettingsCard Description="{x:Bind ViewModel.ConfigPath, Mode=OneTime}" Header="配置目录（app.json）">
-                        <Button
-                            Click="OnOpenFolder"
-                            Content="打开"
-                            Tag="{x:Bind ViewModel.ConfigPath, Mode=OneTime}"
-                            ToolTipService.ToolTip="在资源管理器中打开该目录" />
-                    </stc:SettingsCard>
-
-                    <stc:SettingsCard Description="{x:Bind ViewModel.DataPath, Mode=OneTime}" Header="数据与状态">
-                        <Button
-                            Click="OnOpenFolder"
-                            Content="打开"
-                            Tag="{x:Bind ViewModel.DataPath, Mode=OneTime}"
-                            ToolTipService.ToolTip="在资源管理器中打开该目录" />
-                    </stc:SettingsCard>
-
-                    <stc:SettingsCard Description="{x:Bind ViewModel.LogsPath, Mode=OneTime}" Header="日志">
-                        <Button
-                            Click="OnOpenFolder"
-                            Content="打开"
-                            Tag="{x:Bind ViewModel.LogsPath, Mode=OneTime}"
-                            ToolTipService.ToolTip="在资源管理器中打开该目录" />
+                    <stc:SettingsCard
+                        Description="{x:Bind ViewModel.DataPath, Mode=OneTime}"
+                        Header="配置与数据目录">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                VerticalAlignment="Center"
+                                Text="app.json 在其 config 子目录中" />
+                            <Button
+                                Click="OnOpenFolder"
+                                Content="打开"
+                                Tag="{x:Bind ViewModel.DataPath, Mode=OneTime}"
+                                ToolTipService.ToolTip="在资源管理器中打开该目录" />
+                        </StackPanel>
                     </stc:SettingsCard>
 
                     <stc:SettingsCard Description="{x:Bind ViewModel.InstalledPath, Mode=OneTime}" Header="安装目录">

@@ -47,7 +47,7 @@ public sealed partial class AboutViewModel : ObservableObject
     private readonly ToastService _toast;
 
     /// <summary>构造「关于」页 ViewModel。</summary>
-    /// <param name="paths">路径服务（本页列出配置 / 数据 / 日志 / 安装四个根目录）。</param>
+    /// <param name="paths">路径服务（本页列出数据根目录与安装目录两个根）。</param>
     /// <param name="toast">应用内通知服务（"已复制"这类成功动作给一次可见反馈）。</param>
     public AboutViewModel(PathService paths, ToastService toast)
     {
@@ -58,9 +58,7 @@ public sealed partial class AboutViewModel : ObservableObject
         _toast = toast;
 
         Version = ResolveVersion();
-        ConfigPath = paths.ConfigRoot;
         DataPath = paths.LocalRoot;
-        LogsPath = paths.LogsRoot;
         InstalledPath = paths.InstalledRoot;
     }
 
@@ -94,23 +92,13 @@ public sealed partial class AboutViewModel : ObservableObject
     public string ElevationText { get; } =
         Environment.IsPrivilegedProcess ? "管理员（高完整性）" : "标准用户";
 
-    /// <summary>配置目录：<c>%LOCALAPPDATA%\DelayStart\config</c>（<c>app.json</c> 在里面）。</summary>
+    /// <summary>数据根目录：<c>%LOCALAPPDATA%\DelayStart</c>。</summary>
     /// <remarks>
-    /// 🔴 卡片上必须显示**配置文件所在的目录**，不是配置文件本身，也不是 Local 根 ——
-    /// v0.6.1 之前这三者恰好相同（ConfigRoot 就是 LocalRoot），卡片同时写着
-    /// 「配置（漫游）%APPDATA%\DelayStart」而实际早已迁到 Local，那是**事实性错误**。
-    /// </remarks>
-    public string ConfigPath { get; }
-
-    /// <summary>数据目录：<c>%LOCALAPPDATA%\DelayStart</c>（日志、状态、归档、节假日数据）。</summary>
-    /// <remarks>
-    /// 🔴 与 <see cref="ConfigPath"/> 的区别现在**看得见**了：配置在它下面的 <c>config\</c> 子目录里
-    /// （v0.6.1 之前两者是同一个目录，卡片上并排显示两行一模一样的路径）。
+    /// 🔴 卡片只列这一层：配置（<c>app.json</c>）、日志、调度归档与巡检归档都是它的子目录，
+    /// 会被整体保留或整体删除，并排再列几张只差一级的路径卡只会让人以为它们是几个地方
+    /// （v0.6.1 之前 <c>ConfigRoot</c> 就是 <c>LocalRoot</c>，卡片上曾并排显示两行一模一样的路径）。
     /// </remarks>
     public string DataPath { get; }
-
-    /// <summary>日志目录。</summary>
-    public string LogsPath { get; }
 
     /// <summary>安装目录（只读；仅用于取自身 exe 路径，NFR-6.7）。</summary>
     public string InstalledPath { get; }
@@ -164,7 +152,7 @@ public sealed partial class AboutViewModel : ObservableObject
     /// <param name="value">新文案。</param>
     partial void OnStatusTextChanged(string value) => OnPropertyChanged(nameof(HasError));
 
-    /// <summary>把版本、系统与四项路径拼成一段纯文本复制到剪贴板。</summary>
+    /// <summary>把版本、系统与两项路径拼成一段纯文本复制到剪贴板。</summary>
     /// <remarks>
     /// 它取的就是页面上显示的那几行 —— 让用户去逐项手抄（或截图）才是这一页最大的失败。
     /// </remarks>
@@ -178,9 +166,7 @@ public sealed partial class AboutViewModel : ObservableObject
                 $"操作系统：{OsText}",
                 $"架构：{ArchText}",
                 $"运行身份：{ElevationText}",
-                $"配置目录：{ConfigPath}",
-                $"数据目录：{DataPath}",
-                $"日志目录：{LogsPath}",
+                $"配置与数据目录：{DataPath}",
                 $"安装目录：{InstalledPath}",
             ]);
 

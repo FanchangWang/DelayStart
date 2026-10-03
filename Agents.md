@@ -164,10 +164,12 @@
 .\scripts\build.ps1        # 编译全解决方案（Release，0 警告验收）
 .\scripts\test.ps1         # 单元测试（D26 约定：dotnet run，不用 dotnet test）
 .\scripts\publish.ps1      # 发布四个 exe（调度端 / 中转器走 AOT publish，守卫 / 管理端走 build）+ 把三个同级 exe 同步进管理端 bin
-.\scripts\all.ps1          # 一条龙：build → test → publish
+.\scripts\lint-installer.ps1 # 安装脚本语法体检：ISCC /O- 真编译 installer\DelayStart.iss（full + slim 两轮），只解析不打包、不碰 dotnet、不覆盖 dist\ 与 artifacts\，约 0.4 秒
+.\scripts\all.ps1          # 一条龙：build → 安装脚本体检 → test → publish
 .\installer\build-all.ps1  # 安装包矩阵（自包含 / 精简 × x64 / arm64）
 ```
 
+- 🔴 **改完 `installer\DelayStart.iss` 跑 `.\scripts\lint-installer.ps1`**（`all.ps1` 已含这一步）。ISCC 没有 "只 parse 不打包" 开关，用的是 `/O-`（`Enable or disable output`，见 `ISCC.exe /?`）—— 仍然完整跑预处理 + 逐段解析 + `[Code]` 的 Pascal 编译，只跳过产物生成，所以 `Exit` 参数个数、`SaveStringToFile` 三参签名、`FileCreate`/`FileWrite` 不存在这类**编译期**错误都能秒级拦下（v0.6.1 之前全靠事后反复真机打包才发现）。`[Files]` 的 Source 由脚本自建的临时沙箱顶替，**不依赖先跑过 publish**；找不到 ISCC 会**明确报错退出**，不静默跳过。
 - 手动等价：`dotnet build DelayStart.slnx -c Release` / `dotnet run --project tests/DelayStart.Core.Tests -c Release`
 - 🔴 **exe 在哪**（2026-09-23 澄清，防"脚本编译不出 exe"式误判）：开发期双击的就是 `src\DelayStart.App\bin\Release\net10.0-windows10.0.26100.0\win-x64\DelayStart.exe`（`publish.ps1` 结尾与产物核对清单现在都会打出它）。**`publish.ps1` 不产出 App 的 publish 目录** —— 可分发目录与安装包归 `installer\build-installer.ps1`（`artifacts\publish\{rid}\{full|slim}\` + `dist\DelayStart-Setup-*.exe`）。两套脚本职责不要混。
 - 🔴 排查 XAML 编译问题必须 `dotnet clean` + `--no-incremental` —— obj 里的 `.g.cs` 增量缓存会让"改了没生效"和"真的没生效"看起来一样。
@@ -217,6 +219,7 @@
 | `docs/design.md` | 当前方案单一来源：需求（FR/NFR/E）、架构与关键机制、调度端交互、编码规范、开发流程 | 需求 / 机制 / 交互行为发生变化 |
 | `docs/decisions.md` | 每个决策的结论与取舍（D1–D142）+ R1–R13 风险去向 | 出现新的取舍（追加编号），或推翻旧决策（并入取代它的条目，**编号保留**） |
 | `docs/pitfalls.md` | 技术陷阱：Win32 / 注册表 / 计划任务 / UWP / 降权 / AOT / WinUI 3 / 安装器 | 踩到新坑，或旧坑被修掉 / 定性变化 |
+| `docs/testing-debt.md` | **已知但暂未补测**的位置：零覆盖的判定逻辑、消费方、以及为什么暂不做 | 补完一条（删掉并注明 commit）／新增一处零覆盖 |
 | `docs/development.md` | 面向人：环境、构建测试、调试、发布打包、真机验收 | 环境要求 / 命令 / 流程变化 |
 | `docs/winget.md` | 上架 winget 的**手工提交教程**：提交什么、四个清单模板、流程步骤、自动化 | 包标识 / 提交形态 / 依赖声明 / 发布流程变化（决策见 D110） |
 | `README.md` | 面向用户：项目介绍、安装、快速上手、FAQ | 用户可见行为或安装方式变化 |

@@ -219,6 +219,15 @@ public sealed class PathService
     /// </remarks>
     public static string TempExchangeRoot => Path.Combine(Path.GetTempPath(), FolderName);
 
+    /// <summary>系统临时目录根（<c>%TEMP%</c>），即 <see cref="TempExchangeRoot"/> 的上级。</summary>
+    /// <remarks>
+    /// 🔴 卸载器用它作为 <c>--result-file</c> 的白名单根，而**不是** <see cref="TempExchangeRoot"/>：
+    /// 收紧到某一级子目录时，两侧对"根在哪"的认知一旦不一致就会拒写，卸载器等满 60 秒后
+    /// 报「恢复程序没有返回结果」（真实踩过：Inno 的 <c>{tmp}</c> 比 <c>GetTempPath()</c> 多一层）。
+    /// 放宽到临时根后由文件名格式兜住，故障降级为"仍能卸载"。
+    /// </remarks>
+    public static string TempRoot => Path.GetTempPath();
+
     /// <summary>全部**允许写入**的根目录。安装目录不在此列，这是 NFR-6.7 的可执行表述。</summary>
     public IReadOnlyList<string> WritableRoots => [LocalRoot, ConfigRoot, TempExchangeRoot];
 

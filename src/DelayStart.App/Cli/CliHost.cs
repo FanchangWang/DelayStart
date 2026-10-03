@@ -314,16 +314,18 @@ internal static class CliHost
         }
 
         var path = args[index + 1];
-        var exchangeRoot = PathService.TempExchangeRoot;
+        var tempRoot = PathService.TempRoot;
 
-        if (!RestoreResultFilePolicy.IsAllowedPath(path, exchangeRoot))
+        if (!RestoreResultFilePolicy.IsAllowedPath(path, tempRoot))
         {
             // 🔴 拒绝时**绝不**改写到"安全位置"：悄悄换个地方写，卸载器就永远等不到这个文件，
             //    而现场看不出任何异样 —— 那正是本批次要消灭的静默失败。
+            //    两道闸：落在 %TEMP% 之下 + 文件名形如 restore-<数字>-<数字>.txt。
             ReportResultFileFailure(
                 services,
-                $"⚠ 结果文件路径不在允许的交换目录内，拒绝写入：{path}" +
-                $"（允许范围：{exchangeRoot}\\）。卸载流程拿不到结果将中止卸载。");
+                $"⚠ 结果文件路径不被接受，拒绝写入：{path}" +
+                $"（允许范围：{tempRoot} 之下、且文件名形如 restore-<数字>-<数字>.txt）。"
+                + "卸载流程拿不到结果将中止卸载。");
             return ExitFailure;
         }
 

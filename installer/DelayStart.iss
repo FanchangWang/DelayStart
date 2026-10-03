@@ -911,8 +911,21 @@ begin
   if not FileExists(AppExe) then
     Exit; // 文件都不在了（手工删除过），无从恢复，照常卸载
 
-  // 结果文件放 {tmp}\DelayStart\（当前用户的临时目录）：提权后的进程还是同一个用户，
-  // 写得进去；程序侧的白名单（PathService.TempExchangeRoot）也正是这个目录。
+  // 结果文件放 %TEMP%\DelayStart\：提权后的进程还是同一个用户，写得进去；
+  // 程序侧的白名单（PathService.TempRoot = Path.GetTempPath()）正是这个目录的根。
+  //
+  // 🔴🔴 **必须用 GetEnv('TEMP')，不能用 {tmp}**（2026-10-03 真机实测踩中）：
+  //    Inno 的 {tmp} 是**安装器自己的**临时目录，展开成
+  //    C:\Users\<用户>\AppData\Local\Temp\is-XXXXXX.tmp\ —— 比 %TEMP% 多一层。
+  //    于是卸载器把结果文件写到「%TEMP%\is-XXXXXX.tmp\DelayStart\」，
+  //    而程序只接受「%TEMP%\」之下 ⇒ 拒写 ⇒ 卸载器等满 60 秒后报
+  //    「恢复程序没有返回结果」。首次症状是"没有任何进程在跑，卸载器却在等"。
+  //    ⚠️ 也**不能用 {env:TEMP}**：本机 Inno Setup 6 报
+  //    「内部错误：Unknown constant "env:TEMP"」—— 那不是可用的常量语法。
+  //    正确写法是 Pascal Script 的 GetEnv('TEMP')，读的就是进程环境变量，
+  //    与 .NET 的 GetTempPath() 同源，两侧能对上。
+  //    （还原本身是成功的，只有"回报通道"断掉 —— 这也说明"写不进就报错"那道闸
+  //    起了作用：它没让卸载器误判成"还原失败"，而是给出了可诊断的原文。）
   //
   // 🔴 文件名**每次卸载随机**（D144）：原先是固定名 DelayStart-restore-result.txt，
   //    同用户的中完整性进程可以**预测**它 —— 在卸载器拉起提权进程之前抢先创建同名文件
@@ -920,7 +933,7 @@ begin
   //    还原入口，且失败现场没有任何痕迹。随机名把这条抢先路径压成一场盲猜。
   //    随机源用 Pascal Script 的 Random：已实测每次进程启动重新播种（连跑三次取值全不同），
   //    连抽两次拼进文件名 ≈ 60 bit 熵，足够。
-  ResultDir := ExpandConstant('{tmp}\DelayStart');
+  ResultDir := GetEnv('TEMP') + '\DelayStart';
   CreateDir(ResultDir);
   ResultFile := ResultDir + '\restore-' + IntToStr(Random(999999999)) +
     '-' + IntToStr(Random(999999999)) + '.txt';

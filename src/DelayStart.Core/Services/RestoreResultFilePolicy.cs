@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace DelayStart.Core.Services;
 
 /// <summary>
@@ -38,14 +40,42 @@ namespace DelayStart.Core.Services;
 /// （与 <see cref="BrokerResultPolicy"/> 同理）。
 /// </para>
 /// </remarks>
-public static class RestoreResultFilePolicy
+public static partial class RestoreResultFilePolicy
 {
+    /// <summary>
+    /// 结果文件的**文件名**格式：<c>restore-&lt;数字&gt;-&lt;数字&gt;.txt</c>。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 这条格式校验是 D144 补上的第二道独立防线，第一道是"必须落在临时目录之下"。
+    /// 当初只有目录那一道，于是两侧对"交换目录在哪"的认知一旦不一致（真实踩过：
+    /// Inno 的 <c>{tmp}</c> 展开成 <c>%TEMP%\is-XXXXXX.tmp\</c>，比
+    /// <c>Path.GetTempPath()</c> 多一层），程序就会**拒写**，卸载器等满 60 秒后报
+    /// 「恢复程序没有返回结果」—— 一个纯粹由路径写法差异造成的、用户完全无法理解的故障。
+    /// 加上文件名格式后，目录那一道可以放宽到整个临时根：即便将来基目录再次对不上，
+    /// 只要文件名与格式吻合就照样工作，故障降级为"仍能卸载"。
+    /// <para>
+    /// 为什么文件名这道防线本身有效：临时目录里的文件名是**用户可控**的，而这条通道的
+    /// 危害在于"往一个我们随后要写、卸载器随后要读的位置上放一个我们不写的内容"。
+    /// 锁定文件名 + <see cref="FileMode.CreateNew"/> 之后，抢写者只能赌那串随机数字 ——
+    /// 而文件名不匹配的路径（例如想借这条通道去覆盖 <c>app.json.tmp</c>）会被直接拒掉。
+    /// 两道防线单独看都弱，合起来才成立。
+    /// </para>
+    /// </remarks>
+    [GeneratedRegex(@"^restore-\d{1,10}-\d{1,10}\.txt$", RegexOptions.IgnoreCase)]
+    private static partial Regex ResultFileNamePattern();
+
+    /// <summary>文件名是否符合结果文件格式。</summary>
+    /// <param name="fileName">文件名（不含目录）。</param>
+    /// <returns>符合 <c>restore-&lt;数字&gt;-&lt;数字&gt;.txt</c> 为 <see langword="true"/>。</returns>
+    public static bool IsExpectedFileName(string? fileName)
+        => !string.IsNullOrEmpty(fileName) && ResultFileNamePattern().IsMatch(fileName);
+
     /// <summary>
     /// 判定 <c>--result-file</c> 给出的候选路径是否允许作为结果文件的落盘位置。
     /// </summary>
-    /// <param name="candidatePath">命令行给出的原始路径（未归一化）。</param>
-    /// <param name="exchangeRoot">允许的交换目录（<see cref="PathService.TempExchangeRoot"/>）。</param>
-    /// <returns>落在交换目录**之下**（不含目录本身）时为 <see langword="true"/>。</returns>
+    /// <param name="tempRoot">允许的临时根（<see cref="PathService.TempRoot"/>，即 <c>%TEMP%</c>）。</param>
+    /// <returns>落在临时根**之下**（不含根本身）**且文件名符合格式**时才为 <see langword="true"/>。</returns>
+
     /// <remarks>
     /// 🔴 比对一律在 <see cref="Path.GetFullPath(string)"/> 归一化之后做，且用
     /// <see cref="StringComparison.OrdinalIgnoreCase"/>：Windows 路径不区分大小写，
@@ -57,14 +87,15 @@ public static class RestoreResultFilePolicy
     /// 而不是伪装成一次"写入失败"。
     /// </para>
     /// </remarks>
-    /// <exception cref="ArgumentNullException"><paramref name="exchangeRoot"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="ArgumentException"><paramref name="exchangeRoot"/> 为空或纯空白。</exception>
-    public static bool IsAllowedPath(string? candidatePath, string exchangeRoot)
+    /// <param name="candidatePath">命令行给出的原始路径（未归一化）。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="tempRoot"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="ArgumentException"><paramref name="tempRoot"/> 为空或纯空白。</exception>
+    public static bool IsAllowedPath(string? candidatePath, string tempRoot)
     {
-        ArgumentNullException.ThrowIfNull(exchangeRoot);
-        if (string.IsNullOrWhiteSpace(exchangeRoot))
+        ArgumentNullException.ThrowIfNull(tempRoot);
+        if (string.IsNullOrWhiteSpace(tempRoot))
         {
-            throw new ArgumentException("交换目录不能为空。", nameof(exchangeRoot));
+            throw new ArgumentException("临时根不能为空。", nameof(tempRoot));
         }
 
         // 空串/空白不是"路径"，直接判否 —— 拿它去 GetFullPath 会得到当前工作目录，
@@ -78,7 +109,7 @@ public static class RestoreResultFilePolicy
         string normalizedCandidate;
         try
         {
-            normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(exchangeRoot));
+            normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(tempRoot));
             normalizedCandidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath));
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or System.Security.SecurityException)
@@ -93,11 +124,18 @@ public static class RestoreResultFilePolicy
             return false;
         }
 
-        // 🔴 必须自己补一个分隔符再比：`C:\Temp\DelayStart-evil` 与 `C:\Temp\DelayStart`
-        //    用朴素前缀比会判"在里面"，而它其实在**兄弟目录**里。
-        return normalizedCandidate.StartsWith(
-            normalizedRoot + Path.DirectorySeparatorChar,
-            StringComparison.OrdinalIgnoreCase);
+        // 🔴 目录那一道现在管的是**整个临时根**（`%TEMP%`），而不是某一级子目录 ——
+        //    见 IsExpectedFileName 的说明：基目录一旦对不上（真实踩过 Inno 的 `{tmp}`），
+        //    收紧到具体子目录就变成"用户完全无法理解的卸载失败"；放宽后由文件名那道兜住。
+        if (!normalizedCandidate.StartsWith(
+                normalizedRoot + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // 目录过了还不够，文件名也必须是本协议自己的格式。
+        return IsExpectedFileName(Path.GetFileName(normalizedCandidate));
     }
 
     /// <summary>

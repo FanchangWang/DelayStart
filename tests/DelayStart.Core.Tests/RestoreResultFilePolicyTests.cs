@@ -25,7 +25,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     public void IsAllowedPath_路径在交换目录下_判真()
     {
         // Arrange
-        var candidate = Path.Combine(ExchangeRoot, "restore-123.txt");
+        var candidate = Path.Combine(ExchangeRoot, "restore-123-456.txt");
 
         // Act
         var allowed = RestoreResultFilePolicy.IsAllowedPath(candidate, ExchangeRoot);
@@ -38,7 +38,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     public void IsAllowedPath_路径在子目录下_判真()
     {
         // 交换目录将来若再分子层，白名单不该顺手把子层也堵掉。
-        var candidate = Path.Combine(ExchangeRoot, "sub", "restore-123.txt");
+        var candidate = Path.Combine(ExchangeRoot, "sub", "restore-123-456.txt");
 
         Assert.True(RestoreResultFilePolicy.IsAllowedPath(candidate, ExchangeRoot));
     }
@@ -74,7 +74,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     public void IsAllowedPath_多次穿越后回到交换目录内_判真()
     {
         // 归一化的目的是判定"最终落在哪"，不是见着 `..` 就拒 —— 绕一圈回到目录内是合法路径。
-        var candidate = Path.Combine(ExchangeRoot, "sub", "..", "restore-123.txt");
+        var candidate = Path.Combine(ExchangeRoot, "sub", "..", "restore-123-456.txt");
 
         Assert.True(RestoreResultFilePolicy.IsAllowedPath(candidate, ExchangeRoot));
     }
@@ -87,7 +87,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
         var candidate = Path.Combine(
             _temp.Path.ToUpperInvariant(),
             "delaystart",
-            "RESTORE-123.TXT");
+            "RESTORE-123-456.TXT");
 
         Assert.True(RestoreResultFilePolicy.IsAllowedPath(candidate, ExchangeRoot));
     }
@@ -156,7 +156,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     [Fact]
     public void WriteExclusive_目标不存在_写入内容()
     {
-        var path = Path.Combine(ExchangeRoot, "restore-123.txt");
+        var path = Path.Combine(ExchangeRoot, "restore-123-456.txt");
 
         RestoreResultFilePolicy.WriteExclusive(path, "0");
 
@@ -168,7 +168,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     {
         // 🔴 本条是整批整改的核心：预置一个填着 "0" 的同名文件曾经能让卸载器读到"还原成功"。
         //    独占创建把这个结果变成一次**可见的失败**，而不是一次无声的覆盖。
-        var path = Path.Combine(ExchangeRoot, "restore-123.txt");
+        var path = Path.Combine(ExchangeRoot, "restore-123-456.txt");
         Directory.CreateDirectory(ExchangeRoot);
         File.WriteAllText(path, "0");
 
@@ -179,11 +179,83 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     [Fact]
     public void WriteExclusive_内容含非零退出码_按原样落盘()
     {
-        var path = Path.Combine(ExchangeRoot, "restore-123.txt");
+        var path = Path.Combine(ExchangeRoot, "restore-123-456.txt");
 
         RestoreResultFilePolicy.WriteExclusive(path, "1");
 
         Assert.Equal("1", File.ReadAllText(path));
+    }
+
+    // ── 2026-10-03 真机踩中：两侧对「临时根在哪」的认知不一致 ────────────────────
+    //
+    // 卸载器原先用 Inno 的 {tmp}，展开成 %TEMP%\is-XXXXXX.tmp\ —— 比
+    // Path.GetTempPath() 多一层。程序按「必须落在 %TEMP%\DelayStart\ 下」拒写，
+    // 卸载器等满 60 秒后弹「恢复程序没有返回结果（可能取消了 UAC 提权，或程序已损坏）」。
+    // 用户看到的是「没有任何进程在跑，卸载器却在等」—— 而真相只是两侧路径写法不一致。
+    //
+    // 修法两处：卸载器改用 {env:TEMP}；本策略的目录那一道从「某一级子目录」放宽到整个
+    // 临时根，由新增的**文件名格式**那一道兜住。下面几条钉住这个取舍。
+
+    [Fact]
+    public void IsAllowedPath_多出一层安装器临时子目录_仍判真()
+    {
+        // 复刻真实故障的路径形状：根对不上时不应再拒写，否则卸载直接走不通。
+        var candidate = Path.Combine(
+            _temp.Path, "is-SHGBF20IMY.tmp", "DelayStart", "restore-791205105-864841340.txt");
+
+        Assert.True(RestoreResultFilePolicy.IsAllowedPath(candidate, _temp.Path));
+    }
+
+    [Fact]
+    public void IsAllowedPath_文件名不是本协议格式_判否()
+    {
+        // 🔴 目录放宽之后，这道是唯一还挡着「借这条通道写别的文件」的闸，必须钉死。
+        //   攻击者想借它覆盖 app.json.tmp（配置写入链路）或任何别的名字，都必须在这里判否。
+        foreach (var badName in new[]
+                 {
+                     "app.json.tmp",
+                     "restore.txt",
+                     "restore-abc-def.txt",
+                     "restore-1-2-3.txt",
+                     "restore-1-2.txt.evil",
+                 })
+        {
+            var candidate = Path.Combine(_temp.Path, badName);
+            Assert.False(RestoreResultFilePolicy.IsAllowedPath(candidate, _temp.Path), badName);
+        }
+    }
+
+    [Theory]
+    [InlineData("restore-1-2.txt")]
+    [InlineData("restore-791205105-864841340.txt")]
+    [InlineData("RESTORE-1-2.TXT")]
+    public void IsExpectedFileName_符合格式_判真(string fileName)
+    {
+        Assert.True(RestoreResultFilePolicy.IsExpectedFileName(fileName));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    [InlineData("restore-.txt")]
+    [InlineData("restore-1.txt")]
+    [InlineData("other-1-2.txt")]
+    public void IsExpectedFileName_不符合格式_判否(string? fileName)
+    {
+        Assert.False(RestoreResultFilePolicy.IsExpectedFileName(fileName));
+    }
+
+    [Fact]
+    public void TempRoot_是TempExchangeRoot的上级()
+    {
+        // 两个常量必须保持这个关系，否则白名单根与实际写入目录会悄悄错位 —— 本次故障的同款。
+        // 🔴 比对前必须 TrimEndingDirectorySeparator：`Path.GetTempPath()` **带**尾分隔符，
+        //    而 Path.Combine 之后取父目录得到的是**不带**的，不归一化就会恒不相等。
+        //    （IsAllowedPath 内部也做了同样的归一化，两处必须一致。）
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetDirectoryName(PathService.TempExchangeRoot)!)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(PathService.TempRoot)),
+            ignoreCase: true);
     }
 
     [Fact]
@@ -191,7 +263,7 @@ public sealed class RestoreResultFilePolicyTests : IDisposable
     {
         // 与 AtomicFileWriter 同一约定：目录由写入方按需创建，
         // 否则卸载器那侧少一个 CreateDir 就会变成一次"写不出来"。
-        var path = Path.Combine(ExchangeRoot, "restore-123.txt");
+        var path = Path.Combine(ExchangeRoot, "restore-123-456.txt");
 
         RestoreResultFilePolicy.WriteExclusive(path, "0");
 

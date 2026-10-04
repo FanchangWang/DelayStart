@@ -123,9 +123,23 @@ internal static class Program
         // 已经 return，不会走到这里；写失败不阻塞（store 内部只记 Warn）。
         inspectionStore.Write(report);
 
-        if (!report.HasNotifications)
+        // 🔴 D148：通报口径与日志口径**不同**。日志行 / 归档 / 日志页要**全量**失效，
+        // 系统通知只报"还没通知过"的那些 —— 否则用户卸载一个程序，每周期都收到
+        // 一模一样的通知，通知中心被塞满后他会开始无视守卫的全部消息。
+        //
+        // 🔴 过滤器**每轮都跑**（哪怕本轮不通报）：它顺带把"本轮全量失效"写回状态，
+        // 而条目恢复后必须从状态里出去 —— 否则"装回去又被清掉"（最该通知的一次）
+        // 会因为"曾经报过"而永久静默。
+        //
+        // 判据与状态读写都在有测试的层里（GuardNotificationFilter），本进程只负责调它：
+        // 守卫工程零测试覆盖，决策放进那里等于交给真机验收去发现。
+        var notificationFilter = new GuardNotificationFilter(
+            new GuardNotifyStateStore(paths, log, clock));
+        var notificationView = notificationFilter.Apply(report);
+
+        if (!notificationView.HasNotifications)
         {
-            // 静默退出：没有任何变化时不打扰用户，这是守卫的常态路径。
+            // 静默退出：没有任何**新的**变化时不打扰用户，这是守卫的常态路径。
             return 0;
         }
 
@@ -133,11 +147,16 @@ internal static class Program
         {
             // 通知策略（D80）：巡检与纠正照做，只是不打扰。这一行必须落盘 ——
             // 否则"策略为从不通知"与"本轮根本没跑"在日志里长得一模一样。
+            //
+            // 🔴 过滤器**已经跑过**了，状态里已经记下这些失效 —— 切回 OnChange 后
+            // 它们不会补报。这是刻意的（见 D148）："从不通知"是用户明确表达的
+            // 不被打扰，补报会在切回那一刻变成一轮通知风暴，而那正是用户最烦的时刻；
+            // 信息本身并没有丢，日志页 / 总览卡按全量口径一直列着。
             GuardLog.Info("本轮有变化，但通知策略为「从不通知」，已跳过通报。");
             return 0;
         }
 
-        Notify(report);
+        Notify(notificationView);
         return 0;
     }
 

@@ -253,6 +253,50 @@ public sealed class GuardServiceTests
         Assert.Equal("registry:hkcu:a", stale.Item.Id);
     }
 
+    // ── D148：巡检层只负责**全量现状**，通报差集不在这一层 ────────────────────
+
+    [Fact]
+    public void RunOnce_失效持续存在_每轮都产出全量StaleItems()
+    {
+        // 🔴 通报差集**不在这一层**（它要读持久化的通知状态，那是 IO）——
+        // 本层必须每轮都给出全量失效，否则日志页 / 总览卡 / 汇总行会显示「失效 0」，
+        // 用户失去唯一的"现在还有哪些条目失效"视图。差集由 GuardNotificationFilter 收口。
+        var source = new FakeStartupSource { Entries = [Entry("registry:hkcu:a", "甲")] };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManagedItem("registry:hkcu:a", "甲");
+
+        _ = harness.Service.RunOnce();
+        source.SetEntries([]);
+
+        var second = harness.Service.RunOnce();
+        var third = harness.Service.RunOnce();
+
+        Assert.Equal(["registry:hkcu:a"], [.. second.StaleItems.Select(static s => s.Item.Id)]);
+        Assert.Equal(["registry:hkcu:a"], [.. third.StaleItems.Select(static s => s.Item.Id)]);
+
+        // 现状里一直有失效 ⇒ HasNotifications（现状口径）一直为真。
+        // 守卫进程据此提问之前，必须先拿通报视图 —— 视图上才是差集口径。
+        Assert.True(third.HasNotifications);
+        Assert.False(third.AsNotificationView([]).HasNotifications);
+    }
+
+    [Fact]
+    public void RunOnce_手动条目失效_每轮都出现在全量StaleItems里()
+    {
+        // 手动条目永远不在扫描基线里（七个来源实例没有 Manual）。
+        // 早期版本拿基线当通报判据，于是这一类**永久静默** —— 用户卸载了手动添加的
+        // exe，一条通知都不会来。现在通知状态与基线分文件，手动条目一视同仁。
+        var source = new FakeStartupSource { Entries = [] };
+        using var harness = new Harness(GuardMode.Periodic, source);
+        harness.SeedManualItem(@"C:\not-exists\manual-demo.exe");
+
+        var report = harness.Service.RunOnce();
+
+        var stale = Assert.Single(report.StaleItems);
+        Assert.True(stale.Item.IsManual);
+        Assert.Equal(StaleKind.TargetLost, stale.Kind);
+    }
+
     // ── 通知策略（D80）────────────────────────────────────────────────────────
 
     [Fact]
@@ -425,17 +469,20 @@ public sealed class GuardServiceTests
     /// <summary>"用户在守卫写入前刚填的路径"（S1 用例里那一半失败的原因）。</summary>
     private const string JustTypedPath = @"C:\Users\guyue\just-typed.exe";
 
-    private static StartupEntry Entry(string id, string name, bool isEnabled = true) => new()
+    private static StartupEntry Entry(string id, string name, bool isEnabled = true, bool isMissing = false) => new()
     {
         Id = id,
         Name = name,
-        Path = @"C:\Program Files\Demo\demo.exe",
+        Path = DemoExePath,
         Source = StartupSource.Registry,
         Scope = StartupScope.Hkcu,
         SourceKey = id,
         IsEnabled = isEnabled,
+        IsMissing = isMissing,
     };
 
+    /// <summary>确定存在的文件：就用本测试程序集自己（造 <c>SourceLost</c> 必须用它）。</summary>
+    private static string ExistingFile => typeof(GuardServiceTests).Assembly.Location;
     /// <summary>把待测服务、内存配置与落临时目录的基线捆在一起。</summary>
     private sealed class Harness : IDisposable
     {
@@ -451,7 +498,7 @@ public sealed class GuardServiceTests
             });
 
             var paths = new PathService(_temp.Combine("local"), _temp.Combine("config"), _temp.Path);
-            var baseline = new GuardBaselineStore(paths, Log, new FakeClock());
+            BaselineStore = new GuardBaselineStore(paths, Log, BaselineClock);
 
             // 🔴 D137：GuardService 现在要写配置（同步过期路径），写入口是 ConfigEditService。
             // 这里的 ISchedulerTaskRegistrar 只需要满足构造签名 —— 路径同步不碰计划任务。
@@ -460,7 +507,7 @@ public sealed class GuardServiceTests
             Service = new GuardService(
                 new ScanService(sources, Store, Log),
                 Store,
-                baseline,
+                BaselineStore,
                 sources,
                 new ConfigEditService(Store, taskRegistrar, Log),
                 Log,
@@ -475,6 +522,12 @@ public sealed class GuardServiceTests
         public InMemoryConfigStore Store { get; }
 
         public GuardService Service { get; }
+
+        /// <summary>基线快照的时间源（独立于巡检时钟，便于断言基线有没有被重写）。</summary>
+        public FakeClock BaselineClock { get; } = new();
+
+        /// <summary>真实的基线存储（落临时目录）。</summary>
+        public GuardBaselineStore BaselineStore { get; }
 
         /// <summary>
         /// 种一条"被接管"的条目；path 默认与 <see cref="Entry"/> 报的一致。
@@ -498,6 +551,22 @@ public sealed class GuardServiceTests
                 Path = path ?? DemoExePath,
                 Source = StartupSource.Registry,
                 Scope = StartupScope.Hkcu,
+            }];
+            Store.Save(config);
+        }
+
+        /// <summary>种一条<b>手动添加</b>的条目（无系统锚点，主键 <c>manual:none:&lt;guid&gt;</c>）。</summary>
+        /// <param name="path">目标路径；给一个确定不存在的路径即造出"目标丢失"。</param>
+        public void SeedManualItem(string path)
+        {
+            var config = Store.Snapshot();
+            config.Items = [.. config.Items, new DelayedItem
+            {
+                Id = ItemKeyBuilder.ForManual(),
+                Name = "手动项",
+                Path = path,
+                Source = StartupSource.Manual,
+                Scope = StartupScope.None,
             }];
             Store.Save(config);
         }

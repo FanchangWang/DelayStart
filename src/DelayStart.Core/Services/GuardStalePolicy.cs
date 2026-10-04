@@ -11,7 +11,7 @@ namespace DelayStart.Core.Services;
 public enum StaleKind
 {
     /// <summary>
-    /// 源丢失：系统启动项已被删除，但**目标程序还在**（FR-12.4）。
+    /// 源丢失：系统启动项已被删除，但**目标程序还在**（FR-13.3）。
     /// </summary>
     /// <remarks>
     /// 🔴 **继续启动**。理由：用户要的是"这个程序被延时启动"，而"它在哪个启动项里被登记"
@@ -38,10 +38,12 @@ public enum StaleKind
 /// 扫描到的对应项。源丢失时必为 <see langword="null"/>（源已经不在了，没有可返回的对象）；
 /// 目标丢失时可能为 <see langword="null"/> —— 手动条目与"源和目标都没了"的情形。
 /// </param>
+/// 🔴 本列表是**全量现状**：一条被卸载的程序每轮都在里面，日志页 / 总览卡 / 汇总行按它算；
+/// **系统通知**用"已通报集合"的差集（<c>GuardStaleChangePolicy</c>，D148）。
 public sealed record StaleEntry(DelayedItem Item, StaleKind Kind, StartupEntry? Entry);
 
 /// <summary>
-/// 失效条目检测（D77 / FR-12.4）：接管清单里"已经没意义了"的条目。
+/// 失效条目检测（D77 / FR-13.3）：接管清单里"已经没意义了"的条目。
 /// </summary>
 /// <remarks>
 /// <para>

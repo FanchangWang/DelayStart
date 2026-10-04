@@ -15,7 +15,8 @@ public sealed record GuardCorrectionOutcome(string ItemId, string Name, bool Suc
 /// </summary>
 /// <remarks>
 /// 守卫进程只做两件事：把这份结果写进 <c>guard.log</c>，以及据
-/// <see cref="HasNotifications"/> 决定要不要弹提示框。判定逻辑全在 Core 的三份策略里。
+/// <see cref="HasNotifications"/> 决定要不要发系统通知（通报口径的差集由
+/// <see cref="AsNotificationView"/> 给出，D148）。判定逻辑全在 Core 的四份策略里。
 /// </remarks>
 public sealed record GuardRunReport
 {
@@ -58,7 +59,12 @@ public sealed record GuardRunReport
     /// <summary>新出现的自启动项。</summary>
     public IReadOnlyList<StartupEntry> NewItems { get; init; } = [];
 
-    /// <summary>失效 / 孤儿条目。</summary>
+    /// <summary>失效 / 孤儿条目（**全量现状**：持续失效的条目每轮都在里面）。</summary>
+    /// <remarks>
+    /// 🔴 日志页、总览卡、<c>guard.log</c> 汇总行三处共用这份全量口径（D116）——
+    /// 用户要能随时看到"现在还有哪些条目失效"。**系统通知**不用它：
+    /// 通报走的是"还没通知过的那几条"（<see cref="AsNotificationView"/>，D148）。
+    /// </remarks>
     public IReadOnlyList<StaleEntry> StaleItems { get; init; } = [];
 
     /// <summary>整体扫描失败的来源（列表不完整时的显式提示）。</summary>
@@ -74,11 +80,41 @@ public sealed record GuardRunReport
     /// </remarks>
     public GuardNotifyMode NotifyMode { get; init; } = GuardNotifyMode.OnChange;
 
-    /// <summary>是否有需要通报用户的内容（新增或失效）。</summary>
+    /// <summary>是否有需要通报用户的内容（新增，或失效）。</summary>
+    /// <remarks>
+    /// 🔴 这说的是<b>现状</b>，不是"该不该打扰"：持续失效的条目每轮都让它是 <see langword="true"/>。
+    /// 真正的通报判据是"这一轮有没有<b>新的</b>东西要报"，由
+    /// <see cref="AsNotificationView"/> 收口（D148）—— 守卫进程先拿本视图再问
+    /// <c>HasNotifications</c>，不要直接用原报告。
+    /// </remarks>
     public bool HasNotifications => NewItems.Count > 0 || StaleItems.Count > 0;
 
     /// <summary>纠正失败的条数（成功但无需纠正的不算）。</summary>
     public int CorrectionFailureCount => Corrections.Count(static outcome => !outcome.Succeeded);
+
+    /// <summary>
+    /// 取"通报口径"的那份报告：失效列表替换为<b>本轮该通报</b>的那些（D148）。
+    /// </summary>
+    /// <param name="pendingStaleItems">
+    /// 本轮还没通知过的失效条目（<c>GuardStaleChangePolicy.SelectUnnotified</c> 的输出）。
+    /// </param>
+    /// <returns>同一轮巡检、通知口径的副本；原对象不变。</returns>
+    /// <remarks>
+    /// 🔴 <b>只有守卫进程入口该用它</b>（发系统通知）。归档、日志页、总览卡、汇总计数
+    /// 一律用原对象 —— 那些地方要的是全量现状。
+    /// <para>
+    /// 为什么差集在参数里而不在本类型上算：判据要读持久化状态（哪些失效已经通知过），
+    /// 那是一次 IO，而本类型是纯数据。两者由 <c>GuardNotificationFilter</c> 在有测试的
+    /// 层里缝起来，守卫进程只负责"调它"—— 守卫工程零测试覆盖，把决策放进那里
+    /// 等于交给真机验收去发现。
+    /// </para>
+    /// </remarks>
+    public GuardRunReport AsNotificationView(IReadOnlyList<StaleEntry> pendingStaleItems)
+    {
+        ArgumentNullException.ThrowIfNull(pendingStaleItems);
+
+        return this with { StaleItems = pendingStaleItems };
+    }
 
     /// <summary>构造"守卫已关闭"的结果。</summary>
     /// <returns>未执行巡检的结果。</returns>

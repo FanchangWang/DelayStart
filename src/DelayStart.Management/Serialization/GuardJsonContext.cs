@@ -30,6 +30,7 @@ namespace DelayStart.Management.Serialization;
     AllowTrailingCommas = true)]
 [JsonSerializable(typeof(GuardBaseline))]
 [JsonSerializable(typeof(GuardRunReport))]
+[JsonSerializable(typeof(GuardNotifyState))]
 internal sealed partial class GuardJsonContext : JsonSerializerContext
 {
 }

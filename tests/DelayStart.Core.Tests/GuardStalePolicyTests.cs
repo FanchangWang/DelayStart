@@ -4,7 +4,7 @@ using DelayStart.Core.Services;
 namespace DelayStart.Core.Tests;
 
 /// <summary>
-/// <see cref="GuardStalePolicy"/> 的单元测试（D77 / FR-12.4）：源丢失 / 目标丢失的判定与排除规则。
+/// <see cref="GuardStalePolicy"/> 的单元测试（D77 / FR-13.3）：源丢失 / 目标丢失的判定与排除规则。
 /// </summary>
 /// <remarks>
 /// <para>

@@ -333,24 +333,24 @@ public sealed partial class DelayViewModel : ObservableObject
         {
             var report = _guard.RunOnce(scan, processedScopes: null);
 
-  if (report.Corrections.Count == 0)
+            if (report.Corrections.Count == 0)
             {
                 return;
             }
 
             var applied = report.Corrections.Count(static outcome => outcome.Succeeded);
-   _log.Info(
-        $"加载延时条目时顺带巡检：纠正 {applied}/{report.Corrections.Count} 项"
-     + "（重新禁用 / 目标路径同步）。");
+            _log.Info(
+                $"加载延时条目时顺带巡检：纠正 {applied}/{report.Corrections.Count} 项"
+                + "（重新禁用 / 目标路径同步）。");
 
-        foreach (var outcome in report.Corrections)
-  {
-     _log.Info($"  {outcome.Name}：{outcome.Detail}");
+            foreach (var outcome in report.Corrections)
+            {
+                _log.Info($"  {outcome.Name}：{outcome.Detail}");
             }
         }
         catch (Exception ex)
         {
-   _log.Error(ex, "加载延时条目时顺带巡检失败（已忽略，不影响本页显示）");
+            _log.Error(ex, "加载延时条目时顺带巡检失败（已忽略，不影响本页显示）");
         }
     }
 

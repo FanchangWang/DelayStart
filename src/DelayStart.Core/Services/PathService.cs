@@ -167,6 +167,16 @@ public sealed class PathService
     public string GuardBaselinePath => Path.Combine(GuardRoot, "baseline.json");
 
     /// <summary>
+    /// 守卫「已通报失效条目」状态的落点（D148）：<c>{GuardRoot}\notify-state.json</c>。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 它与 <see cref="GuardBaselinePath"/> 是**两件事**，刻意分文件：
+    /// 基线是"上一次扫描快照"（判定新增 / 失效的输入），本文件是"哪些失效已经通知过"
+    /// （只服务通报）。混在一起会让基线不再是基线，且把通知状态塞进扫描语义里。
+    /// </remarks>
+    public string GuardNotifyStatePath => Path.Combine(GuardRoot, "notify-state.json");
+
+    /// <summary>
     /// 跨进程 UI 定位请求文件路径（D74）：守卫点「查看」时写，管理端实例读取后删除。
     /// </summary>
     /// <remarks>

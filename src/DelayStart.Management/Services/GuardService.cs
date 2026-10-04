@@ -11,9 +11,10 @@ namespace DelayStart.Management.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 本类只负责"按顺序做、把结果收集起来"，判定规则全部委托给 Core 的三份策略
+/// 本类只负责"按顺序做、把结果收集起来"，判定规则全部委托给 Core 的四份策略
 /// （<see cref="GuardCorrectionPolicy"/> / <see cref="GuardNewItemPolicy"/> /
-/// <see cref="GuardStalePolicy"/>），因此"判据"可以逐条单测，而这里的编排可以对着假来源测。
+/// <see cref="GuardStalePolicy"/> / <see cref="GuardStaleChangePolicy"/>），
+/// 因此"判据"可以逐条单测，而这里的编排可以对着假来源测。
 /// </para>
 /// <para>
 /// 🔴 **不抛异常**：一次来源失败已经由 <see cref="ScanService"/> 收集成
@@ -179,7 +180,9 @@ public sealed class GuardService
     }
 
     /// <summary>真正干活的巡检（<see cref="RunOnce"/> 已确保单实例之后调用）。</summary>
-    private GuardRunReport RunInspection(Management.Models.ScanResult? reusedScan, IReadOnlySet<ScanScope>? processedScopes)
+    private GuardRunReport RunInspection(
+        Management.Models.ScanResult? reusedScan,
+        IReadOnlySet<ScanScope>? processedScopes)
     {
         AppConfig config;
         try
